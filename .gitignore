@@ -1,0 +1,38 @@
+# User-owned runtime state (database + uploaded assets)
+data/
+tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv
+.uv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+CLAUDE.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SQLite runtime sidecars
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal

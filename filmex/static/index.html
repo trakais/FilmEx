@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FilmEx</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Full-window drop target: shown only while a drag is hovering the window.
+       Listens at document level so users can drop a Finder/Explorer folder
+       anywhere, not just on the folder input. -->
+  <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+    <div class="drop-overlay-inner">
+      <div class="drop-overlay-icon">📁</div>
+      <div class="drop-overlay-text">Drop a roll folder anywhere</div>
+      <div class="drop-overlay-hint">from Finder, Explorer, or your file manager</div>
+    </div>
+  </div>
+
+  <header class="top">
+    <div class="brand">FilmEx</div>
+    <div class="status" id="status">
+      <span id="exiftool-status" class="pill warn">checking exiftool…</span>
+      <button id="settings-open" class="icon-btn" aria-label="Settings" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <main id="workflow-view">
+    <!-- Step 1: Folder -->
+    <section class="folder-section">
+      <h2>1. Folder (Single film roll)</h2>
+      <div class="folder-row">
+        <input
+          id="folder-input"
+          type="text"
+          placeholder="/Users/you/Photos/Film/Processed/2026/2026-04-17_R001_FED2_Gold200"
+          autocomplete="off"
+          list="folder-history"
+        />
+        <datalist id="folder-history"></datalist>
+        <button id="browse-btn" class="secondary">Browse…</button>
+        <button id="scan-btn" class="primary">Scan</button>
+      </div>
+      <div id="scan-summary" class="summary hidden"></div>
+    </section>
+
+    <!-- Step 2: Three tiles -->
+    <section class="tiles-section">
+      <h2>2. Gear</h2>
+      <div class="tile-row">
+        <div class="tile camera-tile" id="tile-camera" data-kind="camera">
+          <div class="tile-label">Camera</div>
+          <div class="tile-content">Pick a camera</div>
+        </div>
+        <div class="tile lens-tile" id="tile-lens" data-kind="lens">
+          <div class="tile-label">Lens</div>
+          <div class="tile-content">Pick a lens</div>
+        </div>
+        <div class="tile film-tile" id="tile-film" data-kind="film">
+          <div class="tile-label">Film</div>
+          <div class="tile-content">Pick a film</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: Advanced -->
+    <section class="advanced-section">
+      <button id="advanced-toggle" class="disclosure" aria-expanded="false">
+        <span class="chevron">▸</span> Advanced
+      </button>
+      <div id="advanced-body" class="advanced-body hidden">
+        <div class="field-grid">
+          <label>
+            <span>Development provider</span>
+            <select id="adv-dev-provider" data-field="development_provider_id">
+              <option value="">(none)</option>
+            </select>
+          </label>
+          <label>
+            <span>Development method</span>
+            <select id="adv-dev-method" data-field="development_method_id">
+              <option value="">(none)</option>
+            </select>
+          </label>
+          <label>
+            <span>Scan provider</span>
+            <select id="adv-scan-provider" data-field="scan_provider_id">
+              <option value="">(none)</option>
+            </select>
+          </label>
+          <label>
+            <span>Scan method</span>
+            <select id="adv-scan-method" data-field="scan_method_id">
+              <option value="">(none)</option>
+            </select>
+          </label>
+          <label>
+            <span>Roll date <span id="roll-date-hint" class="date-hint hidden"></span></span>
+            <input id="adv-roll-date" type="date" data-field="roll_date" />
+          </label>
+          <label class="full">
+            <span>Extra keywords (comma-separated)</span>
+            <input id="adv-extra-keywords" type="text" data-field="extra_keywords" />
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 4: Dry run -->
+    <section class="actions-section">
+      <button id="dry-run-btn" class="primary" disabled>Preview changes</button>
+      <button id="apply-btn" class="danger" disabled>Apply</button>
+    </section>
+
+    <!-- Apply result sits ABOVE the diff so the user sees the outcome
+         immediately under the buttons rather than having to scroll past the
+         (often long) preview. Hidden until the first apply completes. -->
+    <section id="apply-section" class="apply-section hidden">
+      <h2>Applied</h2>
+      <div id="apply-body"></div>
+    </section>
+
+    <section id="diff-section" class="diff-section hidden">
+      <h2>Preview</h2>
+      <div id="diff-body"></div>
+    </section>
+  </main>
+
+  <!-- Settings view: swaps with #workflow-view when the gear button is clicked. -->
+  <main id="settings-view" class="hidden">
+    <div class="settings-head">
+      <button id="settings-back" class="secondary">← Back</button>
+      <h2>Settings</h2>
+    </div>
+
+    <section class="settings-section" data-kind="camera">
+      <div class="settings-section-head">
+        <h3>Cameras</h3>
+        <button class="primary" data-add="camera">+ Add camera</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="lens">
+      <div class="settings-section-head">
+        <h3>Lenses</h3>
+        <button class="primary" data-add="lens">+ Add lens</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="film">
+      <div class="settings-section-head">
+        <h3>Film stocks</h3>
+        <button class="primary" data-add="film">+ Add film stock</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="provider">
+      <div class="settings-section-head">
+        <h3>Providers (labs, home, self)</h3>
+        <button class="primary" data-add="provider">+ Add provider</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="dev-method">
+      <div class="settings-section-head">
+        <h3>Development methods</h3>
+        <button class="primary" data-add="dev-method">+ Add method</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="scan-method">
+      <div class="settings-section-head">
+        <h3>Scan methods</h3>
+        <button class="primary" data-add="scan-method">+ Add method</button>
+      </div>
+      <div class="settings-list"></div>
+    </section>
+
+    <label class="archived-toggle">
+      <input type="checkbox" id="settings-show-archived" />
+      Show archived
+    </label>
+  </main>
+
+  <!-- Settings entity form (right-side panel for add/edit). -->
+  <aside id="settings-form-panel" class="picker-panel hidden">
+    <div class="picker-head">
+      <h3 id="settings-form-title">Edit</h3>
+      <button id="settings-form-close" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <form id="settings-form" class="settings-form"></form>
+    <div class="picker-foot">
+      <button id="settings-form-cancel" class="secondary">Cancel</button>
+      <button id="settings-form-save" class="primary">Save</button>
+    </div>
+  </aside>
+  <div id="settings-form-backdrop" class="backdrop hidden"></div>
+
+  <!-- Visual tile picker (side panel) -->
+  <aside id="picker-panel" class="picker-panel hidden">
+    <div class="picker-head">
+      <h3 id="picker-title">Pick</h3>
+      <button id="picker-close" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <input id="picker-search" type="search" placeholder="Search…" />
+    <div id="picker-grid" class="picker-grid"></div>
+    <div class="picker-foot">
+      <button id="picker-show-all" class="secondary hidden">Show all (ignore mount)</button>
+    </div>
+  </aside>
+  <div id="picker-backdrop" class="backdrop hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
