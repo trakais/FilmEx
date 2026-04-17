@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# FilmEx launcher. Starts the local server and opens the browser.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+PORT="${FILMEX_PORT:-8765}"
+HOST="127.0.0.1"
+URL="http://${HOST}:${PORT}"
+
+# Open browser shortly after uvicorn binds. Background so it doesn't block.
+(
+  sleep 1
+  if command -v open >/dev/null 2>&1; then
+    open "$URL"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1
+  elif command -v start >/dev/null 2>&1; then
+    start "" "$URL"
+  fi
+) &
+
+exec uv run uvicorn filmex.main:app --host "$HOST" --port "$PORT" "$@"

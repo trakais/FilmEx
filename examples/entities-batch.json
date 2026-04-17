@@ -1,0 +1,78 @@
+{
+  "$comment": "Sample batch for `python -m filmex.cli add-from-json`. See AGENTS.md for conventions. Idempotent: re-running skips rows that already exist (matched by natural key).",
+
+  "providers": [
+    { "name": "Photolab Example", "kinds": ["development", "scan"] }
+  ],
+
+  "development_methods": [
+    { "name": "C-41" }
+  ],
+
+  "scan_methods": [
+    { "name": "DSLR capture" }
+  ],
+
+  "film_stocks": [
+    {
+      "brand": "Kodak",
+      "name": "Portra 400",
+      "display_name": "Kodak Portra 400",
+      "box_speed_iso": 400,
+      "film_type": "color_negative",
+      "process_type": "c41",
+      "aliases": ["Portra 400"]
+    },
+    {
+      "brand": "Ilford",
+      "name": "HP5 Plus 400",
+      "display_name": "Ilford HP5 Plus 400",
+      "box_speed_iso": 400,
+      "film_type": "bw_negative",
+      "process_type": "bw",
+      "aliases": ["HP5", "HP5+"]
+    }
+  ],
+
+  "cameras": [
+    {
+      "make": "Minolta",
+      "model": "X-700",
+      "display_name": "Minolta X-700",
+      "mount": "MD",
+      "camera_type": "slr"
+    },
+    {
+      "make": "Yashica",
+      "model": "Electro 35 GSN",
+      "display_name": "Yashica Electro 35 GSN",
+      "mount": "Fixed-Lens",
+      "camera_type": "rangefinder",
+      "fixed_lens_ref": {
+        "make": "Yashica",
+        "model": "Yashinon DX 45mm f/1.7"
+      }
+    }
+  ],
+
+  "lenses": [
+    {
+      "make": "Minolta",
+      "model": "MD 50mm f/1.7",
+      "display_name": "Minolta MD 50mm f/1.7",
+      "lens_model_write_value": "Minolta MD 50mm f/1.7",
+      "focal_length_mm": 50,
+      "max_aperture": 1.7,
+      "mount": "MD"
+    },
+    {
+      "make": "Yashica",
+      "model": "Yashinon DX 45mm f/1.7",
+      "display_name": "Yashica Yashinon DX 45mm f/1.7",
+      "lens_model_write_value": "Yashica Yashinon DX 45mm f/1.7",
+      "focal_length_mm": 45,
+      "max_aperture": 1.7,
+      "mount": "Fixed-Lens"
+    }
+  ]
+}

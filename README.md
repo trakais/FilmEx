@@ -35,15 +35,31 @@ For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 
 ## Run Locally
 
+First time only:
+
 ```bash
 uv sync
-uv run uvicorn filmex.main:app --reload --port 8765
 ```
 
-Then open:
+Then, on macOS / Linux:
 
-```text
-http://127.0.0.1:8765
+```bash
+./filmex-run
+```
+
+On Windows:
+
+```cmd
+filmex-run.cmd
+```
+
+This starts the server on `http://127.0.0.1:8765` and opens your browser. Set
+`FILMEX_PORT` to use a different port.
+
+Or run uvicorn directly if you prefer:
+
+```bash
+uv run uvicorn filmex.main:app --port 8765
 ```
 
 ## Notes
@@ -53,8 +69,28 @@ http://127.0.0.1:8765
 - Your own working database lives in `data/filmex.sqlite`.
 - Temporary and private local files should stay in `tmp/`, which is ignored by git.
 
+## Bulk data entry
+
+To add cameras, lenses, films, providers, or methods in bulk — for example
+from an LLM-drafted batch — use the CLI. It is idempotent: rows that already
+exist (matched by natural key) are skipped, never overwritten.
+
+```bash
+uv run python -m filmex.cli add-from-json examples/entities-batch.json --dry-run
+uv run python -m filmex.cli add-from-json examples/entities-batch.json
+uv run python -m filmex.cli export-json -o backup.json
+```
+
+See `AGENTS.md` for the batch schema and nomenclature conventions.
+
 ## Testing
 
 ```bash
 uv run pytest
 ```
+
+## Contributing
+
+`AGENTS.md` at the repo root is the canonical reference for project
+conventions: data model, nomenclature, metadata write policy, keyword
+taxonomy, and safety rules. Read it before changing behaviour.

@@ -1,0 +1,301 @@
+# AGENTS.md
+
+Working notes for humans and LLMs contributing to FilmEx — what the project is,
+how to run it, the conventions data must follow, and how to add gear/film
+entries in bulk from an LLM session.
+
+---
+
+## Project
+
+**FilmEx** is a local-first browser tool for tagging folders of film scans
+before Lightroom import. It is not a DAM, not an editor, and not a cloud
+service. Its only job is:
+
+1. let the user pick a folder of scans
+2. choose analog camera, lens, and film from controlled vocabularies
+3. write metadata safely via ExifTool (XMP sidecars for raw, embedded for JPG/TIFF)
+4. leave a `roll_manifest.json` next to the images
+
+Stack: FastAPI + SQLModel + SQLite, served at `localhost`. ExifTool runs as a
+subprocess on the same machine as the files. Python 3.11+. Managed with `uv`.
+
+---
+
+## Run, test, lint
+
+```bash
+uv sync                  # first time only
+./filmex-run             # macOS/Linux (Windows: filmex-run.cmd)
+uv run pytest            # run the test suite
+uv run ruff check .      # lint
+```
+
+The server binds `127.0.0.1:8765` by default. Override with `FILMEX_PORT`.
+
+---
+
+## Project layout
+
+```
+filmex/
+├── filmex/
+│   ├── main.py               # FastAPI app factory
+│   ├── db.py                 # engine, session, bootstrap from default_data.sqlite
+│   ├── config.py             # DATA_DIR resolution
+│   ├── migrations.py         # PRAGMA user_version app-managed migrations
+│   ├── models/               # SQLModel tables
+│   ├── schemas/              # Pydantic request/response DTOs
+│   ├── routes/               # FastAPI routers (entities, workflow, health)
+│   ├── services/             # exiftool, keywords, folder scan, manifest
+│   ├── static/               # vanilla-JS single-page UI
+│   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
+│   └── default_data.sqlite   # bundled starter DB; copied to data/ on first run
+├── data/                     # gitignored — user's live DB + runtime state
+├── examples/
+│   └── entities-batch.json   # sample batch for the CLI
+├── scripts/
+│   └── build_default_db.py   # regenerates the bundled starter DB
+└── tests/
+```
+
+`data/filmex.sqlite` is the single source of truth at runtime. Edits to
+`filmex/default_data.sqlite` only affect fresh installs.
+
+---
+
+## Data model
+
+All entities are soft-archived, never hard-deleted. Archived rows stay
+queryable so past roll manifests remain meaningful.
+
+### Camera
+- `make`, `model`, `display_name`
+- `mount` — string, nullable. For built-in lens bodies use `"Fixed-Lens"`.
+- `fixed_lens_id` — FK to Lens. When set, the lens picker auto-fills and locks.
+- `camera_type` — free text; UI uppercases common values (`slr` → `SLR`).
+- `aliases`, `notes`, `favorite`, `archived`.
+
+### Lens
+- `make`, `model`, `display_name`
+- `lens_model_write_value` — string written to EXIF `LensModel`. Usually equals `display_name`.
+- `focal_length_mm` — integer, optional. Null for zoom lenses (range lives in the display name).
+- `max_aperture` — float, **strictly > 0** when set.
+- `mount` — **required**, and must match an existing camera's `mount`.
+- `aliases`, `notes`, `favorite`, `archived`.
+
+### FilmStock
+- `brand`, `name`, `display_name`
+- `box_speed_iso` — integer
+- `film_type` — one of `color_negative`, `bw_negative`, `slide`, `other`
+- `process_type` — one of `c41`, `bw`, `e6`, `ecn2`, `other`
+- `aliases`, `notes`, `favorite`, `archived`.
+
+### Provider
+Single table for labs and self-service providers. `kinds` is a set-ish JSON
+list with at least one of `"development"`, `"scan"`. One row, one rename.
+
+### DevelopmentMethod / ScanMethod
+Coarse labels only (`C-41`, `BW`, `E-6`, `ECN-2` / `Lab scan`, `DSLR capture`,
+`Flatbed`). Per-roll chemistry detail lives in the manifest `notes` field, not
+as separate method rows.
+
+---
+
+## Nomenclature
+
+Conventions that the UI, the database, and the CLI all assume. Violating them
+produces confusing duplicates and broken filtering.
+
+### Display-name format
+
+- **Camera**: `Make Model` → `Pentax K1000`, `Minolta X-700`
+- **Lens**: `Make Mount? Focal Aperture` → `Minolta MD 50mm f/1.7`, `Canon FD 28-80mm f/3.5-5.6`
+- **Film**: `Brand Line [Variant] ISO` → `Kodak Portra 400`, `Ilford HP5 Plus 400`, `Fujifilm Superia X-TRA 400`
+
+### Mounts are the source of truth for compatibility
+
+Lens `mount` must exactly match some camera's `mount`. The UI offers the list
+of existing camera mounts when adding a lens — no free-text entry. If you're
+adding a lens for a mount that has no camera yet, add the camera in the same
+batch (or first).
+
+Special value: `"Fixed-Lens"` — used on both the camera and its built-in lens.
+
+### Aliases catch duplicates
+
+Film stocks especially: `Kodak Gold 200` vs `Gold 200` vs `Kodak GB 200` —
+same film. Put the nicknames in `aliases` on a single row rather than
+creating new rows.
+
+### shot_at_iso and push/pull
+
+`box_speed_iso` is the nominal rating. Per-roll pushing/pulling is recorded on
+the roll, not on the film stock. Don't create separate `Portra 400 @ 1600`
+film stock rows.
+
+---
+
+## Metadata write policy
+
+The app owns a **whitelist** of EXIF/XMP fields and touches nothing else:
+
+- `Make`, `Model`, `LensModel` — silently overwritten on re-apply. (Lightroom
+  does not let you hand-edit these, so there's no user edit to conflict with.)
+- `Subject` / `Keywords` (flat) + `HierarchicalSubject` (tree) — merged
+  without duplicates. Existing non-managed keywords are preserved.
+- `DateCreated` — only when the user explicitly supplies a capture date.
+
+### By file type
+
+- **ARW / DNG**: never modify the raw. Write an XMP sidecar (`photo.arw.xmp`).
+  Merge with any existing sidecar content; do not wipe Lightroom edits.
+- **JPG / TIFF**: embed into the file. Preserve other tags.
+
+Re-apply must be idempotent — same inputs produce no duplicate keywords.
+
+---
+
+## Keyword taxonomy
+
+Hierarchical keywords use `|` as the delimiter (Lightroom's
+`HierarchicalSubject` convention). The flat `Subject` / `Keywords` tags get
+leaf names; the hierarchical tag gets the full path.
+
+Canonical paths:
+- `Film|<display_name>` — e.g. `Film|Kodak Portra 400`
+- `FilmType|<Color Negative | BW Negative | Slide | Other>`
+- `Development|Provider|<name>`
+- `Development|Method|<C-41|BW|E-6|ECN-2>`
+- `Scan|Provider|<name>`
+- `Scan|Method|<Lab scan|DSLR capture|Flatbed>`
+- `Scan|Camera|<display_name>`
+- `Scan|Lens|<display_name>`
+- `Roll|<folder basename>`
+
+Optional, off by default:
+- `Camera|<display_name>`
+- `Lens|<display_name>`
+
+---
+
+## Storage
+
+- `data/` (gitignored) — user-owned runtime state: `filmex.sqlite` plus future
+  assets. Portable: zip and move to another machine with `uv`.
+- `filmex/default_data.sqlite` — bundled fresh-install seed, regenerated by
+  `scripts/build_default_db.py`. Keep it generic (no private labs, no
+  user-specific gear).
+- One `roll_manifest.json` per roll folder. The folder basename is the
+  `roll_id`; rename after apply leaves the manifest stale by design (the
+  re-tag workflow is "strip and redo", not "update in place").
+
+---
+
+## Adding entities from an LLM session
+
+For bulk edits, skip the UI. Hand your LLM this file plus
+`examples/entities-batch.json` and ask it to produce a JSON batch. Review
+the JSON, then apply it:
+
+```bash
+uv run python -m filmex.cli add-from-json path/to/batch.json
+uv run python -m filmex.cli add-from-json path/to/batch.json --dry-run
+```
+
+The CLI is **idempotent**: rows matched by natural key are skipped with a log
+line. Safe to re-run.
+
+### Natural keys
+
+- Camera: `(make, model)` — case-insensitive
+- Lens: `(make, model)` — case-insensitive
+- FilmStock: `(brand, name)` — case-insensitive
+- Provider / DevelopmentMethod / ScanMethod: `(name)` — case-insensitive
+
+### Batch schema
+
+```json
+{
+  "cameras":             [ /* CameraCreate-ish dicts */ ],
+  "lenses":              [ /* LensCreate dicts */ ],
+  "film_stocks":         [ /* FilmStockCreate dicts */ ],
+  "providers":           [ /* ProviderCreate dicts */ ],
+  "development_methods": [ /* { "name": "..." } */ ],
+  "scan_methods":        [ /* { "name": "..." } */ ]
+}
+```
+
+Field shapes match the Pydantic `*Create` classes in `filmex/schemas/entities.py`.
+
+### Fixed-lens cameras
+
+Cameras with a built-in lens (Chaika, Yashica Electro, disposables) need the
+lens row created first, then the camera linked to it. The batch format
+accepts `fixed_lens_ref: { "make": "...", "model": "..." }` on a camera to
+resolve the link after lenses are inserted:
+
+```json
+{
+  "cameras": [
+    {
+      "make": "Yashica",
+      "model": "Electro 35 GSN",
+      "display_name": "Yashica Electro 35 GSN",
+      "mount": "Fixed-Lens",
+      "camera_type": "rangefinder",
+      "fixed_lens_ref": { "make": "Yashica", "model": "Yashinon DX 45mm f/1.7" }
+    }
+  ],
+  "lenses": [
+    {
+      "make": "Yashica",
+      "model": "Yashinon DX 45mm f/1.7",
+      "display_name": "Yashica Yashinon DX 45mm f/1.7",
+      "lens_model_write_value": "Yashica Yashinon DX 45mm f/1.7",
+      "focal_length_mm": 45,
+      "max_aperture": 1.7,
+      "mount": "Fixed-Lens"
+    }
+  ]
+}
+```
+
+The CLI inserts in this order, so cross-references resolve in one pass:
+1. Providers, development methods, scan methods, film stocks
+2. Cameras (without `fixed_lens_id`)
+3. Lenses (mount validated against the cameras just inserted)
+4. Camera `fixed_lens_id` links patched from `fixed_lens_ref`
+
+### What the CLI will *not* do
+
+- overwrite existing rows (use the UI or the REST API for edits)
+- delete rows
+- touch file metadata (that's the roll-apply flow)
+
+---
+
+## Testing
+
+`tests/` runs against a throwaway SQLite DB per test via `FILMEX_DATA_DIR`.
+Fixtures in `conftest.py` seed a minimal camera + lens through the public API
+so route tests don't duplicate setup.
+
+Must stay covered:
+- ExifTool argument builder (sidecar vs embed, merge semantics)
+- Idempotent re-apply (no duplicate keywords)
+- Existing XMP sidecar merge
+- Archive flag filtering
+- Manifest create / update / history
+- Folder scan source-kind detection and scan-tier derivation
+- CLI batch idempotency
+
+Have at least one integration test that uses real ExifTool if it's on PATH.
+
+---
+
+## Non-goals
+
+No image editing. No color inversion. No scanner control. No tethered
+capture. No cloud sync. No replacing Lightroom. No AI tagging. No mobile
+support. No browser extension.
