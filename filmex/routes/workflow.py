@@ -306,10 +306,9 @@ def get_manifest_by_folder(folder: str) -> ManifestResponse:
 @router.get("/api/files/thumbnail")
 def file_thumbnail(folder: str, name: str, invert: bool = False) -> FileResponse:
     target = _resolve_folder_file(folder, name)
-    try:
-        thumb, _ = pv.ensure_preview(target, invert=invert)
-    except pv.PreviewUnavailable as e:
-        raise HTTPException(status_code=404, detail=f"No thumbnail for {name}: {e}") from e
+    thumb = pv.existing_preview_path(target, invert=invert)
+    if thumb is None:
+        raise HTTPException(status_code=404, detail=f"No thumbnail for {name}")
     return FileResponse(thumb, media_type="image/jpeg")
 
 

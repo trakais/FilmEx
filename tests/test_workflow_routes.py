@@ -409,19 +409,22 @@ def test_thumbnail_endpoint_serves_tiff_sidecar_thumbnail(client, roll_factory):
     assert res.content
 
 
-def test_thumbnail_endpoint_generates_cached_preview_for_tiff_without_thm(client, roll_factory, data_dir):
+def test_thumbnail_endpoint_404_without_preview(client, roll_factory):
     folder = roll_factory("2026-04-17_R108C", jpegs=0, tiffs=1, tiff_thumbnails=False)
     res = client.get(
         "/api/files/thumbnail",
         params={"folder": str(folder), "name": "master_000.tif"},
     )
-    assert res.status_code == 200
-    assert res.headers["content-type"].startswith("image/jpeg")
-    assert list((data_dir / "preview_cache").glob("*.jpg"))
+    assert res.status_code == 404
 
 
-def test_thumbnail_endpoint_generates_cached_preview_for_jpeg(client, roll_factory, data_dir):
+def test_thumbnail_endpoint_serves_cached_preview_after_create(client, roll_factory, data_dir):
     folder = roll_factory("2026-04-17_R108E", jpegs=1)
+    created = client.post(
+        "/api/previews/create",
+        json={"folder": str(folder), "invert": False},
+    )
+    assert created.status_code == 200, created.text
     res = client.get(
         "/api/files/thumbnail",
         params={"folder": str(folder), "name": "scan_000.jpg"},

@@ -59,19 +59,24 @@ def sibling_thm_path(file_path: str | Path) -> Path | None:
 
 
 def has_preview(file_path: str | Path, *, invert: bool = False) -> bool:
-    path = Path(file_path)
-    if not invert and sibling_thm_path(path) is not None:
-        return True
-    if cached_preview_path_for(path, invert=invert).is_file():
-        return True
-    if path.suffix.lower() in SUPPORTED_JPG_EXTS | SUPPORTED_TIF_EXTS:
-        return True
-    return False
+    return existing_preview_path(file_path, invert=invert) is not None
 
 
 def has_any_cached_preview(file_path: str | Path) -> bool:
     path = Path(file_path)
     return any(cached_preview_path_for(path, invert=flag).is_file() for flag in (False, True))
+
+
+def existing_preview_path(file_path: str | Path, *, invert: bool = False) -> Path | None:
+    path = Path(file_path)
+    if not invert:
+        thm = sibling_thm_path(path)
+        if thm is not None:
+            return thm
+    cached = cached_preview_path_for(path, invert=invert)
+    if cached.is_file():
+        return cached
+    return None
 
 
 def cached_preview_path_for(file_path: str | Path, *, invert: bool) -> Path:

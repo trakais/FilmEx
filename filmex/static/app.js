@@ -198,12 +198,15 @@ async function onScan() {
     state.scan = scan;
     applySuggestedRollDate(scan.suggested_roll_date);
     resetPerFileKeywordState();
-    await maybeLoadManifestPrefill(scan);
     pushRecentFolder(folder);
     renderRecentFolders();
     renderScanSummary();
     saveStickyState();
     updateActionButtons();
+    void maybeLoadManifestPrefill(scan).then(() => {
+      saveStickyState();
+      updateActionButtons();
+    });
   } catch (e) {
     state.scan = null;
     clearPreviewStatus();
