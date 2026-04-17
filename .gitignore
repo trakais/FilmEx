@@ -15,6 +15,7 @@ venv/
 
 # uv
 .uv/
+.python-version
 
 # Environment
 .env
