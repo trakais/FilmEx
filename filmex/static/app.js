@@ -181,6 +181,8 @@ async function onScan() {
   const input = document.getElementById("folder-input");
   const folder = input.value.trim();
   if (!folder) return;
+  clearScanOutput();
+  clearManifestSummary();
   state.folder = folder;
   try {
     const scan = await api("/api/folder/scan", {
@@ -188,8 +190,9 @@ async function onScan() {
       body: JSON.stringify({ folder }),
     });
     state.scan = scan;
-    prunePerFileKeywordState();
     applySuggestedRollDate(scan.suggested_roll_date);
+    resetPerFileKeywordState();
+    await maybeLoadManifestPrefill(scan);
     pushRecentFolder(folder);
     renderRecentFolders();
     renderScanSummary();
@@ -214,6 +217,21 @@ function renderScanSummary() {
     <span class="chip">${escapeHtml(state.scan.scan_tier)}</span>
     <span>roll: <code>${escapeHtml(state.scan.roll_id)}</code></span>
   `;
+}
+
+function renderManifestSummary(message, level = "warn") {
+  const el = document.getElementById("manifest-summary");
+  if (!message) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="pill ${escapeHtml(level)}">${level === "ok" ? "Manifest loaded" : "Manifest note"}</span><span>${escapeHtml(message)}</span>`;
+}
+
+function clearManifestSummary() {
+  renderManifestSummary("");
 }
 
 // ---------- Tiles ----------
@@ -485,6 +503,145 @@ function applySuggestedRollDate(suggested) {
   renderRollDate();
 }
 
+async function maybeLoadManifestPrefill(scan) {
+  try {
+    const params = new URLSearchParams({ folder: state.folder });
+    const res = await api(`/api/manifest?${params.toString()}`);
+    applyManifestPrefill(res.manifest, scan);
+  } catch (e) {
+    if (String(e.message || "").startsWith("404 ")) return;
+    renderManifestSummary(`Could not load existing roll manifest: ${e.message}`, "bad");
+  }
+}
+
+function applyManifestPrefill(manifest, scan) {
+  const unresolved = [];
+  state.camera = resolveCameraFromManifest(manifest.analog_camera_snapshot, unresolved);
+  state.lens = resolveLensFromManifest(manifest.analog_lens_snapshot, unresolved);
+  state.film = resolveFilmFromManifest(manifest.film_stock_snapshot, unresolved);
+  state.advanced.development_provider_id = resolveNamedEntityId(
+    state.providers,
+    manifest.development_provider_snapshot,
+    unresolved,
+    "development provider"
+  );
+  state.advanced.development_method_id = resolveNamedEntityId(
+    state.devMethods,
+    manifest.development_method_snapshot,
+    unresolved,
+    "development method"
+  );
+  state.advanced.scan_provider_id = resolveNamedEntityId(
+    state.providers,
+    manifest.scan_provider_snapshot,
+    unresolved,
+    "scan provider"
+  );
+  state.advanced.scan_method_id = resolveNamedEntityId(
+    state.scanMethods,
+    manifest.scan_method_snapshot,
+    unresolved,
+    "scan method"
+  );
+  state.fileKeywords = fileKeywordsFromManifest(manifest.file_overrides, scan.files);
+  state.fileKeywordEditorOpen = {};
+
+  const manifestRollDate = (manifest.capture_date_value || "").trim();
+  if (manifestRollDate) {
+    state.advanced.roll_date = manifestRollDate;
+    state.advanced.roll_date_source = "manifest";
+  }
+
+  populateAdvancedSelects();
+  renderTiles();
+
+  const msg = unresolved.length
+    ? `Loaded existing roll manifest. Could not match: ${unresolved.join(", ")}.`
+    : "Loaded existing roll manifest values for this folder.";
+  renderManifestSummary(msg, unresolved.length ? "warn" : "ok");
+}
+
+function resolveCameraFromManifest(snapshot, unresolved) {
+  return resolveEntityFromManifest(
+    state.cameras,
+    snapshot,
+    unresolved,
+    "camera",
+    item => item.display_name,
+    ["make", "model"]
+  );
+}
+
+function resolveLensFromManifest(snapshot, unresolved) {
+  return resolveEntityFromManifest(
+    state.lenses,
+    snapshot,
+    unresolved,
+    "lens",
+    item => item.display_name,
+    ["make", "model"]
+  );
+}
+
+function resolveFilmFromManifest(snapshot, unresolved) {
+  return resolveEntityFromManifest(
+    state.films,
+    snapshot,
+    unresolved,
+    "film stock",
+    item => item.display_name,
+    ["brand", "display_name"]
+  );
+}
+
+function resolveNamedEntityId(items, snapshot, unresolved, label) {
+  const row = resolveEntityFromManifest(
+    items,
+    snapshot,
+    unresolved,
+    label,
+    item => item.name,
+    ["name"]
+  );
+  return row ? row.id : "";
+}
+
+function resolveEntityFromManifest(items, snapshot, unresolved, label, labelFn, keyFields) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const meaningful = keyFields.some(key => (snapshot[key] || "").toString().trim()) || !!snapshot.id;
+  if (!meaningful) return null;
+
+  if (snapshot.id) {
+    const byId = items.find(item => item.id === snapshot.id);
+    if (byId) return byId;
+  }
+
+  const manifestLabel = (labelFn(snapshot) || "").toString().trim().toLowerCase();
+  if (manifestLabel) {
+    const byLabel = items.find(item => ((labelFn(item) || "").toString().trim().toLowerCase() === manifestLabel));
+    if (byLabel) return byLabel;
+  }
+
+  const byKey = items.find(item =>
+    keyFields.every(key => compareCaseInsensitive(item[key], snapshot[key]))
+  );
+  if (byKey) return byKey;
+
+  unresolved.push(buildManifestLabel(label, snapshot, labelFn));
+  return null;
+}
+
+function buildManifestLabel(label, snapshot, labelFn) {
+  const named = (labelFn(snapshot) || "").toString().trim();
+  if (named) return `${label} "${named}"`;
+  const parts = [snapshot.make, snapshot.model, snapshot.brand].filter(Boolean).map(String);
+  return parts.length ? `${label} "${parts.join(" ")}"` : label;
+}
+
+function compareCaseInsensitive(a, b) {
+  return ((a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase());
+}
+
 function renderRollDate() {
   const input = document.getElementById("adv-roll-date");
   const hint = document.getElementById("roll-date-hint");
@@ -701,6 +858,21 @@ function renderApplyResult(res) {
 
 // ---------- Helpers ----------
 
+function clearScanOutput() {
+  if (previewRefreshTimer) {
+    clearTimeout(previewRefreshTimer);
+    previewRefreshTimer = null;
+  }
+  const diffSection = document.getElementById("diff-section");
+  const diffBody = document.getElementById("diff-body");
+  const applySection = document.getElementById("apply-section");
+  const applyBody = document.getElementById("apply-body");
+  diffSection.classList.add("hidden");
+  diffBody.innerHTML = "";
+  applySection.classList.add("hidden");
+  applyBody.innerHTML = "";
+}
+
 function escapeHtml(s) {
   if (s == null) return "";
   return String(s).replace(/[&<>"']/g, c => ({
@@ -728,14 +900,22 @@ function buildPerFileKeywordPayload() {
   return out;
 }
 
-function prunePerFileKeywordState() {
-  const valid = new Set((state.scan?.files || []).map(file => file.name));
-  for (const key of Object.keys(state.fileKeywords)) {
-    if (!valid.has(key)) delete state.fileKeywords[key];
+function fileKeywordsFromManifest(fileOverrides, files) {
+  const valid = new Set((files || []).map(file => file.name));
+  const out = {};
+  for (const [name, payload] of Object.entries(fileOverrides || {})) {
+    if (!valid.has(name)) continue;
+    const keywords = Array.isArray(payload?.extra_keywords)
+      ? payload.extra_keywords.map(v => String(v).trim()).filter(Boolean)
+      : [];
+    if (keywords.length) out[name] = keywords.join(", ");
   }
-  for (const key of Object.keys(state.fileKeywordEditorOpen)) {
-    if (!valid.has(key)) delete state.fileKeywordEditorOpen[key];
-  }
+  return out;
+}
+
+function resetPerFileKeywordState() {
+  state.fileKeywords = {};
+  state.fileKeywordEditorOpen = {};
 }
 
 let previewRefreshTimer = null;

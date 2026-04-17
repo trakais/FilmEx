@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from filmex.routes import workflow as workflow_routes
+from filmex.services import manifest as mf
 from filmex.services.exiftool_runner import exiftool_available, read_tags
 
 requires_exiftool = pytest.mark.skipif(not shutil.which("exiftool"), reason="exiftool not on PATH")
@@ -370,6 +371,31 @@ def test_get_manifest_404_when_missing(client, tmp_path):
     folder.mkdir()
     res = client.get(f"/api/manifests/empty_roll?folder={folder}")
     assert res.status_code == 404
+
+
+def test_get_manifest_by_folder_reads_existing_manifest_even_if_folder_was_renamed(client, tmp_path):
+    folder = tmp_path / "renamed_roll"
+    folder.mkdir()
+    manifest = mf.build_new_manifest(
+        folder=folder,
+        roll_id="2026-04-17_R999",
+        source_kind="lab_scan_jpeg",
+        scan_tier="high-res",
+        camera=mf.GearSnapshot(make="Canon", model="AE-1", display_name="Canon AE-1"),
+        lens=mf.GearSnapshot(),
+        film=mf.FilmSnapshot(brand="Kodak", display_name="Kodak Gold 200"),
+        development_provider=mf.NamedSnapshot(name="Home"),
+        development_method=mf.NamedSnapshot(name="C-41"),
+        scan_provider=mf.NamedSnapshot(name="Self"),
+        scan_method=mf.NamedSnapshot(name="Lab scan"),
+    )
+    mf.write_manifest(folder, manifest)
+
+    res = client.get("/api/manifest", params={"folder": str(folder)})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["roll_id"] == "2026-04-17_R999"
+    assert body["manifest"]["analog_camera_snapshot"]["display_name"] == "Canon AE-1"
 
 
 def test_thumbnail_endpoint_serves_tiff_sidecar_thumbnail(client, roll_factory):

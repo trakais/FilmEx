@@ -291,6 +291,15 @@ def get_manifest(roll_id: str, folder: str) -> ManifestResponse:
     return ManifestResponse(roll_id=roll_id, manifest=data)
 
 
+@router.get("/api/manifest", response_model=ManifestResponse)
+def get_manifest_by_folder(folder: str) -> ManifestResponse:
+    data = mf.read_manifest(folder)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No manifest in {folder}")
+    roll_id = str(data.get("roll_id") or "")
+    return ManifestResponse(roll_id=roll_id, manifest=data)
+
+
 @router.get("/api/files/thumbnail")
 def file_thumbnail(folder: str, name: str) -> FileResponse:
     target = _resolve_folder_file(folder, name)
