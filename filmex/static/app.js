@@ -1054,7 +1054,8 @@ async function submitSettingsForm() {
 
   const form = document.getElementById("settings-form");
   const payload = {};
-  for (const f of cfg.fields) {
+  const activeFields = cfg.fields.filter(f => row || !f.editOnly);
+  for (const f of activeFields) {
     if (f.type === "kinds") {
       payload[f.name] = [...form.querySelectorAll('input[name="kinds[]"]:checked')].map(el => el.value);
     } else {
