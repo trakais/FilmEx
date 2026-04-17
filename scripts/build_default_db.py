@@ -25,6 +25,7 @@ from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 from filmex.models import (  # noqa: E402
     Camera,
     DevelopmentMethod,
+    FilmBrand,
     FilmStock,
     Lens,
     Provider,
@@ -41,6 +42,20 @@ SCAN_METHODS = ["Lab scan", "DSLR capture", "Flatbed"]
 PROVIDERS = [
     {"name": "Home", "kinds": ["development"], "favorite": False},
     {"name": "Self", "kinds": ["scan"], "favorite": False},
+]
+
+# Brand palettes rendered as the bookmark strip on film picker tiles.
+# Keep in sync with `_KNOWN_BRAND_COLORS` in filmex/migrations.py so a fresh DB
+# (via default_data.sqlite bootstrap) and an existing DB (via v3 migration
+# backfill) end up with the same seed palettes.
+FILM_BRANDS = [
+    {"name": "Kodak", "color_primary": "#f7ad03", "color_secondary": "#c9489e"},
+    {"name": "Ilford", "color_primary": "#000000", "color_secondary": "#ffffff"},
+    {"name": "Kentmere", "color_primary": "#2f2298", "color_secondary": "#e50163"},
+    {"name": "Fujifilm", "color_primary": "#079952", "color_secondary": "#292826"},
+    {"name": "Fomapan", "color_primary": "#c9489e", "color_secondary": "#f1d100"},
+    {"name": "Agfa", "color_primary": "#73767c", "color_secondary": "#cf1c30"},
+    {"name": "Lomography", "color_primary": "#bb9d70", "color_secondary": "#292825"},
 ]
 
 # Two demo cameras (one mountable, one fixed-lens) + their lenses. Chosen for
@@ -238,6 +253,8 @@ def build(output: Path) -> None:
             session.add(ScanMethod(name=name))
         for p in PROVIDERS:
             session.add(Provider(name=p["name"], kinds=p["kinds"], favorite=p["favorite"]))
+        for b in FILM_BRANDS:
+            session.add(FilmBrand(**b))
         for f in FILM_STOCKS:
             session.add(FilmStock(**f))
 

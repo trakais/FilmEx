@@ -270,7 +270,8 @@ def test_apply_dng_creates_then_updates_sidecar(client, roll_factory):
     # First apply: creates sidecar from raw
     res1 = client.post("/api/metadata/apply", json=payload).json()
     assert res1["errors"] == []
-    sidecar = folder / "frame_000.dng.xmp"
+    # Canonical Lightroom sidecar form: frame_000.dng → frame_000.xmp.
+    sidecar = folder / "frame_000.xmp"
     assert sidecar.is_file()
 
     # Second apply: edits sidecar in place. Re-apply must not duplicate keywords.

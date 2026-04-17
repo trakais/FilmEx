@@ -184,6 +184,84 @@ def test_create_provider_rejects_unknown_kind(client):
     assert res.status_code == 400
 
 
+def test_film_brand_list_ships_with_seed_brands(client):
+    brands = client.get("/api/film-brands").json()
+    names = {b["name"] for b in brands}
+    # Seed data in default_data.sqlite covers these; if you rebuild the seed,
+    # keep the set a superset of this.
+    assert {"Kodak", "Ilford", "Fujifilm"} <= names
+
+
+def test_film_brand_create_normalizes_hex(client):
+    created = client.post(
+        "/api/film-brands",
+        json={
+            "name": "Revolog",
+            "color_primary": "#A1B2C3",
+            "color_secondary": "abc",  # shorthand, no leading #
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["color_primary"] == "#a1b2c3"
+    assert body["color_secondary"] == "#aabbcc"
+
+
+def test_film_brand_rejects_garbage_hex(client):
+    res = client.post(
+        "/api/film-brands",
+        json={"name": "BadColor", "color_primary": "rainbow"},
+    )
+    assert res.status_code == 422
+
+
+def test_film_brand_create_rejects_duplicate_name(client):
+    client.post("/api/film-brands", json={"name": "Adox"})
+    clash = client.post("/api/film-brands", json={"name": "adox"})
+    assert clash.status_code == 409
+
+
+def test_film_brand_rename_cascades_to_film_stocks(client):
+    brand = client.post("/api/film-brands", json={"name": "Rera"}).json()
+    stock = client.post(
+        "/api/film-stocks",
+        json={
+            "brand": "Rera",
+            "name": "Pan 100-400",
+            "display_name": "Rera Pan 100-400",
+            "box_speed_iso": 400,
+            "film_type": "bw_negative",
+            "process_type": "bw",
+        },
+    ).json()
+    renamed = client.patch(
+        f"/api/film-brands/{brand['id']}",
+        json={"name": "Rera Pan"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    # Film stock now references the new brand name.
+    films = client.get("/api/film-stocks").json()
+    ours = next(f for f in films if f["id"] == stock["id"])
+    assert ours["brand"] == "Rera Pan"
+
+
+def test_film_stock_rejects_unknown_brand(client):
+    res = client.post(
+        "/api/film-stocks",
+        json={
+            "brand": "NotARealBrand",
+            "name": "Bogus",
+            "display_name": "NotARealBrand Bogus 400",
+            "box_speed_iso": 400,
+            "film_type": "color_negative",
+            "process_type": "c41",
+        },
+    )
+    assert res.status_code == 400
+    assert "Unknown film brand" in res.text
+
+
 def test_film_stock_crud_roundtrip(client):
     created = client.post(
         "/api/film-stocks",

@@ -355,8 +355,10 @@ def _read_existing_tags(file_path: Path) -> dict:
     if not exiftool_available():
         return {}
     if et.detect_mode(file_path) == "sidecar":
-        sidecar = et.sidecar_path_for(file_path)
-        if not sidecar.is_file():
+        # Tolerate legacy `photo.arw.xmp` alongside the canonical `photo.xmp`
+        # so the diff view matches whatever actually exists on disk.
+        sidecar = et.find_existing_sidecar(file_path)
+        if sidecar is None:
             return {}
         return read_tags(sidecar, _READ_TAGS)
     return read_tags(file_path, _READ_TAGS)

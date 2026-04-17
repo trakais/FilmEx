@@ -32,6 +32,9 @@ def test_apply_batch_inserts_and_is_idempotent(blank_db):
         "providers": [{"name": "ExampleLab", "kinds": ["development", "scan"]}],
         "development_methods": [{"name": "C-41"}],
         "scan_methods": [{"name": "DSLR capture"}],
+        "film_brands": [
+            {"name": "Kodak", "color_primary": "#f7ad03", "color_secondary": "#c9489e"},
+        ],
         "film_stocks": [
             {
                 "brand": "Kodak",
@@ -69,6 +72,7 @@ def test_apply_batch_inserts_and_is_idempotent(blank_db):
     counts = {s.section: (len(s.created), len(s.skipped)) for s in first.sections}
     assert counts["cameras"] == (1, 0)
     assert counts["lenses"] == (1, 0)
+    assert counts["film_brands"] == (1, 0)
     assert counts["film_stocks"] == (1, 0)
     assert counts["providers"] == (1, 0)
 
@@ -148,8 +152,68 @@ def test_lens_without_matching_camera_mount_errors(blank_db):
     assert "Imaginary Mount" in lens_section.errors[0]
 
 
+def test_film_brand_batch_normalizes_hex(blank_db):
+    batch = {
+        "film_brands": [
+            {
+                "name": "Lomography",
+                "color_primary": "#BB9D70",
+                "color_secondary": "292825",
+            }
+        ]
+    }
+    report = apply_batch(batch)
+    assert not report.has_errors()
+
+    from sqlmodel import Session, select
+
+    from filmex.db import get_engine
+    from filmex.models import FilmBrand
+
+    with Session(get_engine()) as session:
+        row = session.exec(
+            select(FilmBrand).where(FilmBrand.name == "Lomography")
+        ).one()
+        # Normalized to lowercase #rrggbb regardless of input shape.
+        assert row.color_primary == "#bb9d70"
+        assert row.color_secondary == "#292825"
+
+
+def test_film_brand_batch_rejects_garbage_hex(blank_db):
+    batch = {
+        "film_brands": [{"name": "BadColor", "color_primary": "not-a-color"}]
+    }
+    report = apply_batch(batch)
+    assert report.has_errors()
+    fb = next(s for s in report.sections if s.section == "film_brands")
+    assert fb.errors
+    assert "color" in fb.errors[0].lower()
+
+
+def test_film_stock_with_unknown_brand_is_rejected(blank_db):
+    # No film_brands section — the stock's brand reference has no target row.
+    batch = {
+        "film_stocks": [
+            {
+                "brand": "UnregisteredBrand",
+                "name": "Color Negative 400",
+                "display_name": "UnregisteredBrand Color Negative 400",
+                "box_speed_iso": 400,
+                "film_type": "color_negative",
+                "process_type": "c41",
+            }
+        ]
+    }
+    report = apply_batch(batch)
+    assert report.has_errors()
+    fs = next(s for s in report.sections if s.section == "film_stocks")
+    assert fs.errors
+    assert "not registered" in fs.errors[0]
+
+
 def test_invalid_film_type_is_rejected(blank_db):
     batch = {
+        "film_brands": [{"name": "Kodak"}],
         "film_stocks": [
             {
                 "brand": "Kodak",
@@ -159,10 +223,12 @@ def test_invalid_film_type_is_rejected(blank_db):
                 "film_type": "holographic",
                 "process_type": "c41",
             }
-        ]
+        ],
     }
     report = apply_batch(batch)
     assert report.has_errors()
+    fs = next(s for s in report.sections if s.section == "film_stocks")
+    assert any("film_type" in e for e in fs.errors)
 
 
 def test_dry_run_reports_without_writing(blank_db):

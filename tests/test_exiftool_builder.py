@@ -33,9 +33,34 @@ def test_detect_mode():
         et.detect_mode("photo.heic")
 
 
-def test_sidecar_path_for():
-    assert et.sidecar_path_for(Path("/a/b/photo.arw")) == Path("/a/b/photo.arw.xmp")
-    assert et.sidecar_path_for("photo.dng") == Path("photo.dng.xmp")
+def test_sidecar_path_for_is_lightroom_form():
+    # Replace-extension form, what Lightroom / Bridge expect.
+    assert et.sidecar_path_for(Path("/a/b/photo.arw")) == Path("/a/b/photo.xmp")
+    assert et.sidecar_path_for("photo.dng") == Path("photo.xmp")
+
+
+def test_legacy_sidecar_path_for_is_appended_form():
+    # Pre-v1 FilmEx wrote this; read path still tolerates it.
+    assert et.legacy_sidecar_path_for(Path("/a/b/photo.arw")) == Path("/a/b/photo.arw.xmp")
+    assert et.legacy_sidecar_path_for("photo.dng") == Path("photo.dng.xmp")
+
+
+def test_find_existing_sidecar_prefers_canonical(tmp_path):
+    raw = tmp_path / "frame_000.dng"
+    raw.write_bytes(b"")
+    canonical = tmp_path / "frame_000.xmp"
+    legacy = tmp_path / "frame_000.dng.xmp"
+
+    # Nothing on disk yet.
+    assert et.find_existing_sidecar(raw) is None
+
+    # Only legacy present — return it so re-apply edits that file, not a new one.
+    legacy.write_text("<x:xmpmeta/>")
+    assert et.find_existing_sidecar(raw) == legacy
+
+    # When both exist, canonical wins (it's what Lightroom just wrote).
+    canonical.write_text("<x:xmpmeta/>")
+    assert et.find_existing_sidecar(raw) == canonical
 
 
 def test_embed_argv_contains_gear_and_keywords():
@@ -63,7 +88,9 @@ def test_embed_argv_uses_remove_then_add_for_idempotency():
 def test_sidecar_create_uses_o_and_raw_source():
     argv = et.build_argv("photo.arw", _intent(), sidecar_exists=False)
     assert "-o" in argv
-    assert "photo.arw.xmp" in argv
+    # Canonical Lightroom form: photo.arw → photo.xmp (not photo.arw.xmp).
+    assert "photo.xmp" in argv
+    assert "photo.arw.xmp" not in argv
     assert argv[-1] == "photo.arw"
     # IPTC:Keywords is dropped for sidecars — it's not an XMP concept.
     assert not any(a.startswith("-IPTC:Keywords") for a in argv)
@@ -72,10 +99,26 @@ def test_sidecar_create_uses_o_and_raw_source():
 def test_sidecar_update_edits_xmp_directly():
     argv = et.build_argv("photo.arw", _intent(), sidecar_exists=True)
     assert "-o" not in argv
-    assert argv[-1] == "photo.arw.xmp"
+    # Default sidecar path is the canonical replaced-extension form.
+    assert argv[-1] == "photo.xmp"
     # Raw file itself must not be a target when sidecar exists.
     assert "photo.arw" not in argv
     assert not any(a.startswith("-IPTC:Keywords") for a in argv)
+
+
+def test_sidecar_path_override_edits_legacy_named_xmp():
+    # When the runner finds a legacy `photo.arw.xmp` on disk it pins that path
+    # via sidecar_path= so we keep editing the same file Lightroom is reading,
+    # rather than silently seeding a second canonical-named sidecar alongside.
+    argv = et.build_argv(
+        "photo.arw",
+        _intent(),
+        sidecar_exists=True,
+        sidecar_path="photo.arw.xmp",
+    )
+    assert "-o" not in argv
+    assert argv[-1] == "photo.arw.xmp"
+    assert "photo.xmp" not in argv
 
 
 def test_dry_run_strips_overwrite_original():

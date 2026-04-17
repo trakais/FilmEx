@@ -7,10 +7,12 @@ migration framework yet.
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 4
 
 
 def migrate_db(engine: Engine) -> None:
@@ -46,6 +48,15 @@ def _apply_migration(engine: Engine, version: int) -> None:
     if version == 1:
         _migrate_to_v1(engine)
         return
+    if version == 2:
+        _migrate_to_v2(engine)
+        return
+    if version == 3:
+        _migrate_to_v3(engine)
+        return
+    if version == 4:
+        _migrate_to_v4(engine)
+        return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
 
@@ -78,6 +89,131 @@ def _migrate_to_v1(engine: Engine) -> None:
 
     _ensure_column(engine, "scan_method", "favorite", "BOOLEAN NOT NULL DEFAULT 0")
     _ensure_column(engine, "scan_method", "archived", "BOOLEAN NOT NULL DEFAULT 0")
+
+
+def _migrate_to_v2(engine: Engine) -> None:
+    """Intermediate per-stock color columns.
+
+    Obsoleted by v3: colors moved to the `film_brand` entity. These columns
+    linger on any database that passed through v2 but are no longer read or
+    written. v3 drops them to keep the schema tidy.
+    """
+    _ensure_column(engine, "film_stock", "color_primary", "VARCHAR")
+    _ensure_column(engine, "film_stock", "color_secondary", "VARCHAR")
+
+
+# Known brand palettes seeded on first creation of the `film_brand` table.
+# Derived from the physical film-box design — a dominant color and an accent.
+# User can edit any of these later via Settings; nothing here is load-bearing
+# for correctness, only for tile aesthetics.
+_KNOWN_BRAND_COLORS: dict[str, tuple[str, str]] = {
+    "Kodak": ("#f7ad03", "#c9489e"),
+    "Fomapan": ("#c9489e", "#f1d100"),
+    "Ilford": ("#000000", "#ffffff"),
+    "Kentmere": ("#2f2298", "#e50163"),
+    "Agfa": ("#73767c", "#cf1c30"),
+    "Fujifilm": ("#079952", "#292826"),
+    "Lomography": ("#bb9d70", "#292825"),
+}
+
+
+def _migrate_to_v3(engine: Engine) -> None:
+    """Introduce the `film_brand` entity.
+
+    Brands are now a first-class row that owns the two-color palette for the
+    film picker. Existing `film_stock.brand` strings get a corresponding brand
+    row via backfill. Known brands get pre-populated colors; unknown brands
+    land with null colors until the user or an LLM batch sets them.
+    """
+    _sync_film_brands(engine)
+
+    # Drop obsolete v2 color columns from film_stock if they were ever added.
+    # SQLite supports DROP COLUMN since 3.35 (2021-03); we can rely on it.
+    inspector = inspect(engine)
+    film_stock_cols = (
+        {col["name"] for col in inspector.get_columns("film_stock")}
+        if inspector.has_table("film_stock")
+        else set()
+    )
+    for col in ("color_primary", "color_secondary"):
+        if col in film_stock_cols:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(f"ALTER TABLE film_stock DROP COLUMN {col}")
+
+
+def _migrate_to_v4(engine: Engine) -> None:
+    """Repair/complete film-brand backfill on already-versioned databases.
+
+    Some working copies may already be stamped at v3 while still missing
+    backfilled brand rows or known-brand palettes. Re-running the reconciliation
+    step is safe and makes the migration self-healing.
+    """
+    _sync_film_brands(engine)
+
+
+def _sync_film_brands(engine: Engine) -> None:
+    """Ensure film_brand exists and covers every distinct film_stock brand.
+
+    Known brands get their canonical palette when the row is first created. For
+    existing rows, missing colors are backfilled one side at a time without
+    overwriting user edits.
+    """
+    inspector = inspect(engine)
+
+    if not inspector.has_table("film_brand"):
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                """
+                CREATE TABLE film_brand (
+                    id VARCHAR PRIMARY KEY NOT NULL,
+                    name VARCHAR NOT NULL,
+                    color_primary VARCHAR,
+                    color_secondary VARCHAR
+                )
+                """
+            )
+            conn.exec_driver_sql("CREATE INDEX ix_film_brand_name ON film_brand(name)")
+
+    if not inspector.has_table("film_stock"):
+        return
+
+    with engine.begin() as conn:
+        brand_rows = conn.exec_driver_sql(
+            "SELECT id, name, color_primary, color_secondary FROM film_brand"
+        ).fetchall()
+        brand_map = {
+            name.strip().lower(): (brand_id, name, color_primary, color_secondary)
+            for brand_id, name, color_primary, color_secondary in brand_rows
+            if name and name.strip()
+        }
+        stock_brands = {
+            row[0].strip()
+            for row in conn.exec_driver_sql(
+                "SELECT DISTINCT brand FROM film_stock"
+            ).fetchall()
+            if row[0] and row[0].strip()
+        }
+
+        for brand in sorted(stock_brands):
+            colors = _KNOWN_BRAND_COLORS.get(brand, (None, None))
+            current = brand_map.get(brand.lower())
+            if current is None:
+                conn.exec_driver_sql(
+                    "INSERT INTO film_brand (id, name, color_primary, color_secondary) "
+                    "VALUES (?, ?, ?, ?)",
+                    (str(uuid.uuid4()), brand, colors[0], colors[1]),
+                )
+                continue
+
+            brand_id, _, color_primary, color_secondary = current
+            next_primary = color_primary if color_primary is not None else colors[0]
+            next_secondary = color_secondary if color_secondary is not None else colors[1]
+            if next_primary == color_primary and next_secondary == color_secondary:
+                continue
+            conn.exec_driver_sql(
+                "UPDATE film_brand SET color_primary = ?, color_secondary = ? WHERE id = ?",
+                (next_primary, next_secondary, brand_id),
+            )
 
 
 def _ensure_column(engine: Engine, table: str, column: str, definition: str) -> None:

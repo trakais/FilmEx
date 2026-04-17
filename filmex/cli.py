@@ -26,6 +26,7 @@ from filmex.db import get_engine, init_db
 from filmex.models import (
     Camera,
     DevelopmentMethod,
+    FilmBrand,
     FilmStock,
     Lens,
     Provider,
@@ -33,6 +34,7 @@ from filmex.models import (
 )
 from filmex.schemas import (
     CameraCreate,
+    FilmBrandCreate,
     FilmStockCreate,
     LensCreate,
     MethodCreate,
@@ -47,6 +49,7 @@ _BATCH_SECTIONS = (
     "providers",
     "development_methods",
     "scan_methods",
+    "film_brands",
     "film_stocks",
     "cameras",
     "lenses",
@@ -123,6 +126,10 @@ def apply_batch(batch: dict[str, Any], *, dry_run: bool = False) -> BatchReport:
             batch.get("scan_methods", []),
             report.section("scan_methods"),
         )
+        # Film brands own colors + serve as the FK target for film_stocks,
+        # so they must land before film_stocks (which now validate the brand
+        # exists).
+        _process_film_brands(session, batch.get("film_brands", []), report)
         _process_film_stocks(session, batch.get("film_stocks", []), report)
 
         # 2. Cameras before lenses, so lens-mount validation sees new mounts.
@@ -216,6 +223,40 @@ def _find_method(session: Session, model, name: str):
     return None
 
 
+# ---------- film brands ----------
+
+
+def _process_film_brands(
+    session: Session, items: Iterable[dict], report: BatchReport
+) -> None:
+    sr = report.section("film_brands")
+    for raw in items:
+        label = _label(raw, ("name",))
+        try:
+            payload = FilmBrandCreate(**raw)
+        except ValidationError as exc:
+            sr.errors.append(f"{label}: {_err(exc)}")
+            continue
+        if _find_film_brand(session, payload.name) is not None:
+            sr.skipped.append(f"{label} (already exists)")
+            continue
+        data = payload.model_dump()
+        data["name"] = data["name"].strip()
+        session.add(FilmBrand(**data))
+        session.flush()
+        sr.created.append(label)
+
+
+def _find_film_brand(session: Session, name: str) -> FilmBrand | None:
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    for row in session.exec(select(FilmBrand)).all():
+        if (row.name or "").strip().lower() == needle:
+            return row
+    return None
+
+
 # ---------- film stocks ----------
 
 
@@ -240,6 +281,13 @@ def _process_film_stocks(
             sr.errors.append(
                 f"{label}: process_type '{payload.process_type}' invalid; "
                 f"use one of {sorted(_VALID_PROCESS_TYPES)}"
+            )
+            continue
+        if _find_film_brand(session, payload.brand) is None:
+            sr.errors.append(
+                f"{label}: brand '{payload.brand}' is not registered. "
+                f"Add it under 'film_brands' first (so its palette colors "
+                f"can be set)."
             )
             continue
         if _find_film_stock(session, payload.brand, payload.name) is not None:
@@ -434,6 +482,17 @@ def export_database() -> dict[str, list[dict]]:
             for lens in session.exec(select(Lens)).all()
         ]
 
+        film_brands = [
+            _prune(
+                {
+                    "name": b.name,
+                    "color_primary": b.color_primary,
+                    "color_secondary": b.color_secondary,
+                }
+            )
+            for b in session.exec(select(FilmBrand)).all()
+        ]
+
         film_stocks = [
             _prune(
                 {
@@ -475,6 +534,7 @@ def export_database() -> dict[str, list[dict]]:
         "providers": providers,
         "development_methods": development_methods,
         "scan_methods": scan_methods,
+        "film_brands": film_brands,
         "film_stocks": film_stocks,
         "cameras": cameras,
         "lenses": lenses,

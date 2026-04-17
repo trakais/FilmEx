@@ -28,6 +28,7 @@ const state = {
   cameras: [],
   lenses: [],
   films: [],
+  brands: [],
   providers: [],
   devMethods: [],
   scanMethods: [],
@@ -93,10 +94,11 @@ async function init() {
   await refreshExifToolStatus();
 
   // Load all entity caches in parallel
-  const [cams, lenses, films, providers, devM, scanM] = await Promise.all([
+  const [cams, lenses, films, brands, providers, devM, scanM] = await Promise.all([
     api("/api/cameras"),
     api("/api/lenses"),
     api("/api/film-stocks"),
+    api("/api/film-brands"),
     api("/api/providers"),
     api("/api/development-methods"),
     api("/api/scan-methods"),
@@ -104,6 +106,7 @@ async function init() {
   state.cameras = cams;
   state.lenses = lenses;
   state.films = films;
+  state.brands = brands;
   state.providers = providers;
   state.devMethods = devM;
   state.scanMethods = scanM;
@@ -378,20 +381,21 @@ async function renderPickerGrid() {
 }
 
 // Per-brand two-color palette rendered as a stacked strip on the left of
-// each film tile — a bookmark-style visual grouping. Unknown brands get a
-// neutral fallback so the strip still appears but doesn't misrepresent.
-const FILM_BRAND_COLORS = {
-  Kodak: ["#f7ad03", "#c9489e"],
-  Fomapan: ["#c9489e", "#f1d100"],
-  Ilford: ["#000000", "#ffffff"],
-  Kentmere: ["#2f2298", "#e50163"],
-  Agfa: ["#73767c", "#cf1c30"],
-  Fujifilm: ["#079952", "#292826"],
-};
+// each film tile — a bookmark-style visual grouping. Colors now come from
+// the `film_brand` DB rows (editable under Settings → Film brands). Brands
+// without a palette, or stocks whose brand row is missing, fall back to a
+// neutral pair so the strip still appears but doesn't misrepresent.
 const FILM_BRAND_FALLBACK = ["#3a4050", "#2a3040"];
 
 function filmBrandColors(brand) {
-  return FILM_BRAND_COLORS[brand] || FILM_BRAND_FALLBACK;
+  const needle = (brand || "").trim().toLowerCase();
+  const row = state.brands.find(b => (b.name || "").trim().toLowerCase() === needle);
+  const c1 = row?.color_primary;
+  const c2 = row?.color_secondary;
+  if (c1 && c2) return [c1, c2];
+  if (c1) return [c1, c1];
+  if (c2) return [c2, c2];
+  return FILM_BRAND_FALLBACK;
 }
 
 function renderPickerTile(item, kind) {
@@ -800,6 +804,18 @@ const SETTINGS_KINDS = {
       { name: "notes", label: "Notes" },
     ],
   },
+  "film-brand": {
+    label: "Film brand",
+    endpoint: "/api/film-brands",
+    groupBy: null,
+    primary: "name",
+    sub: (row) => [row.color_primary, row.color_secondary].filter(Boolean).join(" / ") || "no palette",
+    fields: [
+      { name: "name", label: "Brand name", required: true, help: "Kodak, Ilford, Fujifilm… exactly as you want it printed on tiles." },
+      { name: "color_primary", label: "Primary color (hex)", type: "color-hex", placeholder: "#bb9d70", help: "Dominant film-box color. Blank for neutral fallback." },
+      { name: "color_secondary", label: "Secondary color (hex)", type: "color-hex", placeholder: "#292825", help: "Accent color, shown as second stripe on the tile." },
+    ],
+  },
   film: {
     label: "Film stock",
     endpoint: "/api/film-stocks",
@@ -807,7 +823,7 @@ const SETTINGS_KINDS = {
     primary: "display_name",
     sub: (row) => `${row.film_type} · ISO ${row.box_speed_iso}`,
     fields: [
-      { name: "brand", label: "Brand", required: true },
+      { name: "brand", label: "Brand", type: "brand-ref", required: true, help: "Pick from existing brands. Create a new brand under Film brands first." },
       { name: "name", label: "Name", required: true },
       { name: "display_name", label: "Display name", required: true, help: "Brand Line [Variant] ISO — e.g. Kodak Portra 400" },
       { name: "box_speed_iso", label: "Box speed ISO", type: "number", required: true },
@@ -880,7 +896,45 @@ async function refreshSettingsList(kind) {
   const url = `${cfg.endpoint}?include_archived=${settingsState.showArchived}`;
   const rows = await api(url);
   settingsState.rowsByKind[kind] = rows;
+  syncMainEntityCache(kind, rows);
   renderSettingsList(kind);
+}
+
+function syncMainEntityCache(kind, rows) {
+  if (kind === "camera") {
+    state.cameras = rows;
+    renderTiles();
+    return;
+  }
+  if (kind === "lens") {
+    state.lenses = rows;
+    renderTiles();
+    return;
+  }
+  if (kind === "film-brand") {
+    state.brands = rows;
+    renderTiles();
+    return;
+  }
+  if (kind === "film") {
+    state.films = rows;
+    renderTiles();
+    return;
+  }
+  if (kind === "provider") {
+    state.providers = rows;
+    populateAdvancedSelects();
+    return;
+  }
+  if (kind === "dev-method") {
+    state.devMethods = rows;
+    populateAdvancedSelects();
+    return;
+  }
+  if (kind === "scan-method") {
+    state.scanMethods = rows;
+    populateAdvancedSelects();
+  }
 }
 
 function renderSettingsList(kind) {
@@ -931,18 +985,20 @@ function renderSettingsRow(kind, row, cfg) {
   el.className = "settings-row" + (row.archived ? " archived" : "");
   const primary = row[cfg.primary] || row.name || "";
   const sub = cfg.sub(row);
+  const hasFavorite = "favorite" in row;
+  const hasArchive = "archived" in row;
   el.innerHTML = `
     <div class="settings-row-name">
       ${escapeHtml(primary)}
       ${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}
     </div>
-    <button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite">★</button>
+    ${hasFavorite ? `<button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite">★</button>` : ""}
     <button class="settings-row-edit">Edit</button>
-    <button class="settings-row-archive">${row.archived ? "Unarchive" : "Archive"}</button>
+    ${hasArchive ? `<button class="settings-row-archive">${row.archived ? "Unarchive" : "Archive"}</button>` : ""}
   `;
-  el.querySelector(".settings-row-star").addEventListener("click", () => toggleFavorite(kind, row));
+  el.querySelector(".settings-row-star")?.addEventListener("click", () => toggleFavorite(kind, row));
   el.querySelector(".settings-row-edit").addEventListener("click", () => openSettingsForm(kind, row));
-  el.querySelector(".settings-row-archive").addEventListener("click", () => toggleArchive(kind, row));
+  el.querySelector(".settings-row-archive")?.addEventListener("click", () => toggleArchive(kind, row));
   return el;
 }
 
@@ -981,6 +1037,18 @@ function openSettingsForm(kind, row) {
 
   document.getElementById("settings-form-panel").classList.remove("hidden");
   document.getElementById("settings-form-backdrop").classList.remove("hidden");
+
+  // Two-way sync for color-hex dual inputs. The text input is the form field
+  // (name=...) so submit reads from it; the picker just mirrors.
+  form.querySelectorAll(".color-hex-row").forEach(row => {
+    const picker = row.querySelector(".color-hex-picker");
+    const text = row.querySelector(".color-hex-text");
+    if (!picker || !text) return;
+    picker.addEventListener("input", () => { text.value = picker.value; });
+    text.addEventListener("input", () => {
+      if (/^#([0-9a-fA-F]{6})$/.test(text.value)) picker.value = text.value;
+    });
+  });
 }
 
 function closeSettingsForm() {
@@ -1020,6 +1088,38 @@ function renderFormField(f, row) {
       )
     ).join("");
     return `<label><span>${escapeHtml(f.label)}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "brand-ref") {
+    const brands = settingsState.rowsByKind["film-brand"] || [];
+    const current = typeof value === "string" ? value.trim() : "";
+    // Match by case-insensitive name so a stock loaded with brand "kodak"
+    // still highlights the "Kodak" row in the picker.
+    const matched = brands.find(b => (b.name || "").toLowerCase() === current.toLowerCase());
+    const baseOption = brands.length
+      ? '<option value="">(select brand)</option>'
+      : '<option value="">(add a film brand first)</option>';
+    const opts = [baseOption].concat(
+      brands.map(b =>
+        `<option value="${escapeHtml(b.name)}" ${matched && b.id === matched.id ? "selected" : ""}>${escapeHtml(b.name)}</option>`
+      )
+    ).join("");
+    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "color-hex") {
+    // Dual input: a native color picker and a text input, kept in sync via
+    // oninput handlers. Text is the source of truth so the user can paste a
+    // literal `#bb9d70` from a design doc; the picker just scrubs. Blank
+    // text == no color (falls back to neutral tile).
+    const hex = (value || "").toString();
+    const pickerVal = /^#([0-9a-f]{6})$/i.test(hex) ? hex : "#888888";
+    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
+    return `<label><span>${escapeHtml(f.label)}</span>
+      <div class="color-hex-row">
+        <input type="color" class="color-hex-picker" value="${escapeHtml(pickerVal)}" aria-label="${escapeHtml(f.label)} picker" />
+        <input type="text" name="${f.name}" class="color-hex-text" value="${escapeHtml(hex)}" ${placeholder} />
+      </div>${help}</label>`;
   }
 
   if (f.type === "camera-mount") {
@@ -1088,6 +1188,9 @@ async function submitSettingsForm() {
 
   closeSettingsForm();
   await refreshSettingsList(kind);
+  if (kind === "film-brand") {
+    await refreshSettingsList("film");
+  }
 }
 
 // ---------- Wiring ----------

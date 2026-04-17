@@ -53,13 +53,45 @@ def detect_mode(path: Path | str) -> ModeName:
 
 
 def sidecar_path_for(raw_path: Path | str) -> Path:
-    """Return the XMP sidecar path for a raw file (`photo.arw` -> `photo.arw.xmp`).
+    """Return the canonical XMP sidecar path for a raw file.
 
-    Keeping the raw extension in the sidecar name is the Lightroom/Adobe
-    convention for preserving pairing when multiple raws share a basename.
+    Lightroom and Bridge expect the *replaced-extension* form: `photo.arw` →
+    `photo.xmp` (not `photo.arw.xmp`). ExifTool's own default `-o` behavior
+    appends instead of replacing, so we pass the path explicitly every time.
+
+    Early FilmEx builds wrote the appended form; `find_existing_sidecar`
+    tolerates that on read so re-apply merges into the right file without the
+    user having to rename anything by hand.
+    """
+    p = Path(raw_path)
+    return p.with_suffix(".xmp")
+
+
+def legacy_sidecar_path_for(raw_path: Path | str) -> Path:
+    """Return the pre-v1 appended-form sidecar path (`photo.arw.xmp`).
+
+    Kept around purely so re-apply can pick up sidecars written by earlier
+    FilmEx versions. Never a write target for new files.
     """
     p = Path(raw_path)
     return p.with_suffix(p.suffix + ".xmp")
+
+
+def find_existing_sidecar(raw_path: Path | str) -> Optional[Path]:
+    """Return whichever sidecar is on disk, preferring the canonical form.
+
+    Order:
+      1. `photo.xmp` — what we write today and what Lightroom looks for.
+      2. `photo.arw.xmp` — legacy form written by pre-v1 FilmEx builds.
+      3. None — no sidecar yet; caller will seed one at the canonical path.
+    """
+    canonical = sidecar_path_for(raw_path)
+    if canonical.is_file():
+        return canonical
+    legacy = legacy_sidecar_path_for(raw_path)
+    if legacy.is_file():
+        return legacy
+    return None
 
 
 def build_read_argv(path: Path | str, tags: list[str]) -> list[str]:
@@ -101,6 +133,7 @@ def build_argv(
     dry_run: bool = False,
     overwrite_original: bool = True,
     sidecar_exists: bool = False,
+    sidecar_path: Optional[Path | str] = None,
 ) -> list[str]:
     """Build the exiftool argv for applying `intent` to `target`.
 
@@ -110,6 +143,10 @@ def build_argv(
       * If a sidecar already exists, edit the XMP directly so we merge with any
         Lightroom-written XMP content.
       * If no sidecar exists yet, use `-o` to seed one from the raw + intent.
+
+    `sidecar_path` lets the caller pin the exact sidecar file to read/write.
+    The runner passes this when it found a legacy-named sidecar so we keep
+    editing the existing file instead of silently creating a second one.
     """
     path = Path(target)
     mode = detect_mode(path)
@@ -165,7 +202,7 @@ def build_argv(
         ]
 
     if mode == "sidecar":
-        xmp_path = sidecar_path_for(path)
+        xmp_path = Path(sidecar_path) if sidecar_path is not None else sidecar_path_for(path)
         if sidecar_exists:
             # Direct edit of the existing sidecar. IPTC:Keywords does not apply
             # in XMP-only files, so drop the IPTC arg to avoid exiftool warnings.

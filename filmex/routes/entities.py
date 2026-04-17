@@ -15,6 +15,7 @@ from filmex.db import get_session
 from filmex.models import (
     Camera,
     DevelopmentMethod,
+    FilmBrand,
     FilmStock,
     Lens,
     Provider,
@@ -24,6 +25,9 @@ from filmex.schemas import (
     CameraCreate,
     CameraOut,
     CameraUpdate,
+    FilmBrandCreate,
+    FilmBrandOut,
+    FilmBrandUpdate,
     FilmStockCreate,
     FilmStockOut,
     FilmStockUpdate,
@@ -212,6 +216,7 @@ def create_film_stock(
     payload: FilmStockCreate,
     session: Session = Depends(get_session),
 ) -> FilmStockOut:
+    _require_known_brand(session, payload.brand)
     row = FilmStock(**payload.model_dump())
     session.add(row)
     session.commit()
@@ -226,7 +231,10 @@ def update_film_stock(
     session: Session = Depends(get_session),
 ) -> FilmStockOut:
     row = _get_or_404(session, FilmStock, film_id, "Film stock")
-    _apply_updates(row, payload.model_dump(exclude_unset=True))
+    updates = payload.model_dump(exclude_unset=True)
+    if "brand" in updates and updates["brand"] is not None:
+        _require_known_brand(session, updates["brand"])
+    _apply_updates(row, updates)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -245,6 +253,71 @@ def unarchive_film_stock(
     film_id: str, session: Session = Depends(get_session)
 ) -> FilmStockOut:
     return _set_archived(session, FilmStock, film_id, "Film stock", False, FilmStockOut, _film_dict)
+
+
+# ---------- Film brands ----------
+#
+# Brands own the two-color tile palette for the film picker. They are not
+# archivable: a brand is either a real brand or a typo that should be renamed.
+# There is also no favorite flag — ordering of film tiles is driven by the
+# film_stock rows themselves.
+
+
+@router.get("/api/film-brands", response_model=list[FilmBrandOut])
+def list_film_brands(session: Session = Depends(get_session)) -> list[FilmBrandOut]:
+    rows = session.exec(select(FilmBrand)).all()
+    rows = sorted(rows, key=lambda r: (r.name or "").lower())
+    return [FilmBrandOut(**_film_brand_dict(r)) for r in rows]
+
+
+@router.post("/api/film-brands", response_model=FilmBrandOut, status_code=201)
+def create_film_brand(
+    payload: FilmBrandCreate,
+    session: Session = Depends(get_session),
+) -> FilmBrandOut:
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Brand name is required")
+    if _find_brand_by_name(session, name) is not None:
+        raise HTTPException(status_code=409, detail=f"Brand '{name}' already exists")
+    data = payload.model_dump()
+    data["name"] = name
+    row = FilmBrand(**data)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return FilmBrandOut(**_film_brand_dict(row))
+
+
+@router.patch("/api/film-brands/{brand_id}", response_model=FilmBrandOut)
+def update_film_brand(
+    brand_id: str,
+    payload: FilmBrandUpdate,
+    session: Session = Depends(get_session),
+) -> FilmBrandOut:
+    row = _get_or_404(session, FilmBrand, brand_id, "Film brand")
+    updates = payload.model_dump(exclude_unset=True)
+    if "name" in updates:
+        new_name = (updates["name"] or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Brand name is required")
+        clash = _find_brand_by_name(session, new_name)
+        if clash is not None and clash.id != row.id:
+            raise HTTPException(status_code=409, detail=f"Brand '{new_name}' already exists")
+        # Cascade rename so film_stock.brand stays in sync with the brand row's
+        # canonical name (brand is a name-based foreign key, not a UUID).
+        if row.name != new_name:
+            for stock in session.exec(
+                select(FilmStock).where(FilmStock.brand == row.name)
+            ).all():
+                stock.brand = new_name
+                session.add(stock)
+        updates["name"] = new_name
+    _apply_updates(row, updates)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return FilmBrandOut(**_film_brand_dict(row))
 
 
 # ---------- Providers ----------
@@ -445,6 +518,33 @@ def _require_known_camera_mount(session: Session, mount: str) -> None:
     )
 
 
+def _find_brand_by_name(session: Session, name: str) -> FilmBrand | None:
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    for row in session.exec(select(FilmBrand)).all():
+        if (row.name or "").strip().lower() == needle:
+            return row
+    return None
+
+
+def _require_known_brand(session: Session, brand: str) -> None:
+    """Film stocks must reference an existing brand row.
+
+    Enforced at the API so the UI can't smuggle a typo in via a freetext field;
+    the picker offers a datalist of known brands and a "+ New brand" shortcut.
+    """
+    if _find_brand_by_name(session, brand) is not None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Unknown film brand '{brand}'. Add it under Settings → Film brands "
+            f"first (so its palette colors can be set)."
+        ),
+    )
+
+
 def _sort_by_favorite_then_name(rows):
     return sorted(
         rows,
@@ -554,6 +654,15 @@ def _film_dict(f: FilmStock) -> dict:
         "aliases": list(f.aliases or []),
         "favorite": f.favorite,
         "archived": f.archived,
+    }
+
+
+def _film_brand_dict(b: FilmBrand) -> dict:
+    return {
+        "id": b.id,
+        "name": b.name,
+        "color_primary": b.color_primary,
+        "color_secondary": b.color_secondary,
     }
 
 

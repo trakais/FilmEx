@@ -1,6 +1,7 @@
 # User-owned runtime state (database + uploaded assets)
 data/
 tmp/
+TODO.md
 
 # Python
 __pycache__/

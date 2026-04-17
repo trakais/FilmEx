@@ -1,5 +1,5 @@
 {
-  "$comment": "Sample batch for `python -m filmex.cli add-from-json`. See AGENTS.md for conventions. Idempotent: re-running skips rows that already exist (matched by natural key).",
+  "$comment": "Sample batch for `python -m filmex.cli add-from-json`. See AGENTS.md for conventions. Idempotent: re-running skips rows that already exist (matched by natural key). `film_brands` must be present before any `film_stocks` that reference them.",
 
   "providers": [
     { "name": "Photolab Example", "kinds": ["development", "scan"] }
@@ -11,6 +11,12 @@
 
   "scan_methods": [
     { "name": "DSLR capture" }
+  ],
+
+  "film_brands": [
+    { "name": "Kodak", "color_primary": "#f7ad03", "color_secondary": "#c9489e" },
+    { "name": "Ilford", "color_primary": "#000000", "color_secondary": "#ffffff" },
+    { "name": "Lomography", "color_primary": "#bb9d70", "color_secondary": "#292825" }
   ],
 
   "film_stocks": [
@@ -31,6 +37,14 @@
       "film_type": "bw_negative",
       "process_type": "bw",
       "aliases": ["HP5", "HP5+"]
+    },
+    {
+      "brand": "Lomography",
+      "name": "Color Negative 400",
+      "display_name": "Lomography Color Negative 400",
+      "box_speed_iso": 400,
+      "film_type": "color_negative",
+      "process_type": "c41"
     }
   ],
 

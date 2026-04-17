@@ -664,5 +664,26 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   min-height: 16px;
 }
 
+/* Dual-input color row used by color-hex form fields — native picker next to
+   a text field kept in sync. Text is the source of truth so users can paste
+   literal hex strings from a design doc. */
+.color-hex-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.color-hex-row .color-hex-picker {
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border, #2a2f3a);
+  background: transparent;
+  cursor: pointer;
+}
+.color-hex-row .color-hex-text {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* ---------- Utility ---------- */
 .hidden { display: none !important; }

@@ -2,9 +2,33 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _normalize_hex_color(value: Optional[str]) -> Optional[str]:
+    """Accept #rgb / #rrggbb / rrggbb; return canonical lowercase #rrggbb.
+
+    Empty string is treated as None so PATCH-style clearing works cleanly.
+    """
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    if not stripped:
+        return None
+    match = _HEX_RE.match(stripped)
+    if not match:
+        raise ValueError(
+            f"color must be a hex string like '#bb9d70' or '#abc', got {value!r}"
+        )
+    body = match.group(1).lower()
+    if len(body) == 3:
+        body = "".join(ch * 2 for ch in body)
+    return f"#{body}"
 
 
 # ---------- Responses ----------
@@ -61,6 +85,13 @@ class ProviderOut(BaseModel):
     archived: bool
 
 
+class FilmBrandOut(BaseModel):
+    id: str
+    name: str
+    color_primary: Optional[str] = None
+    color_secondary: Optional[str] = None
+
+
 class MethodOut(BaseModel):
     id: str
     name: str
@@ -112,6 +143,26 @@ class ProviderCreate(BaseModel):
     name: str
     kinds: list[str] = Field(default_factory=list)
     favorite: bool = False
+
+
+class FilmBrandCreate(BaseModel):
+    name: str
+    color_primary: Optional[str] = None
+    color_secondary: Optional[str] = None
+
+    _normalize_colors = field_validator("color_primary", "color_secondary", mode="before")(
+        lambda cls, v: _normalize_hex_color(v)
+    )
+
+
+class FilmBrandUpdate(BaseModel):
+    name: Optional[str] = None
+    color_primary: Optional[str] = None
+    color_secondary: Optional[str] = None
+
+    _normalize_colors = field_validator("color_primary", "color_secondary", mode="before")(
+        lambda cls, v: _normalize_hex_color(v)
+    )
 
 
 class MethodCreate(BaseModel):
