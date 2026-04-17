@@ -13,6 +13,8 @@ const state = {
   camera: null,
   lens: null,
   film: null,
+  previewInvert: false,
+  lastDryRunResult: null,
   fileKeywords: {},
   fileKeywordEditorOpen: {},
   advanced: {
@@ -46,6 +48,7 @@ function loadStickyState() {
     state.lens = saved.lens || null;
     state.film = saved.film || null;
     state.folder = saved.folder || "";
+    state.previewInvert = !!saved.previewInvert;
   } catch (e) {
     console.warn("Sticky state load failed", e);
   }
@@ -57,6 +60,7 @@ function saveStickyState() {
     camera: state.camera,
     lens: state.lens,
     film: state.film,
+    previewInvert: state.previewInvert,
     advanced: state.advanced,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -112,6 +116,7 @@ async function init() {
   state.scanMethods = scanM;
 
   populateAdvancedSelects();
+  renderPreviewInvertToggle();
   renderTiles();
   renderFolderInput();
   renderRecentFolders();
@@ -182,6 +187,7 @@ async function onScan() {
   const folder = input.value.trim();
   if (!folder) return;
   clearScanOutput();
+  clearPreviewStatus();
   clearManifestSummary();
   state.folder = folder;
   try {
@@ -200,6 +206,7 @@ async function onScan() {
     updateActionButtons();
   } catch (e) {
     state.scan = null;
+    clearPreviewStatus();
     const summary = document.getElementById("scan-summary");
     summary.classList.remove("hidden");
     summary.innerHTML = `<span class="pill bad">Scan failed</span> <span>${escapeHtml(e.message)}</span>`;
@@ -232,6 +239,27 @@ function renderManifestSummary(message, level = "warn") {
 
 function clearManifestSummary() {
   renderManifestSummary("");
+}
+
+function renderPreviewStatus(message, level = "warn") {
+  const el = document.getElementById("preview-status");
+  if (!message) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="pill ${escapeHtml(level)}">${level === "ok" ? "Previews ready" : "Preview note"}</span><span>${escapeHtml(message)}</span>`;
+}
+
+function clearPreviewStatus() {
+  renderPreviewStatus("");
+}
+
+function renderPreviewInvertToggle() {
+  const btn = document.getElementById("preview-invert-toggle");
+  btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
+  btn.textContent = `Invert previews: ${state.previewInvert ? "on" : "off"}`;
 }
 
 // ---------- Tiles ----------
@@ -697,6 +725,7 @@ function updateActionButtons() {
   // Camera/lens/film are all optional — at minimum we still write Roll|<id>
   // and any extras/dev/scan keywords, which is useful even with no gear set.
   const ready = !!(state.folder && state.scan);
+  document.getElementById("create-previews-btn").disabled = !ready;
   document.getElementById("dry-run-btn").disabled = !ready;
   document.getElementById("apply-btn").disabled = !ready;
 }
@@ -707,9 +736,46 @@ async function onDryRun() {
       method: "POST",
       body: JSON.stringify(buildRequestBody()),
     });
+    state.lastDryRunResult = res;
     renderDiff(res);
   } catch (e) {
     alert(`Dry-run failed:\n${e.message}`);
+  }
+}
+
+async function onCreatePreviews() {
+  if (!state.folder || !state.scan) return;
+  const btn = document.getElementById("create-previews-btn");
+  btn.disabled = true;
+  btn.textContent = "Creating…";
+  clearPreviewStatus();
+  try {
+    const res = await api("/api/previews/create", {
+      method: "POST",
+      body: JSON.stringify({ folder: state.folder, invert: state.previewInvert }),
+    });
+    markPreviewFilesAvailable(res.created_files.concat(res.reused_files));
+    const parts = [];
+    if (res.created_files.length) parts.push(`${res.created_files.length} created`);
+    if (res.reused_files.length) parts.push(`${res.reused_files.length} reused`);
+    if (res.failed.length) parts.push(`${res.failed.length} failed`);
+    renderPreviewStatus(
+      parts.length ? `Previews: ${parts.join(", ")}.` : "No previewable files found.",
+      res.failed.length ? "warn" : "ok"
+    );
+    if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
+  } catch (e) {
+    renderPreviewStatus(`Could not create previews: ${e.message}`, "bad");
+  } finally {
+    btn.textContent = "Create previews";
+    updateActionButtons();
+  }
+}
+
+function markPreviewFilesAvailable(fileNames) {
+  const ready = new Set(fileNames);
+  for (const file of state.scan?.files || []) {
+    if (ready.has(file.name)) file.has_thumbnail = true;
   }
 }
 
@@ -725,7 +791,7 @@ function renderDiff(result) {
     const scanFile = scanFilesByName.get(file.name);
     const hasThumbnail = !!scanFile?.has_thumbnail;
     const thumbUrl = hasThumbnail
-      ? buildThumbnailUrl(state.folder, file.name)
+      ? buildThumbnailUrl(state.folder, file.name, state.previewInvert)
       : "";
     const keywordValue = state.fileKeywords[file.name] || "";
     const editorOpen = !!state.fileKeywordEditorOpen[file.name];
@@ -863,6 +929,7 @@ function clearScanOutput() {
     clearTimeout(previewRefreshTimer);
     previewRefreshTimer = null;
   }
+  state.lastDryRunResult = null;
   const diffSection = document.getElementById("diff-section");
   const diffBody = document.getElementById("diff-body");
   const applySection = document.getElementById("apply-section");
@@ -887,7 +954,7 @@ function formatValue(v) {
 }
 
 function buildThumbnailUrl(folder, name) {
-  const params = new URLSearchParams({ folder, name });
+  const params = new URLSearchParams({ folder, name, invert: state.previewInvert ? "true" : "false" });
   return `/api/files/thumbnail?${params.toString()}`;
 }
 
@@ -1422,6 +1489,14 @@ window.addEventListener("DOMContentLoaded", () => {
     saveStickyState();
   });
 
+  document.getElementById("preview-invert-toggle").addEventListener("click", () => {
+    state.previewInvert = !state.previewInvert;
+    renderPreviewInvertToggle();
+    saveStickyState();
+    clearPreviewStatus();
+    if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
+  });
+  document.getElementById("create-previews-btn").addEventListener("click", onCreatePreviews);
   document.getElementById("dry-run-btn").addEventListener("click", onDryRun);
   document.getElementById("apply-btn").addEventListener("click", onApply);
 

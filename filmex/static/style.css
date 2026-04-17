@@ -232,7 +232,33 @@ section h2 {
 /* ---------- Actions ---------- */
 .actions-section {
   display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+}
+.actions-left,
+.actions-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.action-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.action-link:hover:not(:disabled),
+.action-link[aria-pressed="true"] {
+  color: var(--text);
+}
+.action-link:hover:not(:disabled) {
+  border-color: transparent;
 }
 button {
   padding: 9px 16px;

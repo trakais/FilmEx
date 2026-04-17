@@ -27,6 +27,18 @@ class FolderScanResponse(BaseModel):
     suggested_roll_date: Optional[str] = None  # YYYY-MM-DD, from file creation time
 
 
+class PreviewBuildRequest(BaseModel):
+    folder: str
+    invert: bool = False
+
+
+class PreviewBuildResponse(BaseModel):
+    folder: str
+    created_files: list[str] = Field(default_factory=list)
+    reused_files: list[str] = Field(default_factory=list)
+    failed: list[str] = Field(default_factory=list)
+
+
 class DryRunRequest(BaseModel):
     folder: str
     # Camera, lens, and film are all optional. The user might only know one

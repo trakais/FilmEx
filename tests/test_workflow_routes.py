@@ -409,13 +409,39 @@ def test_thumbnail_endpoint_serves_tiff_sidecar_thumbnail(client, roll_factory):
     assert res.content
 
 
-def test_thumbnail_endpoint_404_without_thumbnail(client, roll_factory):
+def test_thumbnail_endpoint_generates_cached_preview_for_tiff_without_thm(client, roll_factory, data_dir):
     folder = roll_factory("2026-04-17_R108C", jpegs=0, tiffs=1, tiff_thumbnails=False)
     res = client.get(
         "/api/files/thumbnail",
         params={"folder": str(folder), "name": "master_000.tif"},
     )
-    assert res.status_code == 404
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("image/jpeg")
+    assert list((data_dir / "preview_cache").glob("*.jpg"))
+
+
+def test_thumbnail_endpoint_generates_cached_preview_for_jpeg(client, roll_factory, data_dir):
+    folder = roll_factory("2026-04-17_R108E", jpegs=1)
+    res = client.get(
+        "/api/files/thumbnail",
+        params={"folder": str(folder), "name": "scan_000.jpg"},
+    )
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("image/jpeg")
+    assert list((data_dir / "preview_cache").glob("*.jpg"))
+
+
+def test_create_previews_endpoint_reports_created_and_failed(client, roll_factory, data_dir):
+    folder = roll_factory("2026-04-17_R108F", jpegs=1, dngs=1)
+    res = client.post(
+        "/api/previews/create",
+        json={"folder": str(folder), "invert": True},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "scan_000.jpg" in body["created_files"]
+    assert any(line.startswith("frame_000.dng:") for line in body["failed"])
+    assert list((data_dir / "preview_cache").glob("*.jpg"))
 
 
 def test_open_file_endpoint_uses_default_app(client, roll_factory, monkeypatch):

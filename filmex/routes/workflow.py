@@ -41,12 +41,15 @@ from filmex.schemas import (
     FolderScanRequest,
     FolderScanResponse,
     ManifestResponse,
+    PreviewBuildRequest,
+    PreviewBuildResponse,
     TagChangeOut,
 )
 from filmex.services import exiftool as et
 from filmex.services import folder_scan as fs
 from filmex.services import keywords as kw
 from filmex.services import manifest as mf
+from filmex.services import previews as pv
 from filmex.services.exiftool_runner import (
     apply_intent,
     exiftool_available,
@@ -301,12 +304,12 @@ def get_manifest_by_folder(folder: str) -> ManifestResponse:
 
 
 @router.get("/api/files/thumbnail")
-def file_thumbnail(folder: str, name: str) -> FileResponse:
+def file_thumbnail(folder: str, name: str, invert: bool = False) -> FileResponse:
     target = _resolve_folder_file(folder, name)
-    thumb = fs.thumbnail_path_for(target)
-    if thumb is None or not thumb.is_file():
-        raise HTTPException(status_code=404, detail=f"No thumbnail for {name}")
-
+    try:
+        thumb, _ = pv.ensure_preview(target, invert=invert)
+    except pv.PreviewUnavailable as e:
+        raise HTTPException(status_code=404, detail=f"No thumbnail for {name}: {e}") from e
     return FileResponse(thumb, media_type="image/jpeg")
 
 
@@ -324,6 +327,20 @@ def file_open(folder: str, name: str) -> FileOpenResponse:
     except OSError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     return FileOpenResponse()
+
+
+@router.post("/api/previews/create", response_model=PreviewBuildResponse)
+def create_previews(req: PreviewBuildRequest) -> PreviewBuildResponse:
+    try:
+        report = pv.build_previews(req.folder, invert=req.invert)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return PreviewBuildResponse(
+        folder=req.folder,
+        created_files=report.created_files,
+        reused_files=report.reused_files,
+        failed=report.failed,
+    )
 
 
 def _resolve_folder_file(folder: str, name: str) -> Path:

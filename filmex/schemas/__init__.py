@@ -30,6 +30,8 @@ from filmex.schemas.workflow import (
     FolderScanRequest,
     FolderScanResponse,
     ManifestResponse,
+    PreviewBuildRequest,
+    PreviewBuildResponse,
     TagChangeOut,
 )
 
@@ -61,5 +63,7 @@ __all__ = [
     "ProviderCreate",
     "ProviderOut",
     "ProviderUpdate",
+    "PreviewBuildRequest",
+    "PreviewBuildResponse",
     "TagChangeOut",
 ]

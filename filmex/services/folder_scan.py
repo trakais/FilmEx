@@ -20,6 +20,8 @@ from typing import Optional
 
 from PIL import Image
 
+from filmex.services import previews
+
 HIGH_RES_JPG_THRESHOLD = 3000
 SUPPORTED_JPG_EXTS = {".jpg", ".jpeg"}
 SUPPORTED_TIF_EXTS = {".tif", ".tiff"}
@@ -81,23 +83,6 @@ def _iter_candidates(folder: Path) -> list[Path]:
         out.append(entry)
     return out
 
-
-def thumbnail_path_for(file_path: str | Path) -> Path | None:
-    """Return a sibling `.thm` path for TIFF masters when present."""
-    path = Path(file_path)
-    if path.suffix.lower() not in SUPPORTED_TIF_EXTS:
-        return None
-
-    for sibling in path.parent.iterdir():
-        if not sibling.is_file() or sibling.is_symlink():
-            continue
-        if sibling.stem != path.stem:
-            continue
-        if sibling.suffix.lower() == ".thm":
-            return sibling
-    return None
-
-
 def scan_folder(folder: str | Path) -> ScanResult:
     folder_path = Path(folder).expanduser().resolve()
     if not folder_path.is_dir():
@@ -116,7 +101,7 @@ def scan_folder(folder: str | Path) -> ScanResult:
                 name=entry.name,
                 long_edge_px=long_edge,
                 source_kind=kind,
-                has_thumbnail=thumbnail_path_for(entry) is not None,
+                has_thumbnail=previews.has_preview(entry) or previews.has_any_cached_preview(entry),
             )
         )
 
