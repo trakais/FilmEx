@@ -85,11 +85,36 @@ queryable so past roll manifests remain meaningful.
 - `aliases`, `notes`, `favorite`, `archived`.
 
 ### FilmStock
-- `brand`, `name`, `display_name`
+- `brand` — string that **must match an existing `FilmBrand.name`** (case-insensitive).
+  The API rejects unknown brands; the UI only offers a dropdown of registered
+  brands. Create the brand row first (see FilmBrand), then the stock.
+- `name`, `display_name`
 - `box_speed_iso` — integer
 - `film_type` — one of `color_negative`, `bw_negative`, `slide`, `other`
 - `process_type` — one of `c41`, `bw`, `e6`, `ecn2`, `other`
 - `aliases`, `notes`, `favorite`, `archived`.
+
+### FilmBrand
+First-class row that owns the two-color palette used by the film-picker tile's
+bookmark strip. Extracting this out of FilmStock means adding another Kodak
+stock automatically inherits Kodak's colors — edit the brand once.
+
+- `name` — canonical brand name, case-insensitive unique. Renaming a brand
+  cascades into `film_stock.brand` for all its stocks.
+- `color_primary`, `color_secondary` — optional hex strings (`#bb9d70`,
+  `#292825`). Pick a dominant and an accent color drawn from the physical
+  film-box design. Accepted input: `#rrggbb`, `#rgb`, or the same without the
+  leading `#`; normalized to lowercase `#rrggbb`. When both are null the tile
+  falls back to a neutral gray.
+- No `favorite` or `archived` — a brand is either a real brand worth keeping
+  or a typo worth renaming.
+
+Seeded on first install: Kodak, Ilford, Kentmere, Fujifilm, Fomapan, Agfa,
+Lomography. The migration path backfills a row for every distinct
+`film_stock.brand` string found in existing databases and repairs incomplete
+brand backfills on already-upgraded DBs. Known brands get pre-populated
+palettes; unknown brands land with null colors (edit in Settings → Film
+brands).
 
 ### Provider
 Single table for labs and self-service providers. `kinds` is a set-ish JSON
@@ -112,6 +137,22 @@ produces confusing duplicates and broken filtering.
 - **Camera**: `Make Model` → `Pentax K1000`, `Minolta X-700`
 - **Lens**: `Make Mount? Focal Aperture` → `Minolta MD 50mm f/1.7`, `Canon FD 28-80mm f/3.5-5.6`
 - **Film**: `Brand Line [Variant] ISO` → `Kodak Portra 400`, `Ilford HP5 Plus 400`, `Fujifilm Superia X-TRA 400`
+
+### Film brand colors
+
+The two-color palette lives on the `FilmBrand` row, not on each film stock.
+Pick a dominant and an accent color drawn from the physical box — typically
+the cardboard / label color plus the brand's signature tone. The picker tile
+renders them as a vertical bookmark strip on the left edge.
+
+- Hex strings (`#bb9d70` / `bb9d70` / `#ba9`). The CLI and API normalize to
+  lowercase `#rrggbb`.
+- Leave both null for a neutral gray fallback.
+- Pick accessible contrast between the two — two very similar tones look like
+  a bug. The CSS already adds a subtle separator, but don't rely on it.
+- To add a new brand with its colors in one step, include a `film_brands`
+  entry in the same CLI batch as the film stocks that reference it. The CLI
+  inserts brands before stocks so references resolve in one pass.
 
 ### Mounts are the source of truth for compatibility
 
@@ -148,11 +189,21 @@ The app owns a **whitelist** of EXIF/XMP fields and touches nothing else:
 
 ### By file type
 
-- **ARW / DNG**: never modify the raw. Write an XMP sidecar (`photo.arw.xmp`).
-  Merge with any existing sidecar content; do not wipe Lightroom edits.
+- **ARW / DNG**: never modify the raw. Write an XMP sidecar next to it using
+  the **replaced-extension** form (`DSC08930.ARW` → `DSC08930.xmp`) — that's
+  what Lightroom and Bridge look for. Legacy FilmEx builds wrote the appended
+  form (`DSC08930.ARW.xmp`); if one is on disk we keep editing it in place
+  instead of silently seeding a second sidecar beside it. Merge with any
+  existing sidecar content; do not wipe Lightroom edits.
 - **JPG / TIFF**: embed into the file. Preserve other tags.
 
 Re-apply must be idempotent — same inputs produce no duplicate keywords.
+
+### Preview-time file overrides
+
+The dry-run preview may add per-file extra flat keywords. These are merged
+with the auto-generated keyword set, de-duplicated, and stored in the
+manifest under `file_overrides` so re-apply stays stable.
 
 ---
 
@@ -211,6 +262,7 @@ line. Safe to re-run.
 - Camera: `(make, model)` — case-insensitive
 - Lens: `(make, model)` — case-insensitive
 - FilmStock: `(brand, name)` — case-insensitive
+- FilmBrand: `(name)` — case-insensitive
 - Provider / DevelopmentMethod / ScanMethod: `(name)` — case-insensitive
 
 ### Batch schema
@@ -219,7 +271,8 @@ line. Safe to re-run.
 {
   "cameras":             [ /* CameraCreate-ish dicts */ ],
   "lenses":              [ /* LensCreate dicts */ ],
-  "film_stocks":         [ /* FilmStockCreate dicts */ ],
+  "film_brands":         [ /* { "name": "...", "color_primary": "#...", "color_secondary": "#..." } */ ],
+  "film_stocks":         [ /* FilmStockCreate dicts — brand must exist in film_brands */ ],
   "providers":           [ /* ProviderCreate dicts */ ],
   "development_methods": [ /* { "name": "..." } */ ],
   "scan_methods":        [ /* { "name": "..." } */ ]
@@ -262,10 +315,11 @@ resolve the link after lenses are inserted:
 ```
 
 The CLI inserts in this order, so cross-references resolve in one pass:
-1. Providers, development methods, scan methods, film stocks
-2. Cameras (without `fixed_lens_id`)
-3. Lenses (mount validated against the cameras just inserted)
-4. Camera `fixed_lens_id` links patched from `fixed_lens_ref`
+1. Providers, development methods, scan methods
+2. Film brands, then film stocks (stocks validate their brand exists)
+3. Cameras (without `fixed_lens_id`)
+4. Lenses (mount validated against the cameras just inserted)
+5. Camera `fixed_lens_id` links patched from `fixed_lens_ref`
 
 ### What the CLI will *not* do
 

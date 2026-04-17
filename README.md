@@ -9,12 +9,15 @@ It is not a catalog, not an editor, and not a cloud service.
 - scans a single film-roll folder
 - detects supported files: `JPG`, `TIFF`, `DNG`, `ARW`
 - lets you choose analog camera, lens, and film stock
+- keeps film brands as a separate controlled list with per-brand colors
 - adds development and scan metadata
+- lets you add per-file extra keywords in the preview
 - shows a dry-run preview before writing anything
 - writes metadata with ExifTool
 - creates a `roll_manifest.json` next to the images
 
-For raw files (`DNG`, `ARW`), FilmEx writes to XMP sidecars.
+For raw files (`DNG`, `ARW`), FilmEx writes to XMP sidecars using the canonical
+replaced-extension form like `photo.xmp`.
 
 For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 
@@ -24,7 +27,7 @@ For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 2. Scan the folder.
 3. Pick camera, lens, and film.
 4. Add optional development / scan info.
-5. Preview the metadata changes.
+5. Preview the metadata changes and add optional per-file keywords.
 6. Apply the changes.
 
 ## Requirements
@@ -65,15 +68,15 @@ uv run uvicorn filmex.main:app --port 8765
 ## Notes
 
 - The app stores runtime data in `data/`.
-- A starter SQLite database is bundled with sample cameras, lenses, films, and methods.
+- A starter SQLite database is bundled with sample cameras, lenses, films, film brands, providers, and methods.
 - Your own working database lives in `data/filmex.sqlite`.
 - Temporary and private local files should stay in `tmp/`, which is ignored by git.
 
 ## Bulk data entry
 
-To add cameras, lenses, films, providers, or methods in bulk — for example
-from an LLM-drafted batch — use the CLI. It is idempotent: rows that already
-exist (matched by natural key) are skipped, never overwritten.
+To add cameras, lenses, film brands, films, providers, or methods in bulk —
+for example from an LLM-drafted batch — use the CLI. It is idempotent: rows
+that already exist (matched by natural key) are skipped, never overwritten.
 
 ```bash
 uv run python -m filmex.cli add-from-json examples/entities-batch.json --dry-run
