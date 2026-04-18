@@ -2,6 +2,9 @@
 
 FilmEx, or Film EXIF, is a local-first browser tool for tagging film scan folders before import into Lightroom or other DAM software. It relies on your system exiftool and local filesystem, so you must run it locally, not in a container or on another machine. 
 
+![FilmEx overview](docs/screenshots/filmex-overview.webp)
+_Main tagging workflow_
+
 ## What It Does
 
 - scans a single film-roll folder
@@ -22,6 +25,9 @@ replaced-extension form like `photo.xmp`.
 For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 
 ## Main Workflow
+
+![Film roll selection](docs/screenshots/filmex-roll-selection.webp)
+_Film roll and stock selection_
 
 1. Choose one folder containing a single film roll.
 2. Scan the folder.
