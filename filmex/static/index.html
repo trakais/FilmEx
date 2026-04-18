@@ -111,7 +111,7 @@
     <!-- Step 4: Dry run -->
     <section class="actions-section">
       <div class="actions-left">
-        <button id="dry-run-btn" class="primary" disabled>Preview changes</button>
+        <button id="dry-run-btn" class="primary" disabled>Preview</button>
         <button id="create-previews-btn" class="secondary" disabled>Create previews</button>
         <button id="preview-invert-toggle" type="button" class="action-link" aria-pressed="false">Invert previews: off</button>
       </div>
@@ -120,6 +120,7 @@
       </div>
     </section>
     <section id="preview-status" class="summary hidden"></section>
+    <section id="preview-stale-summary" class="summary hidden"></section>
 
     <!-- Apply result sits ABOVE the diff so the user sees the outcome
          immediately under the buttons rather than having to scroll past the

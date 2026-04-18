@@ -15,6 +15,7 @@ const state = {
   film: null,
   previewInvert: false,
   lastDryRunResult: null,
+  previewStale: false,
   previewBuildController: null,
   fileKeywords: {},
   fileLensOverrides: {},
@@ -261,6 +262,36 @@ function clearPreviewStatus() {
   renderPreviewStatus("");
 }
 
+function renderPreviewStaleSummary() {
+  const el = document.getElementById("preview-stale-summary");
+  if (!state.lastDryRunResult || !state.previewStale) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="pill warn">Preview stale</span><span>Preview is out of date. Refresh before applying.</span>`;
+}
+
+function renderDryRunButton() {
+  const btn = document.getElementById("dry-run-btn");
+  btn.textContent = state.previewStale ? "Preview changes" : "Preview";
+}
+
+function markPreviewFresh() {
+  state.previewStale = false;
+  renderPreviewStaleSummary();
+  renderDryRunButton();
+}
+
+function markPreviewStale() {
+  if (!state.lastDryRunResult) return;
+  state.previewStale = true;
+  renderPreviewStaleSummary();
+  renderDryRunButton();
+  updateActionButtons();
+}
+
 function renderPreviewInvertToggle() {
   const btn = document.getElementById("preview-invert-toggle");
   btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
@@ -385,6 +416,7 @@ function clearTile(kind) {
   } else if (kind === "film") {
     state.film = null;
   }
+  markPreviewStale();
   saveStickyState();
   renderTiles();
   updateActionButtons();
@@ -567,6 +599,7 @@ function selectFromPicker(item) {
   } else if (activePickerKind === "film") {
     state.film = item;
   }
+  markPreviewStale();
   saveStickyState();
   renderTiles();
   updateActionButtons();
@@ -795,8 +828,10 @@ function updateActionButtons() {
   const ready = !!(state.folder && state.scan);
   const busy = !!state.previewBuildController;
   renderCreatePreviewsButton();
+  renderDryRunButton();
+  renderPreviewStaleSummary();
   document.getElementById("dry-run-btn").disabled = !ready || busy;
-  document.getElementById("apply-btn").disabled = !ready || busy;
+  document.getElementById("apply-btn").disabled = !ready || busy || !state.lastDryRunResult || state.previewStale;
   document.getElementById("preview-invert-toggle").disabled = !ready || busy;
 }
 
@@ -807,7 +842,9 @@ async function onDryRun() {
       body: JSON.stringify(buildRequestBody()),
     });
     state.lastDryRunResult = res;
+    markPreviewFresh();
     renderDiff(res);
+    updateActionButtons();
   } catch (e) {
     alert(`Dry-run failed:\n${e.message}`);
   }
@@ -992,7 +1029,7 @@ function renderDiff(result) {
     if (input) {
       input.addEventListener("input", (e) => {
         state.fileKeywords[file.name] = e.target.value;
-        schedulePreviewRefresh();
+        markPreviewStale();
       });
     }
     const lensSelect = frag.querySelector(".diff-file-lens-select");
@@ -1003,7 +1040,7 @@ function renderDiff(result) {
         } else {
           delete state.fileLensOverrides[file.name];
         }
-        schedulePreviewRefresh();
+        markPreviewStale();
       });
     }
     body.appendChild(frag);
@@ -1089,11 +1126,10 @@ function renderApplyResult(res) {
 // ---------- Helpers ----------
 
 function clearScanOutput() {
-  if (previewRefreshTimer) {
-    clearTimeout(previewRefreshTimer);
-    previewRefreshTimer = null;
-  }
   state.lastDryRunResult = null;
+  state.previewStale = false;
+  renderPreviewStaleSummary();
+  renderDryRunButton();
   const diffSection = document.getElementById("diff-section");
   const diffBody = document.getElementById("diff-body");
   const applySection = document.getElementById("apply-section");
@@ -1179,17 +1215,6 @@ function compatibleLensOptions() {
     return state.lenses.filter(l => !l.mount || l.mount === state.camera.mount);
   }
   return state.lenses;
-}
-
-let previewRefreshTimer = null;
-
-function schedulePreviewRefresh() {
-  if (previewRefreshTimer) clearTimeout(previewRefreshTimer);
-  previewRefreshTimer = setTimeout(() => {
-    previewRefreshTimer = null;
-    if (document.getElementById("diff-section").classList.contains("hidden")) return;
-    onDryRun();
-  }, 250);
 }
 
 async function openSourceFile(name) {
@@ -1671,17 +1696,20 @@ window.addEventListener("DOMContentLoaded", () => {
   for (const id of ["adv-dev-provider", "adv-dev-method", "adv-scan-provider", "adv-scan-method"]) {
     document.getElementById(id).addEventListener("change", (e) => {
       state.advanced[e.target.dataset.field] = e.target.value;
+      markPreviewStale();
       saveStickyState();
     });
   }
   document.getElementById("adv-roll-notes").addEventListener("change", (e) => {
     state.advanced.roll_notes = e.target.value;
+    markPreviewStale();
     saveStickyState();
   });
   document.getElementById("adv-roll-date").addEventListener("change", (e) => {
     state.advanced.roll_date = e.target.value || "";
     state.advanced.roll_date_source = state.advanced.roll_date ? "user" : "";
     renderRollDate();
+    markPreviewStale();
     saveStickyState();
   });
 
