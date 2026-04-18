@@ -225,12 +225,51 @@ function renderScanSummary() {
   const el = document.getElementById("scan-summary");
   if (!state.scan) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
-  el.innerHTML = `
-    <span class="chip">${state.scan.files.length} file${state.scan.files.length === 1 ? "" : "s"}</span>
-    <span class="chip">${escapeHtml(state.scan.source_kind)}</span>
-    <span class="chip">${escapeHtml(state.scan.scan_tier)}</span>
-    <span>roll: <code>${escapeHtml(state.scan.roll_id)}</code></span>
-  `;
+  const count = state.scan.files.length;
+  const sourceLabel = scanSourceKindLabel(state.scan.source_kind);
+  const tierLabel = scanTierLabel(state.scan.source_kind, state.scan.scan_tier);
+  const parts = [
+    renderScanSummaryItem("Files", `${count} image${count === 1 ? "" : "s"}`, "summary-value--accent"),
+    renderScanSummaryItem("Source", sourceLabel),
+  ];
+  if (tierLabel) {
+    parts.push(renderScanSummaryItem("Resolution", tierLabel));
+  }
+  parts.push(renderScanSummaryItem("Folder", state.scan.roll_id, "summary-code"));
+  el.innerHTML = parts.join("");
+}
+
+function renderScanSummaryItem(label, value, valueClass = "") {
+  const classes = ["summary-value"];
+  if (valueClass) classes.push(valueClass);
+  return `<span class="summary-item"><span class="summary-label">${escapeHtml(label)}</span><span class="${classes.join(" ")}">${escapeHtml(value)}</span></span>`;
+}
+
+function scanSourceKindLabel(kind) {
+  switch (kind) {
+    case "camera_scan_raw":
+      return "Camera-scanned raw files";
+    case "positive_master_tiff":
+      return "High-resolution TIFF masters";
+    case "lab_scan_jpeg":
+      return "Lab scan JPEGs";
+    default:
+      return kind || "Unknown";
+  }
+}
+
+function scanTierLabel(sourceKind, tier) {
+  if (sourceKind === "camera_scan_raw" || sourceKind === "positive_master_tiff") {
+    return "";
+  }
+  switch (tier) {
+    case "high-res":
+      return "High resolution";
+    case "standard":
+      return "Standard resolution";
+    default:
+      return tier || "";
+  }
 }
 
 function renderManifestSummary(message, level = "warn") {

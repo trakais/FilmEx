@@ -196,6 +196,74 @@ section h2::after {
   text-transform: uppercase;
 }
 
+#scan-summary {
+  gap: 8px 0;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+#scan-summary .summary-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+#scan-summary .summary-item + .summary-item {
+  padding-left: 18px;
+}
+
+#scan-summary .summary-item + .summary-item::before {
+  content: "·";
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-52%);
+  color: var(--muted-2);
+  font-size: 13px;
+  line-height: 1;
+}
+
+#scan-summary .summary-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+#scan-summary .summary-value {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+}
+
+#scan-summary .summary-value--accent {
+  color: var(--yellow);
+}
+
+#scan-summary .summary-code {
+  font-family: var(--font-mono);
+  text-transform: none;
+}
+
+@media (max-width: 640px) {
+  #scan-summary {
+    gap: 10px;
+  }
+
+  #scan-summary .summary-item {
+    width: 100%;
+    padding-left: 0;
+  }
+
+  #scan-summary .summary-item + .summary-item::before {
+    content: none;
+  }
+}
+
 /* ---------- Tiles (gear) ---------- */
 .tile-row {
   display: grid;
