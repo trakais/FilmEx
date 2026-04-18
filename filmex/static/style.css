@@ -489,6 +489,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   padding: 2px;
+  /* Pack rows from the top instead of stretching them to fill the picker.
+     Without this, a list of 1–2 cameras produces giant tiles because the
+     grid inherits `align-content: stretch` and divides the leftover height
+     across the rows. Per-row siblings still stretch to match the tallest
+     (default `align-items: stretch`) so two tiles in the same row stay
+     visually even. */
+  align-content: start;
 }
 .picker-grid.film-grid {
   grid-template-columns: 1fr;
@@ -561,7 +568,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
 }
 .picker-tile .iso-badge {
-  background: var(--danger);
+  /* Color is set per-variant below — kind-of-film is encoded in the swatch. */
   color: #fff;
   padding: 2px 8px;
   border-radius: 4px;
@@ -570,6 +577,20 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   letter-spacing: 0.05em;
   grid-column: 2;
   grid-row: 1 / span 2;
+}
+/* B&W films get a black pill — reads instantly as "monochrome." */
+.picker-tile .iso-badge--bw {
+  background: #000;
+  /* Pure-black on the dark surface needs a hint of edge to keep its shape. */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+/* Color negative (and "other") share the green pill. */
+.picker-tile .iso-badge--color {
+  background: #2f9d55;
+}
+/* Slide film gets purple — distinct from color negative at a glance. */
+.picker-tile .iso-badge--slide {
+  background: #8d5cd1;
 }
 
 .picker-foot {

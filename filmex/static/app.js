@@ -352,6 +352,26 @@ const CAMERA_TYPE_LABELS = {
 };
 const cameraTypeLabel = (t) => CAMERA_TYPE_LABELS[t] || t || "";
 
+// Same idea for film_type. Stored as lowercase enum; displayed with proper
+// capitalization and the ampersand spelling for B&W.
+const FILM_TYPE_LABELS = {
+  color_negative: "Color negative",
+  bw_negative: "B&W negative",
+  slide: "Slide",
+  other: "Other",
+};
+const filmTypeLabel = (t) => FILM_TYPE_LABELS[t] || (t || "").replace(/_/g, " ");
+// ISO pill color encodes the film kind at a glance: black for B&W, green for
+// color negative, purple for slide. "other" shares the green pill — anything
+// nonstandard reads as "color-ish, look closer."
+const ISO_BADGE_KIND = {
+  bw_negative: "bw",
+  color_negative: "color",
+  slide: "slide",
+  other: "color",
+};
+const isoBadgeKind = (t) => ISO_BADGE_KIND[t] || "color";
+
 function renderTiles() {
   const tileCamera = document.getElementById("tile-camera");
   const tileLens = document.getElementById("tile-lens");
@@ -368,7 +388,7 @@ function renderTiles() {
   }));
   renderTile(tileFilm, state.film, "Pick a film (optional)", f => ({
     title: f.display_name,
-    sub: `ISO ${f.box_speed_iso} · ${f.film_type.replace("_", " ")}`,
+    sub: `ISO ${f.box_speed_iso} · ${filmTypeLabel(f.film_type)}`,
   }));
 }
 
@@ -580,12 +600,14 @@ function renderPickerTile(item, kind) {
     ].filter(Boolean).join(" · ");
     tile.appendChild(sub);
   } else if (kind === "film") {
+    // Brand identity is already carried by the colored strip on the left, so
+    // the subtitle just adds the type — no need to repeat the brand name.
     const sub = document.createElement("div");
     sub.className = "picker-tile-sub";
-    sub.textContent = `${item.brand} · ${item.film_type.replace("_", " ")}`;
+    sub.textContent = filmTypeLabel(item.film_type);
     tile.appendChild(sub);
     const badge = document.createElement("div");
-    badge.className = "iso-badge";
+    badge.className = `iso-badge iso-badge--${isoBadgeKind(item.film_type)}`;
     badge.textContent = item.box_speed_iso;
     tile.appendChild(badge);
   }
