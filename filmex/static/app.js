@@ -16,13 +16,14 @@ const state = {
   previewInvert: false,
   lastDryRunResult: null,
   fileKeywords: {},
+  fileLensOverrides: {},
   fileKeywordEditorOpen: {},
   advanced: {
     development_provider_id: "",
     development_method_id: "",
     scan_provider_id: "",
     scan_method_id: "",
-    extra_keywords: "",
+    roll_notes: "",
     roll_date: "",
     roll_date_source: "",  // "suggested" | "user" — controls the "from file creation" hint
   },
@@ -288,7 +289,7 @@ function renderTiles() {
     title: c.display_name,
     sub: cameraTypeLabel(c.camera_type) || c.mount || "",
   }));
-  renderTile(tileLens, state.lens, "Pick a lens (optional)", l => ({
+  renderTile(tileLens, state.lens, "Pick a main lens (optional)", l => ({
     title: l.display_name,
     sub: [l.focal_length_mm && `${l.focal_length_mm}mm`, l.max_aperture && `f/${l.max_aperture}`, l.mount]
       .filter(Boolean).join(" · "),
@@ -341,6 +342,7 @@ function renderTile(el, entity, placeholder, toCopy) {
 function clearTile(kind) {
   if (kind === "camera") {
     state.camera = null;
+    state.fileLensOverrides = {};
     // Also clear lens if it was the camera's fixed lens — otherwise the user
     // is left with a lens that no longer matches anything sensible.
     if (state.lens && state.cameras.some(c => c.fixed_lens_id === state.lens.id)) {
@@ -369,7 +371,7 @@ function openPicker(kind) {
   const showAll = document.getElementById("picker-show-all");
   const search = document.getElementById("picker-search");
 
-  title.textContent = { camera: "Pick a camera", lens: "Pick a lens", film: "Pick a film" }[kind];
+  title.textContent = { camera: "Pick a camera", lens: "Pick a main lens", film: "Pick a film" }[kind];
   search.value = "";
   delete grid.dataset.showAll;
   showAll.classList.toggle("hidden", kind !== "lens");
@@ -418,8 +420,20 @@ async function renderPickerGrid() {
     : items;
 
   grid.innerHTML = "";
-  for (const item of filtered) {
-    grid.appendChild(renderPickerTile(item, activePickerKind));
+  if (activePickerKind === "film") {
+    for (const [brand, groupItems] of groupPickerFilms(filtered)) {
+      const label = document.createElement("div");
+      label.className = "picker-group-label";
+      label.textContent = brand;
+      grid.appendChild(label);
+      for (const item of groupItems) {
+        grid.appendChild(renderPickerTile(item, activePickerKind));
+      }
+    }
+  } else {
+    for (const item of filtered) {
+      grid.appendChild(renderPickerTile(item, activePickerKind));
+    }
   }
   if (filtered.length === 0) {
     const empty = document.createElement("div");
@@ -445,6 +459,22 @@ function filmBrandColors(brand) {
   if (c1) return [c1, c1];
   if (c2) return [c2, c2];
   return FILM_BRAND_FALLBACK;
+}
+
+function groupPickerFilms(items) {
+  const sorted = [...items].sort((a, b) => {
+    const brandCmp = (a.brand || "").localeCompare(b.brand || "");
+    if (brandCmp !== 0) return brandCmp;
+    if (!!a.favorite !== !!b.favorite) return a.favorite ? -1 : 1;
+    return (a.display_name || "").localeCompare(b.display_name || "");
+  });
+  const groups = new Map();
+  for (const item of sorted) {
+    const brand = item.brand || "Other";
+    if (!groups.has(brand)) groups.set(brand, []);
+    groups.get(brand).push(item);
+  }
+  return [...groups.entries()];
 }
 
 function renderPickerTile(item, kind) {
@@ -494,6 +524,7 @@ function renderPickerTile(item, kind) {
 function selectFromPicker(item) {
   if (activePickerKind === "camera") {
     state.camera = item;
+    state.fileLensOverrides = {};
     // If camera has a fixed lens, auto-populate it.
     if (item.fixed_lens_id) {
       const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
@@ -520,7 +551,7 @@ function populateAdvancedSelects() {
   fillSelect("adv-dev-method", state.devMethods, state.advanced.development_method_id);
   fillSelect("adv-scan-provider", scanProviders, state.advanced.scan_provider_id);
   fillSelect("adv-scan-method", state.scanMethods, state.advanced.scan_method_id);
-  document.getElementById("adv-extra-keywords").value = state.advanced.extra_keywords || "";
+  document.getElementById("adv-roll-notes").value = state.advanced.roll_notes || "";
   renderRollDate();
 }
 
@@ -575,6 +606,7 @@ function applyManifestPrefill(manifest, scan) {
     "scan method"
   );
   state.fileKeywords = fileKeywordsFromManifest(manifest.file_overrides, scan.files);
+  state.fileLensOverrides = fileLensOverridesFromManifest(manifest.file_overrides, scan.files, unresolved);
   state.fileKeywordEditorOpen = {};
 
   const manifestRollDate = (manifest.capture_date_value || "").trim();
@@ -582,6 +614,7 @@ function applyManifestPrefill(manifest, scan) {
     state.advanced.roll_date = manifestRollDate;
     state.advanced.roll_date_source = "manifest";
   }
+  state.advanced.roll_notes = (manifest.notes || "").trim();
 
   populateAdvancedSelects();
   renderTiles();
@@ -705,9 +738,8 @@ function readAdvanced() {
     development_method_id: document.getElementById("adv-dev-method").value || null,
     scan_provider_id: document.getElementById("adv-scan-provider").value || null,
     scan_method_id: document.getElementById("adv-scan-method").value || null,
-    extra_keywords: document.getElementById("adv-extra-keywords").value
-      .split(",").map(s => s.trim()).filter(Boolean),
     roll_date: document.getElementById("adv-roll-date").value || null,
+    roll_notes: document.getElementById("adv-roll-notes").value.trim() || null,
   };
 }
 
@@ -720,6 +752,7 @@ function buildRequestBody() {
     lens_id: state.lens?.id || null,
     film_stock_id: state.film?.id,
     file_keywords: buildPerFileKeywordPayload(),
+    file_lens_ids: { ...state.fileLensOverrides },
     ...readAdvanced(),
   };
 }
@@ -797,7 +830,9 @@ function renderDiff(result) {
       ? buildThumbnailUrl(state.folder, file.name, state.previewInvert)
       : "";
     const keywordValue = state.fileKeywords[file.name] || "";
+    const lensOverrideValue = state.fileLensOverrides[file.name] || "";
     const editorOpen = !!state.fileKeywordEditorOpen[file.name];
+    const lensOptions = lensOverrideOptions(lensOverrideValue);
     frag.innerHTML = `
       ${hasThumbnail ? `
         <button type="button" class="diff-thumb-link" aria-label="Open source file">
@@ -808,6 +843,14 @@ function renderDiff(result) {
         <div class="diff-file-name">${escapeHtml(file.name)}</div>
         <div class="diff-file-actions">
           <button type="button" class="diff-add-keyword-link">${editorOpen ? "hide keywords" : "add keywords"}</button>
+        </div>
+        <div class="diff-file-lens-override">
+          <label>
+            <span>Lens override</span>
+            <select class="diff-file-lens-select">
+              ${lensOptions}
+            </select>
+          </label>
         </div>
         <div class="diff-file-keyword-editor${editorOpen ? "" : " hidden"}">
           <input
@@ -842,6 +885,17 @@ function renderDiff(result) {
     if (input) {
       input.addEventListener("input", (e) => {
         state.fileKeywords[file.name] = e.target.value;
+        schedulePreviewRefresh();
+      });
+    }
+    const lensSelect = frag.querySelector(".diff-file-lens-select");
+    if (lensSelect) {
+      lensSelect.addEventListener("change", (e) => {
+        if (e.target.value) {
+          state.fileLensOverrides[file.name] = e.target.value;
+        } else {
+          delete state.fileLensOverrides[file.name];
+        }
         schedulePreviewRefresh();
       });
     }
@@ -983,9 +1037,41 @@ function fileKeywordsFromManifest(fileOverrides, files) {
   return out;
 }
 
+function fileLensOverridesFromManifest(fileOverrides, files, unresolved) {
+  const valid = new Set((files || []).map(file => file.name));
+  const out = {};
+  for (const [name, payload] of Object.entries(fileOverrides || {})) {
+    if (!valid.has(name)) continue;
+    const row = resolveLensFromManifest(payload?.lens_snapshot, unresolved);
+    if (row) out[name] = row.id;
+  }
+  return out;
+}
+
 function resetPerFileKeywordState() {
   state.fileKeywords = {};
+  state.fileLensOverrides = {};
   state.fileKeywordEditorOpen = {};
+}
+
+function lensOverrideOptions(selectedId) {
+  const options = ['<option value="">(main lens)</option>'];
+  for (const lens of compatibleLensOptions()) {
+    options.push(
+      `<option value="${escapeHtml(lens.id)}" ${lens.id === selectedId ? "selected" : ""}>${escapeHtml(lens.display_name)}</option>`
+    );
+  }
+  return options.join("");
+}
+
+function compatibleLensOptions() {
+  if (state.camera?.fixed_lens_id) {
+    return state.lenses.filter(l => l.id === state.camera.fixed_lens_id);
+  }
+  if (state.camera?.mount) {
+    return state.lenses.filter(l => !l.mount || l.mount === state.camera.mount);
+  }
+  return state.lenses;
 }
 
 let previewRefreshTimer = null;
@@ -1481,8 +1567,8 @@ window.addEventListener("DOMContentLoaded", () => {
       saveStickyState();
     });
   }
-  document.getElementById("adv-extra-keywords").addEventListener("change", (e) => {
-    state.advanced.extra_keywords = e.target.value;
+  document.getElementById("adv-roll-notes").addEventListener("change", (e) => {
+    state.advanced.roll_notes = e.target.value;
     saveStickyState();
   });
   document.getElementById("adv-roll-date").addEventListener("change", (e) => {

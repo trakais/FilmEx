@@ -1,8 +1,6 @@
 # FilmEx
 
-FilmEx is a local-first browser tool for tagging film scan folders before import into Lightroom or other DAM software.
-
-It is not a catalog, not an editor, and not a cloud service.
+FilmEx, of Film EXIF, is a local-first browser tool for tagging film scan folders before import into Lightroom or other DAM software. It relies on your system exiftool and local filesystem, so you must run it locally, not in a container or on another machine. 
 
 ## What It Does
 

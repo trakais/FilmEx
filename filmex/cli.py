@@ -63,12 +63,14 @@ _BATCH_SECTIONS = (
 class SectionReport:
     section: str
     created: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     def tally(self) -> str:
         return (
             f"{self.section}: {len(self.created)} created, "
+            f"{len(self.updated)} updated, "
             f"{len(self.skipped)} skipped, {len(self.errors)} errors"
         )
 
@@ -94,7 +96,9 @@ class BatchReport:
 # ---------- batch apply ----------
 
 
-def apply_batch(batch: dict[str, Any], *, dry_run: bool = False) -> BatchReport:
+def apply_batch(
+    batch: dict[str, Any], *, dry_run: bool = False, upsert_film_data: bool = False
+) -> BatchReport:
     """Apply a validated-on-the-fly batch dict to the live database.
 
     `dry_run` validates every row and reports what would happen without
@@ -129,8 +133,18 @@ def apply_batch(batch: dict[str, Any], *, dry_run: bool = False) -> BatchReport:
         # Film brands own colors + serve as the FK target for film_stocks,
         # so they must land before film_stocks (which now validate the brand
         # exists).
-        _process_film_brands(session, batch.get("film_brands", []), report)
-        _process_film_stocks(session, batch.get("film_stocks", []), report)
+        _process_film_brands(
+            session,
+            batch.get("film_brands", []),
+            report,
+            upsert_existing=upsert_film_data,
+        )
+        _process_film_stocks(
+            session,
+            batch.get("film_stocks", []),
+            report,
+            upsert_existing=upsert_film_data,
+        )
 
         # 2. Cameras before lenses, so lens-mount validation sees new mounts.
         pending_links = _process_cameras(session, batch.get("cameras", []), report)
@@ -227,7 +241,11 @@ def _find_method(session: Session, model, name: str):
 
 
 def _process_film_brands(
-    session: Session, items: Iterable[dict], report: BatchReport
+    session: Session,
+    items: Iterable[dict],
+    report: BatchReport,
+    *,
+    upsert_existing: bool = False,
 ) -> None:
     sr = report.section("film_brands")
     for raw in items:
@@ -237,8 +255,28 @@ def _process_film_brands(
         except ValidationError as exc:
             sr.errors.append(f"{label}: {_err(exc)}")
             continue
-        if _find_film_brand(session, payload.name) is not None:
-            sr.skipped.append(f"{label} (already exists)")
+        existing = _find_film_brand(session, payload.name)
+        if existing is not None:
+            if not upsert_existing:
+                sr.skipped.append(f"{label} (already exists)")
+                continue
+            changed = False
+            normalized_name = payload.name.strip()
+            if existing.name != normalized_name:
+                existing.name = normalized_name
+                changed = True
+            if existing.color_primary != payload.color_primary:
+                existing.color_primary = payload.color_primary
+                changed = True
+            if existing.color_secondary != payload.color_secondary:
+                existing.color_secondary = payload.color_secondary
+                changed = True
+            if changed:
+                session.add(existing)
+                session.flush()
+                sr.updated.append(label)
+            else:
+                sr.skipped.append(f"{label} (already up to date)")
             continue
         data = payload.model_dump()
         data["name"] = data["name"].strip()
@@ -261,7 +299,11 @@ def _find_film_brand(session: Session, name: str) -> FilmBrand | None:
 
 
 def _process_film_stocks(
-    session: Session, items: Iterable[dict], report: BatchReport
+    session: Session,
+    items: Iterable[dict],
+    report: BatchReport,
+    *,
+    upsert_existing: bool = False,
 ) -> None:
     sr = report.section("film_stocks")
     for raw in items:
@@ -290,8 +332,34 @@ def _process_film_stocks(
                 f"can be set)."
             )
             continue
-        if _find_film_stock(session, payload.brand, payload.name) is not None:
-            sr.skipped.append(f"{label} (already exists)")
+        existing = _find_film_stock(session, payload.brand, payload.name)
+        if existing is not None:
+            if not upsert_existing:
+                sr.skipped.append(f"{label} (already exists)")
+                continue
+            changed = False
+            update_fields = (
+                "display_name",
+                "box_speed_iso",
+                "film_type",
+                "process_type",
+                "notes",
+                "favorite",
+                "aliases",
+            )
+            for field in update_fields:
+                if field not in raw:
+                    continue
+                value = getattr(payload, field)
+                if getattr(existing, field) != value:
+                    setattr(existing, field, value)
+                    changed = True
+            if changed:
+                session.add(existing)
+                session.flush()
+                sr.updated.append(label)
+            else:
+                sr.skipped.append(f"{label} (already up to date)")
             continue
         session.add(FilmStock(**payload.model_dump()))
         session.flush()
@@ -598,7 +666,11 @@ def _cmd_add_from_json(args) -> int:
         return 2
 
     try:
-        report = apply_batch(batch, dry_run=args.dry_run)
+        report = apply_batch(
+            batch,
+            dry_run=args.dry_run,
+            upsert_film_data=args.upsert_film_data,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -625,6 +697,8 @@ def _print_report(report: BatchReport, *, dry_run: bool) -> None:
         print(section.tally())
         for line in section.created:
             print(f"  + {line}")
+        for line in section.updated:
+            print(f"  ~ {line}")
         for line in section.skipped:
             print(f"  = {line}")
         for line in section.errors:
@@ -655,6 +729,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate and report without writing to the database.",
+    )
+    add.add_argument(
+        "--upsert-film-data",
+        action="store_true",
+        help="Update existing film brands and film stocks instead of only skipping them.",
     )
     add.set_defaults(func=_cmd_add_from_json)
 

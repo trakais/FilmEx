@@ -108,11 +108,14 @@ def _migrate_to_v2(engine: Engine) -> None:
 # for correctness, only for tile aesthetics.
 _KNOWN_BRAND_COLORS: dict[str, tuple[str, str]] = {
     "Kodak": ("#f7ad03", "#c9489e"),
+    "Kodak Eastman": ("#f31a2b", "#fdb71b"),
     "Fomapan": ("#c9489e", "#f1d100"),
     "Ilford": ("#000000", "#ffffff"),
     "Kentmere": ("#2f2298", "#e50163"),
     "Agfa": ("#73767c", "#cf1c30"),
-    "Fujifilm": ("#079952", "#292826"),
+    "Fujifilm": ("#079952", "#942b6f"),
+    "Harman": ("#d22b19", "#ffffff"),
+    "CineStill": ("#493ab4", "#171918"),
     "Lomography": ("#bb9d70", "#292825"),
 }
 

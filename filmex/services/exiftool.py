@@ -32,6 +32,7 @@ class WriteIntent:
     hierarchical_keywords: list[str] = field(default_factory=list)
     flat_keywords: list[str] = field(default_factory=list)
     capture_date: Optional[str] = None  # YYYY:MM:DD HH:MM:SS, optional
+    description: Optional[str] = None
 
 
 @dataclass
@@ -200,18 +201,33 @@ def build_argv(
             f"-CreateDate={intent.capture_date}",
             f"-XMP-photoshop:DateCreated={intent.capture_date}",
         ]
+    if intent.description is not None:
+        argv += [
+            f"-XMP-dc:Description={intent.description}",
+            f"-IPTC:Caption-Abstract={intent.description}",
+        ]
 
     if mode == "sidecar":
         xmp_path = Path(sidecar_path) if sidecar_path is not None else sidecar_path_for(path)
         if sidecar_exists:
             # Direct edit of the existing sidecar. IPTC:Keywords does not apply
             # in XMP-only files, so drop the IPTC arg to avoid exiftool warnings.
-            argv = [a for a in argv if not a.startswith("-IPTC:Keywords")]
+            argv = [
+                a
+                for a in argv
+                if not a.startswith("-IPTC:Keywords")
+                and not a.startswith("-IPTC:Caption-Abstract")
+            ]
             argv.append(str(xmp_path))
         else:
             # Seed a fresh sidecar from the raw. `-o` refuses to overwrite, so
             # the caller must only reach this branch when the xmp is absent.
-            argv = [a for a in argv if not a.startswith("-IPTC:Keywords")]
+            argv = [
+                a
+                for a in argv
+                if not a.startswith("-IPTC:Keywords")
+                and not a.startswith("-IPTC:Caption-Abstract")
+            ]
             argv += ["-o", str(xmp_path), str(path)]
     else:
         argv.append(str(path))
@@ -241,6 +257,10 @@ def diff(existing: dict[str, Any], intent: WriteIntent) -> list[TagChange]:
     _gear("Model", intent.camera_model)
     _gear("LensModel", intent.lens_model)
     _gear("DateTimeOriginal", intent.capture_date)
+    _gear(
+        "Description",
+        intent.description,
+    )
 
     if intent.flat_keywords:
         current_flat = _as_list(existing.get("Subject")) or _as_list(existing.get("Keywords"))

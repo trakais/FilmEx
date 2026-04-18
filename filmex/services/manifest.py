@@ -133,13 +133,22 @@ def set_file_overrides(
     manifest: dict,
     *,
     extra_keywords_by_file: dict[str, list[str]],
+    lens_by_file: dict[str, GearSnapshot],
 ) -> dict:
     """Replace the manifest's per-file override section with current values."""
-    normalized: dict[str, dict[str, list[str]]] = {}
-    for name, keywords in extra_keywords_by_file.items():
+    normalized: dict[str, dict[str, Any]] = {}
+    names = set(extra_keywords_by_file) | set(lens_by_file)
+    for name in names:
+        entry: dict[str, Any] = {}
+        keywords = extra_keywords_by_file.get(name, [])
         cleaned = [kw.strip() for kw in keywords if kw and kw.strip()]
         if cleaned:
-            normalized[name] = {"extra_keywords": cleaned}
+            entry["extra_keywords"] = cleaned
+        lens = lens_by_file.get(name)
+        if lens and any(getattr(lens, field) for field in ("id", "make", "model", "display_name")):
+            entry["lens_snapshot"] = asdict(lens)
+        if entry:
+            normalized[name] = entry
     manifest["file_overrides"] = normalized
     manifest["updated_at"] = _now()
     return manifest

@@ -85,6 +85,40 @@ def test_dry_run_file_keywords_apply_only_to_target_file(client, roll_factory):
     assert "Warm Light" not in second_subject["after"]
 
 
+def test_dry_run_file_lens_override_applies_only_to_target_file(client, roll_factory):
+    cam, film, lens = _pick_pipeline(client)
+    alt = client.post(
+        "/api/lenses",
+        json={
+            "make": "Jupiter",
+            "model": "8",
+            "display_name": "Jupiter-8 50mm f/2",
+            "lens_model_write_value": "Jupiter-8 50mm f/2",
+            "focal_length_mm": 50,
+            "max_aperture": 2.0,
+            "mount": cam["mount"],
+        },
+    ).json()
+    folder = roll_factory("2026-04-17_R101C", jpegs=2)
+    res = client.post(
+        "/api/metadata/dry-run",
+        json={
+            "folder": str(folder),
+            "camera_id": cam["id"],
+            "lens_id": lens["id"] if lens else None,
+            "film_stock_id": film["id"],
+            "file_lens_ids": {"scan_001.jpg": alt["id"]},
+        },
+    ).json()
+    by_name = {file["name"]: file for file in res["diffs"]}
+    second_lens = next(ch for ch in by_name["scan_001.jpg"]["changes"] if ch["tag"] == "LensModel")
+    second_hier = next(ch for ch in by_name["scan_001.jpg"]["changes"] if ch["tag"] == "HierarchicalSubject")
+    first_hier = next(ch for ch in by_name["scan_000.jpg"]["changes"] if ch["tag"] == "HierarchicalSubject")
+    assert second_lens["after"] == alt["lens_model_write_value"]
+    assert f"Lens|{alt['display_name']}" in second_hier["after"]
+    assert f"Lens|{alt['display_name']}" not in first_hier["after"]
+
+
 @requires_exiftool
 def test_apply_writes_metadata_and_manifest(client, roll_factory, tmp_path):
     cam, film, lens = _pick_pipeline(client)
@@ -141,6 +175,29 @@ def test_apply_persists_file_keyword_overrides_in_tags_and_manifest(client, roll
 
     tags = read_tags(folder / "scan_001.jpg", ["Subject"])
     assert "Close portrait" in tags["Subject"]
+
+
+@requires_exiftool
+def test_apply_writes_roll_notes_as_description_and_manifest_note(client, roll_factory):
+    cam, film, lens = _pick_pipeline(client)
+    folder = roll_factory("2026-04-17_R102C", jpegs=1)
+    res = client.post(
+        "/api/metadata/apply",
+        json={
+            "folder": str(folder),
+            "camera_id": cam["id"],
+            "lens_id": lens["id"] if lens else None,
+            "film_stock_id": film["id"],
+            "roll_notes": "Pushed +2 in home dev",
+        },
+    )
+    assert res.status_code == 200, res.text
+
+    manifest = json.loads((folder / "roll_manifest.json").read_text())
+    assert manifest["notes"] == "Pushed +2 in home dev"
+
+    tags = read_tags(folder / "scan_000.jpg", ["Description", "Caption-Abstract"])
+    assert tags.get("Description") == "Pushed +2 in home dev"
 
 
 @requires_exiftool

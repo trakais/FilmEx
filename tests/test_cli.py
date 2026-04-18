@@ -179,6 +179,39 @@ def test_film_brand_batch_normalizes_hex(blank_db):
         assert row.color_secondary == "#292825"
 
 
+def test_film_brand_batch_upserts_existing_colors(blank_db):
+    apply_batch(
+        {
+            "film_brands": [
+                {"name": "Fujifilm", "color_primary": "#079952", "color_secondary": "#292826"}
+            ]
+        }
+    )
+    report = apply_batch(
+        {
+            "film_brands": [
+                {"name": "Fujifilm", "color_primary": "#079952", "color_secondary": "#942b6f"}
+            ]
+        },
+        upsert_film_data=True,
+    )
+    assert not report.has_errors()
+    fb = next(s for s in report.sections if s.section == "film_brands")
+    assert fb.updated == ["Fujifilm"]
+
+    from sqlmodel import Session, select
+
+    from filmex.db import get_engine
+    from filmex.models import FilmBrand
+
+    with Session(get_engine()) as session:
+        row = session.exec(
+            select(FilmBrand).where(FilmBrand.name == "Fujifilm")
+        ).one()
+        assert row.color_primary == "#079952"
+        assert row.color_secondary == "#942b6f"
+
+
 def test_film_brand_batch_rejects_garbage_hex(blank_db):
     batch = {
         "film_brands": [{"name": "BadColor", "color_primary": "not-a-color"}]
@@ -229,6 +262,53 @@ def test_invalid_film_type_is_rejected(blank_db):
     assert report.has_errors()
     fs = next(s for s in report.sections if s.section == "film_stocks")
     assert any("film_type" in e for e in fs.errors)
+
+
+def test_film_stock_batch_upserts_existing_stock(blank_db):
+    apply_batch(
+        {
+            "film_brands": [{"name": "Kodak"}],
+            "film_stocks": [
+                {
+                    "brand": "Kodak",
+                    "name": "Portra 400",
+                    "display_name": "Kodak Portra 400",
+                    "box_speed_iso": 400,
+                    "film_type": "color_negative",
+                    "process_type": "c41",
+                }
+            ],
+        }
+    )
+    report = apply_batch(
+        {
+            "film_stocks": [
+                {
+                    "brand": "Kodak",
+                    "name": "Portra 400",
+                    "display_name": "Kodak Portra 400 New",
+                    "box_speed_iso": 400,
+                    "film_type": "color_negative",
+                    "process_type": "c41",
+                }
+            ]
+        },
+        upsert_film_data=True,
+    )
+    assert not report.has_errors()
+    fs = next(s for s in report.sections if s.section == "film_stocks")
+    assert fs.updated == ["Kodak Portra 400"]
+
+    from sqlmodel import Session, select
+
+    from filmex.db import get_engine
+    from filmex.models import FilmStock
+
+    with Session(get_engine()) as session:
+        row = session.exec(
+            select(FilmStock).where(FilmStock.brand == "Kodak", FilmStock.name == "Portra 400")
+        ).one()
+        assert row.display_name == "Kodak Portra 400 New"
 
 
 def test_dry_run_reports_without_writing(blank_db):

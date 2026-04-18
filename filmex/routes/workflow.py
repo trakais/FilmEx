@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import textwrap
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
@@ -217,10 +217,24 @@ def _run_apply(ctx: "_Pipeline"):
         capture_date_value=ctx.capture_date_value,
         capture_date_precision=ctx.capture_date_precision,
         capture_date_source=ctx.capture_date_source,
-        notes=None,
+        notes=ctx.roll_notes,
     )
     merged = mf.merge_existing_manifest(existing_manifest, fresh) if existing_manifest else fresh
-    mf.set_file_overrides(merged, extra_keywords_by_file=ctx.file_keywords_by_name)
+    mf.set_file_overrides(
+        merged,
+        extra_keywords_by_file=ctx.file_keywords_by_name,
+        lens_by_file={
+            name: mf.GearSnapshot(
+                id=lens.id,
+                make=lens.make,
+                model=lens.model,
+                display_name=lens.display_name,
+                mount=lens.mount,
+                lens_model_write_value=lens.lens_model_write_value,
+            )
+            for name, lens in ctx.file_lens_by_name.items()
+        },
+    )
     mf.append_apply_history(merged, applied_files=applied, diffs=all_diffs, dry_run=False)
     manifest_path = mf.write_manifest(ctx.folder, merged)
 
@@ -368,6 +382,7 @@ def _open_with_default_app(path: Path) -> None:
 # ---- internals ----
 
 _READ_TAGS = ["Make", "Model", "LensModel", "Subject", "Keywords", "HierarchicalSubject"]
+_READ_TAGS += ["Description", "Caption-Abstract"]
 
 
 def _read_existing_tags(file_path: Path) -> dict:
@@ -412,6 +427,12 @@ class _Pipeline:
         capture_date_precision: str,
         capture_date_source: Optional[str],
         file_keywords_by_name: dict[str, list[str]],
+        file_lens_by_name: dict[str, Lens],
+        keyword_context: kw.WriteContext,
+        camera_make: Optional[str],
+        camera_model: Optional[str],
+        capture_date_exif: Optional[str],
+        roll_notes: Optional[str],
     ) -> None:
         self.folder = folder
         self.roll_id = roll_id
@@ -430,6 +451,12 @@ class _Pipeline:
         self.capture_date_precision = capture_date_precision
         self.capture_date_source = capture_date_source
         self.file_keywords_by_name = file_keywords_by_name
+        self.file_lens_by_name = file_lens_by_name
+        self.keyword_context = keyword_context
+        self.camera_make = camera_make
+        self.camera_model = camera_model
+        self.capture_date_exif = capture_date_exif
+        self.roll_notes = roll_notes
 
 
 def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
@@ -482,23 +509,19 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         scan_method_name=scan_method.name if scan_method else None,
         extra_keywords=list(req.extra_keywords),
     )
-    hierarchical = kw.build_hierarchical_paths(ctx_kw)
-    flat = kw.leaves_of(hierarchical)
     file_keywords_by_name = _normalize_file_keywords(req.file_keywords, [f.name for f in scan.files])
+    file_lens_by_name = _normalize_file_lenses(
+        session,
+        req.file_lens_ids,
+        [f.name for f in scan.files],
+        camera,
+    )
 
     capture_date_value = _normalize_roll_date(req.roll_date)
     capture_date_precision = "day" if capture_date_value else "unknown"
     capture_date_source = "user_override" if capture_date_value else None
     exif_date = _exif_date(capture_date_value)
-
-    intent = et.WriteIntent(
-        camera_make=camera.make if camera else None,
-        camera_model=camera.model if camera else None,
-        lens_model=lens.lens_model_write_value if lens else None,
-        hierarchical_keywords=hierarchical,
-        flat_keywords=flat,
-        capture_date=exif_date,
-    )
+    roll_notes = _normalize_roll_notes(req.roll_notes)
 
     files = [scan.folder / f.name for f in scan.files]
 
@@ -508,7 +531,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         source_kind=scan.source_kind,
         scan_tier=scan.scan_tier,
         files=files,
-        intent=intent,
+        intent=et.WriteIntent(),
         camera_snapshot=mf.GearSnapshot(
             id=camera.id if camera else None,
             make=camera.make if camera else None,
@@ -540,6 +563,12 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         capture_date_precision=capture_date_precision,
         capture_date_source=capture_date_source,
         file_keywords_by_name=file_keywords_by_name,
+        file_lens_by_name=file_lens_by_name,
+        keyword_context=ctx_kw,
+        camera_make=camera.make if camera else None,
+        camera_model=camera.model if camera else None,
+        capture_date_exif=exif_date,
+        roll_notes=roll_notes,
     )
 
 
@@ -601,18 +630,63 @@ def _normalize_file_keywords(
     return out
 
 
-def _intent_for_file(ctx: _Pipeline, file_name: str) -> et.WriteIntent:
-    extra_keywords = ctx.file_keywords_by_name.get(file_name, [])
-    if not extra_keywords:
-        return ctx.intent
+def _normalize_roll_notes(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    return cleaned or None
 
-    hierarchical = kw.merge_hierarchical(ctx.intent.hierarchical_keywords, extra_keywords)
-    flat = kw.merge_flat(ctx.intent.flat_keywords, kw.leaves_of(extra_keywords))
+
+def _lens_compatible_with_camera(camera: Optional[Camera], lens: Lens) -> bool:
+    if camera is None:
+        return True
+    if camera.fixed_lens_id:
+        return lens.id == camera.fixed_lens_id
+    if camera.mount and lens.mount:
+        return camera.mount == lens.mount
+    return True
+
+
+def _normalize_file_lenses(
+    session: Session,
+    raw: dict[str, str],
+    valid_file_names: list[str],
+    camera: Optional[Camera],
+) -> dict[str, Lens]:
+    valid = set(valid_file_names)
+    out: dict[str, Lens] = {}
+    for name, lens_id in (raw or {}).items():
+        if name not in valid:
+            raise HTTPException(status_code=400, detail=f"Unknown file in file_lens_ids: {name}")
+        if not lens_id:
+            continue
+        lens = session.get(Lens, lens_id)
+        if lens is None:
+            raise HTTPException(status_code=404, detail=f"Lens not found for file {name}")
+        if not _lens_compatible_with_camera(camera, lens):
+            raise HTTPException(status_code=400, detail=f"Lens override is not compatible with the selected camera for file {name}")
+        out[name] = lens
+    return out
+
+
+def _intent_for_file(ctx: _Pipeline, file_name: str) -> et.WriteIntent:
+    lens = ctx.file_lens_by_name.get(file_name)
+    file_kw_ctx = replace(
+        ctx.keyword_context,
+        lens_display_name=lens.display_name if lens else ctx.keyword_context.lens_display_name,
+    )
+    hierarchical = kw.build_hierarchical_paths(file_kw_ctx)
+    flat = kw.leaves_of(hierarchical)
+    extra_keywords = ctx.file_keywords_by_name.get(file_name, [])
+    if extra_keywords:
+        hierarchical = kw.merge_hierarchical(hierarchical, extra_keywords)
+        flat = kw.merge_flat(flat, kw.leaves_of(extra_keywords))
     return et.WriteIntent(
-        camera_make=ctx.intent.camera_make,
-        camera_model=ctx.intent.camera_model,
-        lens_model=ctx.intent.lens_model,
+        camera_make=ctx.camera_make,
+        camera_model=ctx.camera_model,
+        lens_model=(lens.lens_model_write_value if lens else ctx.lens_snapshot.lens_model_write_value),
         hierarchical_keywords=hierarchical,
         flat_keywords=flat,
-        capture_date=ctx.intent.capture_date,
+        capture_date=ctx.capture_date_exif,
+        description=ctx.roll_notes,
     )

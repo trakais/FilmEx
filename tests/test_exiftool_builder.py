@@ -145,6 +145,18 @@ def test_capture_date_not_written_when_absent():
     assert not any(a.startswith("-DateTimeOriginal=") for a in argv)
 
 
+def test_description_written_when_provided():
+    argv = et.build_argv("photo.jpg", _intent(description="Pushed two stops"))
+    assert "-XMP-dc:Description=Pushed two stops" in argv
+    assert "-IPTC:Caption-Abstract=Pushed two stops" in argv
+
+
+def test_sidecar_description_omits_iptc_caption():
+    argv = et.build_argv("photo.arw", _intent(description="Roll note"), sidecar_exists=False)
+    assert "-XMP-dc:Description=Roll note" in argv
+    assert not any(a.startswith("-IPTC:Caption-Abstract=") for a in argv)
+
+
 # ---- diff ----
 
 
@@ -184,3 +196,10 @@ def test_diff_skip_when_all_keywords_already_present():
     by_tag = {c.tag: c for c in changes}
     assert by_tag["Subject"].action == "skip"
     assert by_tag["HierarchicalSubject"].action == "skip"
+
+
+def test_diff_sets_description():
+    changes = et.diff({"Description": "Old"}, _intent(description="New note"))
+    by_tag = {c.tag: c for c in changes}
+    assert by_tag["Description"].action == "set"
+    assert by_tag["Description"].after == "New note"

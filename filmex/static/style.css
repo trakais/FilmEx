@@ -335,6 +335,25 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .diff-file-actions {
   margin-bottom: 8px;
 }
+.diff-file-lens-override {
+  margin-bottom: 10px;
+}
+.diff-file-lens-override label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.diff-file-lens-select {
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+}
 .diff-add-keyword-link {
   padding: 0;
   border: none;
@@ -473,6 +492,17 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .picker-grid.film-grid {
   grid-template-columns: 1fr;
+}
+.picker-group-label {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 10px 2px 2px;
+}
+.picker-group-label:first-child {
+  padding-top: 2px;
 }
 .picker-tile {
   background: var(--surface-2);

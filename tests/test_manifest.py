@@ -164,9 +164,29 @@ def test_set_file_overrides_replaces_with_cleaned_keywords(tmp_path):
             "a.jpg": [" Portrait ", "", "Warm Light"],
             "b.jpg": [],
         },
+        lens_by_file={
+            "a.jpg": mf.GearSnapshot(
+                id="lens-1",
+                make="Canon",
+                model="50/1.4",
+                display_name="Canon FD 50mm f/1.4",
+                mount="FD",
+                lens_model_write_value="Canon FD 50mm f/1.4",
+            )
+        },
     )
     assert result["file_overrides"] == {
-        "a.jpg": {"extra_keywords": ["Portrait", "Warm Light"]},
+        "a.jpg": {
+            "extra_keywords": ["Portrait", "Warm Light"],
+            "lens_snapshot": {
+                "id": "lens-1",
+                "make": "Canon",
+                "model": "50/1.4",
+                "display_name": "Canon FD 50mm f/1.4",
+                "mount": "FD",
+                "lens_model_write_value": "Canon FD 50mm f/1.4",
+            },
+        },
     }
 
 

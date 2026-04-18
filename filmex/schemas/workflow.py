@@ -53,7 +53,9 @@ class DryRunRequest(BaseModel):
     scan_method_id: Optional[str] = None
     extra_keywords: list[str] = Field(default_factory=list)
     file_keywords: dict[str, list[str]] = Field(default_factory=dict)
+    file_lens_ids: dict[str, str] = Field(default_factory=dict)
     roll_date: Optional[str] = None  # YYYY-MM-DD; when set, written as DateTimeOriginal@noon
+    roll_notes: Optional[str] = None
 
 
 class TagChangeOut(BaseModel):
