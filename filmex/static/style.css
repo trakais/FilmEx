@@ -18,6 +18,13 @@
   --radius: 8px;
   --radius-lg: 14px;
   --shadow: 0 4px 16px rgba(0,0,0,0.4);
+  /* Whisper elevation for cards — just enough to lift them off the page bg
+     without making the dark theme look like a stack of paper. */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.22);
+  /* Snappy ease used everywhere. Matches the Material/Apple "decelerate" feel
+     — fast start, soft landing. Imperceptible per-element, cumulatively
+     makes the whole UI feel deliberate. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 * { box-sizing: border-box; }
@@ -25,7 +32,13 @@
 body {
   margin: 0;
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  background: var(--bg);
+  /* tabular-nums: ISOs, frame counts, dates, hex values all align cleanly. */
+  font-variant-numeric: tabular-nums;
+  /* A whisper of safelight spill from the top of the workspace. Sub-conscious
+     warmth — fits the darkroom theme without leaning on it. */
+  background:
+    radial-gradient(ellipse 80% 40% at 50% 0%, rgba(240,10,10,0.045), transparent 60%),
+    var(--bg);
   color: var(--text);
   min-height: 100vh;
 }
@@ -36,13 +49,18 @@ body {
   justify-content: space-between;
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
+  /* One pixel of warm bleed under the divider — like safelight spill catching
+     the edge of the workbench. Subtle enough to escape conscious notice. */
+  box-shadow: 0 1px 0 rgba(240, 10, 10, 0.18);
   background: var(--surface);
 }
 
 .brand {
   font-weight: 700;
-  letter-spacing: 0.02em;
-  font-size: 16px;
+  /* Wider tracking + uppercase reads as a product mark, not a folder name. */
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 14px;
 }
 
 .pill {
@@ -54,9 +72,11 @@ body {
   border: 1px solid var(--border);
   color: var(--muted);
 }
-.pill.ok { color: var(--ok); border-color: #2a4f2a; }
-.pill.warn { color: var(--warn); border-color: #4f3e1f; }
-.pill.bad { color: var(--danger); border-color: #5a2a2a; }
+/* Role pills get a faint wash of their own hue — adds presence without
+   introducing a fourth color value. */
+.pill.ok { color: var(--ok); border-color: #2a4f2a; background: rgba(122, 210, 122, 0.08); }
+.pill.warn { color: var(--warn); border-color: #4f3e1f; background: rgba(232, 180, 86, 0.08); }
+.pill.bad { color: var(--danger); border-color: #5a2a2a; background: rgba(255, 122, 122, 0.08); }
 
 main {
   max-width: 960px;
@@ -122,7 +142,10 @@ section h2 {
   border-radius: var(--radius-lg);
   padding: 20px;
   cursor: pointer;
-  transition: border-color 0.15s, transform 0.05s;
+  transition: border-color 0.18s var(--ease), transform 0.05s var(--ease),
+              box-shadow 0.18s var(--ease);
+  /* Whisper of elevation so tiles read as touchable cards, not flat panels. */
+  box-shadow: var(--shadow-sm);
   min-height: 140px;
   display: flex;
   flex-direction: column;
@@ -147,7 +170,8 @@ section h2 {
   place-items: center;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease),
+              border-color 0.14s var(--ease);
 }
 .tile.selected:hover .tile-clear,
 .tile-clear:focus { opacity: 1; }
@@ -157,7 +181,15 @@ section h2 {
 }
 .tile:hover { border-color: var(--accent-dim); }
 .tile:active { transform: translateY(1px); }
-.tile.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.tile.selected {
+  border-color: var(--accent);
+  /* Inner ring + soft outer bloom — reads as a safelight halo around the
+     selected gear. Theme-on, never gaudy at this opacity. */
+  box-shadow:
+    0 0 0 1px var(--accent) inset,
+    0 0 0 4px rgba(240, 10, 10, 0.18),
+    var(--shadow-sm);
+}
 .tile-label {
   font-size: 11px;
   text-transform: uppercase;
@@ -187,7 +219,7 @@ section h2 {
   align-items: center;
   gap: 6px;
 }
-.disclosure .chevron { transition: transform 0.15s; display: inline-block; }
+.disclosure .chevron { transition: transform 0.18s var(--ease); display: inline-block; }
 .disclosure[aria-expanded="true"] .chevron { transform: rotate(90deg); }
 
 .advanced-body {
@@ -222,7 +254,9 @@ section h2 {
 }
 .field-grid input, .field-grid select {
   padding: 6px 8px;
-  background: var(--surface-2);
+  /* Inputs sit darker than their card so they read as "wells" — the eye
+     drops into them instead of skating across same-tone surfaces. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
@@ -268,7 +302,7 @@ button {
   color: var(--text);
   font: inherit;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease);
 }
 button:hover:not(:disabled) { border-color: var(--accent-dim); }
 button.primary {
@@ -285,7 +319,9 @@ button.danger {
   font-weight: 600;
 }
 button.secondary { background: var(--surface-2); }
-button:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Disabled = "switched off," not "fading out." Desaturate + lift opacity a
+   touch so the label stays readable. */
+button:disabled { opacity: 0.55; filter: grayscale(0.5); cursor: not-allowed; }
 .icon-btn { padding: 4px 8px; background: transparent; border: none; color: var(--muted); font-size: 14px; }
 /* Settings cog sits in the header next to status pills; bump it so it reads
    as the primary nav affordance rather than blending in with status badges. */
@@ -297,23 +333,43 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
 }
 .diff-file {
+  /* More vertical breathing room between frames so each one reads as its own
+     unit. The hairline divider was barely visible against the card; bump to
+     proper padding + a slightly more present rule. */
   border-top: 1px solid var(--border);
-  padding: 10px 0;
+  padding: 16px 0;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 12px;
+  gap: 14px;
   align-items: start;
 }
-.diff-file:first-child { border-top: none; }
+.diff-file:first-child { border-top: none; padding-top: 4px; }
 .diff-file-main {
   min-width: 0;
+}
+/* Header row: filename on the left, per-frame overrides on the right.
+   Wraps gracefully on narrow screens. */
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.diff-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .diff-file-name {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px;
-  margin-bottom: 6px;
+  font-weight: 500;
 }
 .diff-thumb-link {
   display: block;
@@ -332,27 +388,18 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   background: var(--surface-2);
   display: block;
 }
-.diff-file-actions {
-  margin-bottom: 8px;
-}
-.diff-file-lens-override {
-  margin-bottom: 10px;
-}
-.diff-file-lens-override label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--muted);
-}
 .diff-file-lens-select {
-  width: 100%;
-  padding: 7px 9px;
+  /* Compact inline control — used to be a full-width dropdown that read as a
+     horizontal divider. Width capped + raised tone (surface-2 inside a
+     surface card) so it reads as a control, not a band. */
+  min-width: 180px;
+  max-width: 240px;
+  padding: 5px 8px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  font: inherit;
+  font-size: 12px;
 }
 .diff-add-keyword-link {
   padding: 0;
@@ -373,6 +420,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .diff-file-keyword-input {
   width: 100%;
   padding: 7px 9px;
+  /* Surface-2 inside the surface card — same reasoning as the lens select. */
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -476,7 +524,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .picker-head h3 { margin: 0; font-size: 14px; }
 #picker-search {
   padding: 8px 10px;
-  background: var(--surface-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
@@ -500,11 +548,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .picker-grid.film-grid {
   grid-template-columns: 1fr;
 }
+/* Sub-headings inside the picker get a quieter, italic treatment so they
+   don't compete with the main section headers. Hierarchy through restraint. */
 .picker-group-label {
   grid-column: 1 / -1;
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-style: italic;
+  letter-spacing: 0;
   color: var(--muted);
   padding: 10px 2px 2px;
 }
@@ -520,7 +570,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: border-color 0.15s;
+  transition: border-color 0.18s var(--ease);
 }
 .picker-tile:hover { border-color: var(--accent-dim); }
 .picker-tile.favorite { position: relative; }
@@ -619,6 +669,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
 }
 .settings-section-head {
   display: flex;
@@ -641,8 +692,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .settings-group-label {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-style: italic;
+  letter-spacing: 0;
   color: var(--muted);
   padding: 10px 0 4px;
 }
@@ -716,7 +767,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .settings-form input, .settings-form select {
   padding: 8px 10px;
-  background: var(--surface-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);

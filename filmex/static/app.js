@@ -296,7 +296,7 @@ function markPreviewStale() {
 function renderPreviewInvertToggle() {
   const btn = document.getElementById("preview-invert-toggle");
   btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
-  btn.textContent = `Invert previews: ${state.previewInvert ? "on" : "off"}`;
+  btn.textContent = `Invert thumbnails: ${state.previewInvert ? "on" : "off"}`;
 }
 
 function setPageTitleProgress(label, current, total) {
@@ -328,13 +328,13 @@ function renderCreatePreviewsButton() {
   if (!state.scan || missing === 0) {
     btn.classList.add("hidden");
     btn.disabled = true;
-    btn.textContent = "Create previews";
+    btn.textContent = "Create thumbnails";
     delete btn.dataset.progressText;
     return;
   }
   btn.classList.remove("hidden");
   btn.disabled = false;
-  btn.textContent = missing === (state.scan.files || []).length ? "Create previews" : "Create missing previews";
+  btn.textContent = missing === (state.scan.files || []).length ? "Create thumbnails" : "Create missing thumbnails";
   delete btn.dataset.progressText;
 }
 
@@ -968,7 +968,7 @@ async function onCreatePreviews() {
         "warn"
       );
     } else {
-      renderPreviewStatus(`Could not create previews: ${e.message}`, "bad");
+      renderPreviewStatus(`Could not create thumbnails: ${e.message}`, "bad");
     }
   } finally {
     state.previewBuildController = null;
@@ -1015,17 +1015,14 @@ function renderDiff(result) {
         </button>
       ` : ""}
       <div class="diff-file-main">
-        <div class="diff-file-name">${escapeHtml(file.name)}</div>
-        <div class="diff-file-actions">
-          <button type="button" class="diff-add-keyword-link">${editorOpen ? "hide keywords" : "add keywords"}</button>
-        </div>
-        <div class="diff-file-lens-override">
-          <label>
-            <span>Lens override</span>
-            <select class="diff-file-lens-select">
+        <div class="diff-file-header">
+          <div class="diff-file-name">${escapeHtml(file.name)}</div>
+          <div class="diff-file-controls">
+            <select class="diff-file-lens-select" aria-label="Lens override for this frame">
               ${lensOptions}
             </select>
-          </label>
+            <button type="button" class="diff-add-keyword-link">${editorOpen ? "hide keywords" : "+ keywords"}</button>
+          </div>
         </div>
         <div class="diff-file-keyword-editor${editorOpen ? "" : " hidden"}">
           <input
