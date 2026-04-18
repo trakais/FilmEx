@@ -299,6 +299,94 @@ def test_reapply_is_idempotent_keywords_not_duplicated(client, roll_factory):
 
 
 @requires_exiftool
+def test_reapply_replaces_managed_provider_keywords(client, roll_factory):
+    cam, film, lens = _pick_pipeline(client)
+    folder = roll_factory("2026-04-17_R103B", jpegs=1)
+    lab_one = client.post(
+        "/api/providers",
+        json={"name": "Lab One", "kinds": ["development", "scan"]},
+    ).json()
+    lab_two = client.post(
+        "/api/providers",
+        json={"name": "Lab Two", "kinds": ["development", "scan"]},
+    ).json()
+
+    payload = {
+        "folder": str(folder),
+        "camera_id": cam["id"],
+        "lens_id": lens["id"] if lens else None,
+        "film_stock_id": film["id"],
+    }
+    client.post(
+        "/api/metadata/apply",
+        json={
+            **payload,
+            "development_provider_id": lab_one["id"],
+            "scan_provider_id": lab_one["id"],
+        },
+    )
+    client.post(
+        "/api/metadata/apply",
+        json={
+            **payload,
+            "development_provider_id": lab_two["id"],
+            "scan_provider_id": lab_two["id"],
+        },
+    )
+
+    tags = read_tags(folder / "scan_000.jpg", ["Subject", "HierarchicalSubject"])
+    flat = tags.get("Subject") or []
+    flat = flat if isinstance(flat, list) else [flat]
+    hier = tags.get("HierarchicalSubject") or []
+    hier = hier if isinstance(hier, list) else [hier]
+
+    assert "Lab One" not in flat
+    assert "Lab Two" in flat
+    assert "Development|Provider|Lab One" not in hier
+    assert "Scan|Provider|Lab One" not in hier
+    assert "Development|Provider|Lab Two" in hier
+    assert "Scan|Provider|Lab Two" in hier
+
+
+@requires_exiftool
+def test_replace_managed_metadata_clears_old_filmex_fields_when_unset(client, roll_factory):
+    cam, film, lens = _pick_pipeline(client)
+    folder = roll_factory("2026-04-17_R103C", jpegs=1)
+    payload = {
+        "folder": str(folder),
+        "camera_id": cam["id"],
+        "lens_id": lens["id"] if lens else None,
+        "film_stock_id": film["id"],
+        "roll_date": "2026-04-17",
+        "roll_notes": "Initial note",
+    }
+    client.post("/api/metadata/apply", json=payload)
+    client.post(
+        "/api/metadata/apply",
+        json={
+            "folder": str(folder),
+            "replace_managed_metadata": True,
+        },
+    )
+
+    tags = read_tags(
+        folder / "scan_000.jpg",
+        ["Make", "Model", "LensModel", "Subject", "HierarchicalSubject", "Description", "DateTimeOriginal"],
+    )
+    raw_h = tags.get("HierarchicalSubject") or []
+    hier = raw_h if isinstance(raw_h, list) else [raw_h]
+
+    assert tags.get("Make") in (None, "")
+    assert tags.get("Model") in (None, "")
+    assert tags.get("LensModel") in (None, "")
+    assert tags.get("Description") in (None, "")
+    assert tags.get("DateTimeOriginal") in (None, "")
+    assert not any(p.startswith("Film|") for p in hier)
+    assert not any(p.startswith("Camera|") for p in hier)
+    assert not any(p.startswith("Lens|") for p in hier)
+
+
+@requires_exiftool
 def test_reapply_preserves_created_at_and_appends_history(client, roll_factory):
     cam, film, lens = _pick_pipeline(client)
     folder = roll_factory("2026-04-17_R104", jpegs=1)

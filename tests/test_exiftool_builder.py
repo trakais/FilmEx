@@ -71,18 +71,9 @@ def test_embed_argv_contains_gear_and_keywords():
     assert "-LensModel=Industar-50 50mm f/3.5" in argv
     assert argv[-1] == "photo.jpg"
     # Both IPTC and XMP flat forms are written for JPG.
-    assert any(a.startswith("-IPTC:Keywords+=") for a in argv)
-    assert any(a.startswith("-XMP-dc:Subject+=") for a in argv)
-    assert any(a.startswith("-XMP-lr:HierarchicalSubject+=") for a in argv)
-
-
-def test_embed_argv_uses_remove_then_add_for_idempotency():
-    argv = et.build_argv("photo.jpg", _intent())
-    # Every `+=` for a list tag should be preceded by a matching `-=`.
-    sub_minus = [i for i, a in enumerate(argv) if a.startswith("-XMP-dc:Subject-=")]
-    sub_plus = [i for i, a in enumerate(argv) if a.startswith("-XMP-dc:Subject+=")]
-    assert len(sub_minus) == 1 and len(sub_plus) == 1
-    assert sub_minus[0] < sub_plus[0]
+    assert any(a.startswith("-IPTC:Keywords=") for a in argv)
+    assert any(a.startswith("-XMP-dc:Subject=") for a in argv)
+    assert any(a.startswith("-XMP-lr:HierarchicalSubject=") for a in argv)
 
 
 def test_sidecar_create_uses_o_and_raw_source():
@@ -203,3 +194,81 @@ def test_diff_sets_description():
     by_tag = {c.tag: c for c in changes}
     assert by_tag["Description"].action == "set"
     assert by_tag["Description"].after == "New note"
+
+
+def test_resolve_intent_replaces_old_managed_keywords_but_keeps_user_keywords():
+    existing = {
+        "Subject": ["Kodak Portra 400", "BFS", "Anna"],
+        "HierarchicalSubject": [
+            "Film|Kodak Portra 400",
+            "Development|Provider|BFS",
+            "Scan|Provider|BFS",
+            "People|Anna",
+        ],
+    }
+    intent = et.WriteIntent(
+        hierarchical_keywords=[
+            "Film|Fujifilm Fujicolor C200",
+            "Development|Provider|Agenskalns Fuji",
+            "Scan|Provider|Agenskalns Fuji",
+            "Roll|R001",
+        ],
+        flat_keywords=["Fujifilm Fujicolor C200", "Agenskalns Fuji", "R001"],
+    )
+    resolved = et.resolve_intent(existing, intent)
+    assert resolved.hierarchical_keywords == [
+        "People|Anna",
+        "Film|Fujifilm Fujicolor C200",
+        "Development|Provider|Agenskalns Fuji",
+        "Scan|Provider|Agenskalns Fuji",
+        "Roll|R001",
+    ]
+    assert resolved.flat_keywords == [
+        "Anna",
+        "Fujifilm Fujicolor C200",
+        "Agenskalns Fuji",
+        "R001",
+    ]
+
+
+def test_resolve_intent_preserves_other_managed_families_when_not_replacing_all():
+    existing = {
+        "Subject": ["Old Film", "Old Lens", "Anna"],
+        "HierarchicalSubject": [
+            "Film|Old Film",
+            "Lens|Old Lens",
+            "People|Anna",
+        ],
+    }
+    intent = et.WriteIntent(
+        hierarchical_keywords=["Development|Provider|Lab Two"],
+        flat_keywords=["Lab Two"],
+    )
+    resolved = et.resolve_intent(existing, intent)
+    assert resolved.hierarchical_keywords == [
+        "Film|Old Film",
+        "Lens|Old Lens",
+        "People|Anna",
+        "Development|Provider|Lab Two",
+    ]
+    assert resolved.flat_keywords == ["Old Film", "Old Lens", "Anna", "Lab Two"]
+
+
+def test_resolve_intent_replace_managed_clears_owned_scalars_when_unset():
+    existing = {
+        "Make": "Nikon",
+        "Model": "F3",
+        "LensModel": "Nikkor 50mm",
+        "Subject": ["Anna", "Old Film"],
+        "HierarchicalSubject": ["People|Anna", "Film|Old Film"],
+        "DateTimeOriginal": "2021:05:01 12:00:00",
+        "Description": "Old note",
+    }
+    resolved = et.resolve_intent(existing, et.WriteIntent(), replace_managed=True)
+    assert resolved.camera_make == ""
+    assert resolved.camera_model == ""
+    assert resolved.lens_model == ""
+    assert resolved.capture_date == ""
+    assert resolved.description == ""
+    assert resolved.hierarchical_keywords == ["People|Anna"]
+    assert resolved.flat_keywords == ["Anna"]

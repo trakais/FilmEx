@@ -192,8 +192,13 @@ def _run_apply(ctx: "_Pipeline"):
     for file_path in ctx.files:
         existing = _read_existing_tags(file_path)
         intent = _intent_for_file(ctx, file_path.name)
-        changes = et.diff(existing, intent)
-        result = apply_intent(file_path, intent)
+        resolved_intent = et.resolve_intent(
+            existing,
+            intent,
+            replace_managed=ctx.replace_managed_metadata,
+        )
+        changes = et.diff(existing, intent, replace_managed=ctx.replace_managed_metadata)
+        result = apply_intent(file_path, resolved_intent)
         if result.returncode != 0:
             err = f"{file_path.name}: {result.stderr.decode('utf-8', 'replace').strip()}"
             errors.append(err)
@@ -481,6 +486,7 @@ class _Pipeline:
         camera_model: Optional[str],
         capture_date_exif: Optional[str],
         roll_notes: Optional[str],
+        replace_managed_metadata: bool,
     ) -> None:
         self.folder = folder
         self.roll_id = roll_id
@@ -505,6 +511,7 @@ class _Pipeline:
         self.camera_model = camera_model
         self.capture_date_exif = capture_date_exif
         self.roll_notes = roll_notes
+        self.replace_managed_metadata = replace_managed_metadata
 
 
 def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
@@ -617,6 +624,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         camera_model=camera.model if camera else None,
         capture_date_exif=exif_date,
         roll_notes=roll_notes,
+        replace_managed_metadata=req.replace_managed_metadata,
     )
 
 

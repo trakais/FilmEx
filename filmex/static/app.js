@@ -28,6 +28,7 @@ const state = {
     scan_method_id: "",
     roll_notes: "",
     roll_date: "",
+    replace_managed_metadata: false,
     roll_date_source: "",  // "suggested" | "user" — controls the "from file creation" hint
   },
   // Caches of entity lists
@@ -687,6 +688,7 @@ function populateAdvancedSelects() {
   fillSelect("adv-scan-provider", scanProviders, state.advanced.scan_provider_id);
   fillSelect("adv-scan-method", state.scanMethods, state.advanced.scan_method_id);
   document.getElementById("adv-roll-notes").value = state.advanced.roll_notes || "";
+  document.getElementById("adv-replace-managed").checked = !!state.advanced.replace_managed_metadata;
   renderRollDate();
 }
 
@@ -875,6 +877,7 @@ function readAdvanced() {
     scan_method_id: document.getElementById("adv-scan-method").value || null,
     roll_date: document.getElementById("adv-roll-date").value || null,
     roll_notes: document.getElementById("adv-roll-notes").value.trim() || null,
+    replace_managed_metadata: !!document.getElementById("adv-replace-managed").checked,
   };
 }
 
@@ -1835,6 +1838,11 @@ window.addEventListener("DOMContentLoaded", () => {
     state.advanced.roll_date = e.target.value || "";
     state.advanced.roll_date_source = state.advanced.roll_date ? "user" : "";
     renderRollDate();
+    markPreviewStale();
+    saveStickyState();
+  });
+  document.getElementById("adv-replace-managed").addEventListener("change", (e) => {
+    state.advanced.replace_managed_metadata = !!e.target.checked;
     markPreviewStale();
     saveStickyState();
   });

@@ -76,6 +76,65 @@ def test_merge_preserves_existing_order_and_dedups():
     assert kw.merge_hierarchical(existing, new) == ["A", "B", "C", "D"]
 
 
+def test_reconcile_replaces_managed_taxonomy_and_preserves_unmanaged_keywords():
+    existing_h = [
+        "Film|Kodak Portra 400",
+        "Development|Provider|BFS",
+        "Scan|Provider|BFS",
+        "People|Anna",
+    ]
+    new_h = [
+        "Film|Fujifilm Fujicolor C200",
+        "Development|Provider|Agenskalns Fuji",
+        "Scan|Provider|Agenskalns Fuji",
+        "Roll|R001",
+    ]
+    assert kw.reconcile_hierarchical(existing_h, new_h) == [
+        "People|Anna",
+        "Film|Fujifilm Fujicolor C200",
+        "Development|Provider|Agenskalns Fuji",
+        "Scan|Provider|Agenskalns Fuji",
+        "Roll|R001",
+    ]
+
+    existing_flat = ["Kodak Portra 400", "BFS", "Anna"]
+    new_flat = ["Fujifilm Fujicolor C200", "Agenskalns Fuji", "R001"]
+    assert kw.reconcile_flat(existing_flat, existing_h, new_flat, new_h) == [
+        "Anna",
+        "Fujifilm Fujicolor C200",
+        "Agenskalns Fuji",
+        "R001",
+    ]
+
+
+def test_reconcile_preserves_unmentioned_managed_families_by_default():
+    existing_h = [
+        "Film|Kodak Portra 400",
+        "Lens|Industar-50 50mm f/3.5",
+        "People|Anna",
+    ]
+    new_h = ["Development|Provider|BFS"]
+    assert kw.reconcile_hierarchical(existing_h, new_h) == [
+        "Film|Kodak Portra 400",
+        "Lens|Industar-50 50mm f/3.5",
+        "People|Anna",
+        "Development|Provider|BFS",
+    ]
+
+
+def test_reconcile_replace_all_managed_clears_absent_families_too():
+    existing_h = [
+        "Film|Kodak Portra 400",
+        "Lens|Industar-50 50mm f/3.5",
+        "People|Anna",
+    ]
+    new_h = ["Roll|R002"]
+    assert kw.reconcile_hierarchical(existing_h, new_h, replace_all_managed=True) == [
+        "People|Anna",
+        "Roll|R002",
+    ]
+
+
 def test_paths_are_deduped():
     ctx = _ctx(extra_keywords=["Roll|R001"])  # duplicate of the built-in
     paths = kw.build_hierarchical_paths(ctx)

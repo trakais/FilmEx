@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from filmex.services import keywords as kw
+
 # Extensions we know how to write. Embed-in-place for JPG/TIFF; sidecar for raw.
 _EMBED_EXTS = {".jpg", ".jpeg", ".tif", ".tiff"}
 _SIDECAR_EXTS = {".arw", ".dng"}
@@ -173,26 +175,22 @@ def build_argv(
     if intent.lens_model is not None:
         argv += [f"-LensModel={intent.lens_model}", f"-Lens={intent.lens_model}"]
 
-    # Keywords — write both forms. Exiftool's `+=` appends even if the item
-    # already exists, so we first `-=` (no-op if absent) and then `+=` the same
-    # set. Net effect: each value appears exactly once regardless of current
-    # state. This is what keeps re-apply idempotent.
+    # Keywords — caller passes the fully resolved final list (existing
+    # user-owned values preserved, FilmEx-managed taxonomy paths replaced).
+    # We therefore write the exact final list in one shot.
     if intent.flat_keywords:
         joined = "||".join(intent.flat_keywords)
         argv += [
-            f"-XMP-dc:Subject-={joined}",
-            f"-XMP-dc:Subject+={joined}",
-            f"-IPTC:Keywords-={joined}",
-            f"-IPTC:Keywords+={joined}",
+            f"-XMP-dc:Subject={joined}",
+            f"-IPTC:Keywords={joined}",
         ]
     if intent.hierarchical_keywords:
         joined = "||".join(intent.hierarchical_keywords)
         argv += [
-            f"-XMP-lr:HierarchicalSubject-={joined}",
-            f"-XMP-lr:HierarchicalSubject+={joined}",
+            f"-XMP-lr:HierarchicalSubject={joined}",
         ]
 
-    if intent.capture_date:
+    if intent.capture_date is not None:
         # Write all three date tags in one shot so Lightroom, Bridge, and raw
         # EXIF readers all agree. Day-precision timestamps are stamped at noon
         # local (handled upstream) to signal "roll-level approximation".
@@ -240,9 +238,10 @@ def build_argv(
     return argv
 
 
-def diff(existing: dict[str, Any], intent: WriteIntent) -> list[TagChange]:
+def diff(existing: dict[str, Any], intent: WriteIntent, *, replace_managed: bool = False) -> list[TagChange]:
     """Compute what would change given current tag values and the intent."""
     changes: list[TagChange] = []
+    resolved = resolve_intent(existing, intent, replace_managed=replace_managed)
 
     def _gear(tag: str, new_value: Optional[str]) -> None:
         if new_value is None:
@@ -253,18 +252,18 @@ def diff(existing: dict[str, Any], intent: WriteIntent) -> list[TagChange]:
         else:
             changes.append(TagChange(tag=tag, action="set", before=current, after=new_value))
 
-    _gear("Make", intent.camera_make)
-    _gear("Model", intent.camera_model)
-    _gear("LensModel", intent.lens_model)
-    _gear("DateTimeOriginal", intent.capture_date)
+    _gear("Make", resolved.camera_make)
+    _gear("Model", resolved.camera_model)
+    _gear("LensModel", resolved.lens_model)
+    _gear("DateTimeOriginal", resolved.capture_date)
     _gear(
         "Description",
-        intent.description,
+        resolved.description,
     )
 
-    if intent.flat_keywords:
+    if resolved.flat_keywords:
         current_flat = _as_list(existing.get("Subject")) or _as_list(existing.get("Keywords"))
-        merged = _merge_lists(current_flat, intent.flat_keywords)
+        merged = resolved.flat_keywords
         if merged == current_flat:
             changes.append(
                 TagChange(tag="Subject", action="skip", before=current_flat, after=current_flat)
@@ -274,9 +273,9 @@ def diff(existing: dict[str, Any], intent: WriteIntent) -> list[TagChange]:
                 TagChange(tag="Subject", action="merge", before=current_flat, after=merged)
             )
 
-    if intent.hierarchical_keywords:
+    if resolved.hierarchical_keywords:
         current_h = _as_list(existing.get("HierarchicalSubject"))
-        merged = _merge_lists(current_h, intent.hierarchical_keywords)
+        merged = resolved.hierarchical_keywords
         if merged == current_h:
             changes.append(
                 TagChange(
@@ -297,6 +296,41 @@ def diff(existing: dict[str, Any], intent: WriteIntent) -> list[TagChange]:
             )
 
     return changes
+
+
+def resolve_intent(
+    existing: dict[str, Any],
+    intent: WriteIntent,
+    *,
+    replace_managed: bool = False,
+) -> WriteIntent:
+    """Resolve final keyword lists against current tags before writing.
+
+    FilmEx owns a fixed taxonomy subset (Film / Provider / Method / Camera /
+    Lens / Roll). Re-apply should replace those managed families while keeping
+    unrelated user keywords already present on the file.
+    """
+    current_flat = _as_list(existing.get("Subject")) or _as_list(existing.get("Keywords"))
+    current_h = _as_list(existing.get("HierarchicalSubject"))
+    return WriteIntent(
+        camera_make=intent.camera_make if intent.camera_make is not None else ("" if replace_managed else None),
+        camera_model=intent.camera_model if intent.camera_model is not None else ("" if replace_managed else None),
+        lens_model=intent.lens_model if intent.lens_model is not None else ("" if replace_managed else None),
+        hierarchical_keywords=kw.reconcile_hierarchical(
+            current_h,
+            intent.hierarchical_keywords,
+            replace_all_managed=replace_managed,
+        ),
+        flat_keywords=kw.reconcile_flat(
+            current_flat,
+            current_h,
+            intent.flat_keywords,
+            intent.hierarchical_keywords,
+            replace_all_managed=replace_managed,
+        ),
+        capture_date=intent.capture_date if intent.capture_date is not None else ("" if replace_managed else None),
+        description=intent.description if intent.description is not None else ("" if replace_managed else None),
+    )
 
 
 def _as_list(value: Any) -> list[str]:

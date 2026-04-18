@@ -57,6 +57,7 @@ class DryRunRequest(BaseModel):
     file_lens_ids: dict[str, str] = Field(default_factory=dict)
     roll_date: Optional[str] = None  # YYYY-MM-DD; when set, written as DateTimeOriginal@noon
     roll_notes: Optional[str] = None
+    replace_managed_metadata: bool = False
 
 
 class TagChangeOut(BaseModel):

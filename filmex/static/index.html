@@ -100,6 +100,14 @@
             <span>Roll date <span id="roll-date-hint" class="date-hint hidden"></span></span>
             <input id="adv-roll-date" type="date" data-field="roll_date" />
           </label>
+          <label class="checkbox-field">
+            <span>Existing FilmEx metadata</span>
+            <span class="checkbox-row">
+              <input id="adv-replace-managed" type="checkbox" data-field="replace_managed_metadata" />
+              <span>Replace instead of merge</span>
+            </span>
+            <span class="field-help">Clears old FilmEx camera, film, provider, roll, date, and notes fields before writing.</span>
+          </label>
           <label class="full">
             <span>Roll notes</span>
             <input id="adv-roll-notes" type="text" data-field="roll_notes" />

@@ -40,6 +40,20 @@ _FILM_TYPE_LABELS = {
     "other": "Other",
 }
 
+_MANAGED_HIERARCHICAL_PREFIXES = (
+    "Film|",
+    "FilmType|",
+    "Development|Provider|",
+    "Development|Method|",
+    "Scan|Provider|",
+    "Scan|Method|",
+    "Scan|Camera|",
+    "Scan|Lens|",
+    "Camera|",
+    "Lens|",
+    "Roll|",
+)
+
 
 def build_hierarchical_paths(ctx: WriteContext) -> list[str]:
     """Return hierarchical paths like `Film|Kodak Portra 400`, `Roll|R001`."""
@@ -97,6 +111,41 @@ def merge_flat(existing: list[str], new: list[str]) -> list[str]:
     return _unique_preserve_order(list(existing) + list(new))
 
 
+def reconcile_hierarchical(
+    existing: list[str],
+    new: list[str],
+    *,
+    replace_all_managed: bool = False,
+) -> list[str]:
+    """Replace selected FilmEx-managed taxonomy families, preserve everything else."""
+    families = _families_to_replace(new, replace_all_managed=replace_all_managed)
+    preserved = [
+        path for path in existing
+        if not _is_managed_hierarchical_path(path) or _managed_family_for(path) not in families
+    ]
+    return _unique_preserve_order(preserved + list(new))
+
+
+def reconcile_flat(
+    existing_flat: list[str],
+    existing_hierarchical: list[str],
+    new_flat: list[str],
+    new_hierarchical: list[str],
+    *,
+    replace_all_managed: bool = False,
+) -> list[str]:
+    """Replace leaves for selected managed families, preserve unrelated leaves."""
+    families = _families_to_replace(new_hierarchical, replace_all_managed=replace_all_managed)
+    managed_leaves = set(
+        leaves_of([
+            path for path in existing_hierarchical
+            if _is_managed_hierarchical_path(path) and _managed_family_for(path) in families
+        ])
+    )
+    preserved = [leaf for leaf in existing_flat if leaf not in managed_leaves]
+    return _unique_preserve_order(preserved + list(new_flat))
+
+
 def _unique_preserve_order(seq: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -105,3 +154,20 @@ def _unique_preserve_order(seq: list[str]) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _is_managed_hierarchical_path(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in _MANAGED_HIERARCHICAL_PREFIXES)
+
+
+def _managed_family_for(path: str) -> str | None:
+    for prefix in _MANAGED_HIERARCHICAL_PREFIXES:
+        if path.startswith(prefix):
+            return prefix
+    return None
+
+
+def _families_to_replace(new: list[str], *, replace_all_managed: bool) -> set[str]:
+    if replace_all_managed:
+        return set(_MANAGED_HIERARCHICAL_PREFIXES)
+    return {family for family in (_managed_family_for(path) for path in new) if family}
