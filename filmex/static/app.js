@@ -1253,7 +1253,7 @@ const SETTINGS_KINDS = {
       { name: "make", label: "Make", required: true },
       { name: "model", label: "Model", required: true },
       { name: "display_name", label: "Display name", required: true },
-      { name: "mount", label: "Mount (blank if none)", placeholder: "K, M39, Fixed-Lens…" },
+      { name: "mount", label: "Mount (blank if none)", type: "camera-mount-entry", placeholder: "K, M39, Fixed-Lens…", help: "Choose an existing mount when possible. You can still type a new one for the first camera on a new mount." },
       { name: "camera_type", label: "Type", type: "select", options: [
           { value: "", label: "(none)" },
           { value: "slr", label: "SLR" },
@@ -1617,6 +1617,17 @@ function renderFormField(f, row) {
     return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
   }
 
+  if (f.type === "camera-mount-entry") {
+    const mounts = [...settingsState.cameraMounts].sort((a, b) => a.localeCompare(b));
+    const current = typeof value === "string" ? value.trim() : "";
+    const listId = `mount-suggestions-${settingsFormCtx?.kind || "camera"}`;
+    const options = mounts.map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
+    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
+    return `<label><span>${escapeHtml(f.label)}</span>
+      <input type="text" name="${f.name}" value="${escapeHtml(current)}" list="${listId}" ${placeholder} autocapitalize="off" autocomplete="off" spellcheck="false" />
+      <datalist id="${listId}">${options}</datalist>${help}</label>`;
+  }
+
   const type = f.type === "number" ? "number" : "text";
   const step = f.step ? `step="${f.step}"` : "";
   const min = f.min != null ? `min="${f.min}"` : "";
@@ -1655,6 +1666,25 @@ async function submitSettingsForm() {
     }
   }
 
+  if (kind === "camera") {
+    const originalMount = payload.mount;
+    const normalizedMount = normalizeMountText(originalMount);
+    if (normalizedMount !== originalMount) payload.mount = normalizedMount;
+    const exactMount = canonicalMountMatch(payload.mount);
+    if (exactMount) {
+      payload.mount = exactMount;
+    } else {
+      const suggestion = similarMountSuggestion(payload.mount);
+      if (suggestion && suggestion !== payload.mount) {
+        const ok = confirm(`Mount "${payload.mount}" is very close to existing mount "${suggestion}". Save as a new mount anyway?`);
+        if (!ok) {
+          errorEl.textContent = `Use existing mount "${suggestion}" or type a different new mount`;
+          return;
+        }
+      }
+    }
+  }
+
   try {
     if (row) {
       await api(`${cfg.endpoint}/${row.id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -1671,6 +1701,32 @@ async function submitSettingsForm() {
   if (kind === "film-brand") {
     await refreshSettingsList("film");
   }
+}
+
+function normalizeMountText(value) {
+  if (value == null) return null;
+  const cleaned = String(value).trim().replace(/\s+/g, " ");
+  return cleaned || null;
+}
+
+function mountKey(value) {
+  return normalizeMountText(value)?.toLowerCase() || "";
+}
+
+function mountLooseKey(value) {
+  return mountKey(value).replace(/[\s-]+/g, "");
+}
+
+function canonicalMountMatch(value) {
+  const needle = mountKey(value);
+  if (!needle) return null;
+  return settingsState.cameraMounts.find(m => mountKey(m) === needle) || null;
+}
+
+function similarMountSuggestion(value) {
+  const needle = mountLooseKey(value);
+  if (!needle) return null;
+  return settingsState.cameraMounts.find(m => mountLooseKey(m) === needle) || null;
 }
 
 // ---------- Wiring ----------
