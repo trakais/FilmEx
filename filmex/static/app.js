@@ -6,6 +6,7 @@
 
 const STORAGE_KEY = "filmex.state.v1";
 const RECENT_FOLDERS_KEY = "filmex.recentFolders.v1";
+const DEFAULT_PAGE_TITLE = document.title;
 
 const state = {
   folder: "",
@@ -296,6 +297,14 @@ function renderPreviewInvertToggle() {
   const btn = document.getElementById("preview-invert-toggle");
   btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
   btn.textContent = `Invert previews: ${state.previewInvert ? "on" : "off"}`;
+}
+
+function setPageTitleProgress(label, current, total) {
+  document.title = `${DEFAULT_PAGE_TITLE} (${label}: ${current}/${total})`;
+}
+
+function resetPageTitle() {
+  document.title = DEFAULT_PAGE_TITLE;
 }
 
 function fileHasPreview(file) {
@@ -1086,10 +1095,12 @@ async function onApply() {
         if (ev.type === "start") {
           total = ev.total;
           btn.textContent = `Applying… 0/${total}`;
+          setPageTitleProgress("Applying", 0, total);
         } else if (ev.type === "progress") {
           const n = Number(btn.dataset.n || 0) + 1;
           btn.dataset.n = String(n);
           btn.textContent = `Applying… ${n}/${total}`;
+          setPageTitleProgress("Applying", n, total);
         } else if (ev.type === "done") {
           done_event = ev;
         }
@@ -1102,6 +1113,7 @@ async function onApply() {
   } finally {
     delete btn.dataset.n;
     btn.textContent = "Apply";
+    resetPageTitle();
     updateActionButtons();
   }
 }

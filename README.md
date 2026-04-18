@@ -9,8 +9,10 @@ FilmEx, of Film EXIF, is a local-first browser tool for tagging film scan folder
 - lets you choose analog camera, lens, and film stock
 - keeps film brands as a separate controlled list with per-brand colors
 - adds development and scan metadata
-- lets you add per-file extra keywords in the preview
+- lets you add per-file lens overrides and extra keywords in the preview
+- stores roll notes as a description/caption field, not as keywords
 - shows a dry-run preview before writing anything
+- can create lightweight local previews for files that do not already have `.thm` thumbnails
 - writes metadata with ExifTool
 - creates a `roll_manifest.json` next to the images
 
@@ -23,10 +25,12 @@ For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 
 1. Choose one folder containing a single film roll.
 2. Scan the folder.
-3. Pick camera, lens, and film.
+3. Pick camera, main lens, and film.
 4. Add optional development / scan info.
-5. Preview the metadata changes and add optional per-file keywords.
-6. Apply the changes.
+5. Optionally create previews if the folder does not already have thumbnails.
+6. Preview the metadata changes and add optional per-file lens overrides or keywords.
+7. Add optional roll notes.
+8. Apply the changes.
 
 ## Requirements
 
@@ -79,6 +83,7 @@ that already exist (matched by natural key) are skipped, never overwritten.
 ```bash
 uv run python -m filmex.cli add-from-json examples/entities-batch.json --dry-run
 uv run python -m filmex.cli add-from-json examples/entities-batch.json
+uv run python -m filmex.cli add-from-json examples/entities-batch.json --upsert-film-data
 uv run python -m filmex.cli export-json -o backup.json
 ```
 

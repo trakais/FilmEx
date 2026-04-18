@@ -185,6 +185,8 @@ The app owns a **whitelist** of EXIF/XMP fields and touches nothing else:
   does not let you hand-edit these, so there's no user edit to conflict with.)
 - `Subject` / `Keywords` (flat) + `HierarchicalSubject` (tree) — merged
   without duplicates. Existing non-managed keywords are preserved.
+- `Description` / `Caption-Abstract` — used for roll notes; overwritten on
+  re-apply when the user supplies roll notes.
 - `DateCreated` — only when the user explicitly supplies a capture date.
 
 ### By file type
@@ -194,16 +196,21 @@ The app owns a **whitelist** of EXIF/XMP fields and touches nothing else:
   what Lightroom and Bridge look for. Legacy FilmEx builds wrote the appended
   form (`DSC08930.ARW.xmp`); if one is on disk we keep editing it in place
   instead of silently seeding a second sidecar beside it. Merge with any
-  existing sidecar content; do not wipe Lightroom edits.
+  existing sidecar content; do not wipe Lightroom edits. Roll notes land in
+  `XMP-dc:Description` only for sidecars.
 - **JPG / TIFF**: embed into the file. Preserve other tags.
+  Roll notes are written to both `XMP-dc:Description` and
+  `IPTC:Caption-Abstract`.
 
 Re-apply must be idempotent — same inputs produce no duplicate keywords.
 
 ### Preview-time file overrides
 
-The dry-run preview may add per-file extra flat keywords. These are merged
-with the auto-generated keyword set, de-duplicated, and stored in the
-manifest under `file_overrides` so re-apply stays stable.
+The dry-run preview may add per-file lens overrides and extra flat keywords.
+Lens overrides replace `LensModel` and the `Lens|...` hierarchical keyword for
+that file only. Extra keywords are merged with the auto-generated keyword set,
+de-duplicated, and stored in the manifest under `file_overrides` so re-apply
+stays stable.
 
 ---
 
@@ -252,10 +259,16 @@ the JSON, then apply it:
 ```bash
 uv run python -m filmex.cli add-from-json path/to/batch.json
 uv run python -m filmex.cli add-from-json path/to/batch.json --dry-run
+uv run python -m filmex.cli add-from-json path/to/batch.json --upsert-film-data
 ```
 
 The CLI is **idempotent**: rows matched by natural key are skipped with a log
 line. Safe to re-run.
+
+`--upsert-film-data` is special-case maintenance mode for film libraries: it
+updates existing `film_brands` and `film_stocks` instead of skipping them, so
+palette tweaks or stock-name corrections can be applied in bulk without
+touching camera/lens/provider rows.
 
 ### Natural keys
 
