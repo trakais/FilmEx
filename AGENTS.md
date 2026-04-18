@@ -109,8 +109,8 @@ stock automatically inherits Kodak's colors — edit the brand once.
 - No `favorite` or `archived` — a brand is either a real brand worth keeping
   or a typo worth renaming.
 
-Seeded on first install: Kodak, Ilford, Kentmere, Fujifilm, Fomapan, Agfa,
-Lomography. The migration path backfills a row for every distinct
+Seeded on first install: Kodak, Kodak Eastman, Ilford, Kentmere, Fujifilm,
+Foma, Agfa, Harman, CineStill, Rollei, Lomography. The migration path backfills a row for every distinct
 `film_stock.brand` string found in existing databases and repairs incomplete
 brand backfills on already-upgraded DBs. Known brands get pre-populated
 palettes; unknown brands land with null colors (edit in Settings → Film
