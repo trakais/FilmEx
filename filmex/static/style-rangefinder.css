@@ -1,0 +1,1113 @@
+/* FilmEx — Rangefinder theme.
+
+   Stronger Leica-adjacent direction: instrument-first, less gallery, more
+   machined control surface. The cues come from condensed industrial forms,
+   graphite rails, calibration-yellow markings, and one decisive red action.
+
+   Typography leads. IBM Plex Sans Condensed stays narrow, upright, and
+   engineered without slipping into generic SaaS neutrality. IBM Plex Mono
+   handles paths, numerics, and measurement-like readouts. */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Matte black — pure #000 looks cheap on OLED and shows JPEG ringing.
+     Three closely-spaced neutrals give hairline-level tonal depth. */
+  --bg: #181717;
+  --surface: #101010;
+  --surface-2: #171717;
+  --surface-3: #1d1d1d;
+  --border: #242424;
+  --border-strong: #404040;
+  --text: #f3f3f0;
+  --muted: #999890;
+  --muted-2: #66645d;
+
+  --red: #d90d16;
+  --red-hover: #f12630;
+
+  --yellow: #f3be22;
+  --yellow-dim: rgba(243, 190, 34, 0.16);
+  --white-line: rgba(255, 255, 255, 0.08);
+
+  /* Semantic aliases keep component classes working across themes. */
+  --accent: var(--red);
+  --accent-dim: #73070d;
+  --danger: var(--red);
+  --ok: #76d17e;
+  --warn: var(--yellow);
+
+  --radius: 2px;
+  --radius-lg: 2px;
+
+  --font-ui: 'IBM Plex Sans Condensed', 'Barlow Condensed', 'Roboto Condensed',
+             'Arial Narrow', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --ease: cubic-bezier(0.16, 0.84, 0.24, 1);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  --shadow-sm: none;  /* this theme doesn't float cards */
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.32;
+  font-weight: 400;
+  /* Tabular figures everywhere — aligned numerics are a Leica hallmark. */
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.035), transparent 24%),
+    linear-gradient(180deg, #0a0a0a 0%, var(--bg) 28%);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- Header ---------- */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #111 0%, #0b0b0b 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.brand {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--text);
+}
+/* Yellow calibration tick instead of a brand-like dot. */
+.brand::after {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 2px;
+  margin-left: 0.65em;
+  vertical-align: 0.28em;
+  background: linear-gradient(90deg, var(--yellow) 0%, rgba(243, 190, 34, 0.22) 100%);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ---------- Pills ---------- */
+.pill {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.pill.ok   { color: var(--text);   border-color: var(--border-strong); }
+.pill.warn { color: var(--yellow); border-color: rgba(243, 190, 34, 0.45); }
+.pill.bad  { color: var(--red);    border-color: rgba(217, 13, 22, 0.48); }
+
+/* ---------- Main layout ---------- */
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 34px 24px 96px;
+  display: grid;
+  gap: 34px;
+}
+
+section h2 {
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+section h2::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border) 0%, rgba(36, 36, 36, 0) 100%);
+}
+
+/* ---------- Folder ---------- */
+.folder-row { display: flex; gap: 8px; }
+.folder-row input[type=text] {
+  flex: 1;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, #0c0c0c 0%, #080808 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+.folder-row input[type=text]:focus {
+  outline: none;
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(243, 190, 34, 0.15);
+}
+
+.summary {
+  margin-top: 12px;
+  padding: 10px 0 11px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  gap: 16px 22px;
+  align-items: center;
+  flex-wrap: wrap;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+/* Summary counts read as calibration readouts — yellow, semibold, tabular. */
+.summary .chip {
+  padding: 0;
+  background: transparent;
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ---------- Tiles (gear) ---------- */
+.tile-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  /* Don't let one tile (e.g. selected film with a sub line) pull the others
+     taller — each tile is sized by the fixed height below. */
+  align-items: start;
+}
+.tile {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, rgba(0, 0, 0, 0) 100%), var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 18px 20px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+  /* Fixed height so empty and selected tiles are identical in size. */
+  height: 122px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.tile:hover {
+  border-color: var(--border-strong);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(0, 0, 0, 0) 100%), var(--surface);
+}
+.tile:active { transform: none; }
+
+/* Selected state: red bar down the left edge — the "active channel" marker
+   on a precision instrument. Exactly 3px wide, flush with the border. */
+.tile.selected {
+  border-color: var(--border-strong);
+  box-shadow: inset 0 -1px 0 var(--yellow);
+}
+.tile.selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--red);
+}
+
+.tile-clear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.14s var(--ease), color 0.14s var(--ease),
+              border-color 0.14s var(--ease);
+}
+.tile.selected:hover .tile-clear,
+.tile-clear:focus { opacity: 1; }
+.tile-clear:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.tile-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.tile-content {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+.tile-content.empty {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tile-sub {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.tile.selected .tile-sub {
+  color: var(--yellow);
+}
+
+/* ---------- Advanced ---------- */
+.disclosure {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  padding: 6px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.disclosure:hover { color: var(--text); }
+.disclosure .chevron {
+  transition: transform 0.18s var(--ease);
+  display: inline-block;
+  font-size: 10px;
+}
+.disclosure[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+
+.advanced-body {
+  padding: 16px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  margin-top: 10px;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+}
+.field-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.field-grid label.full { grid-column: 1 / -1; }
+.field-grid .date-hint {
+  margin-left: 8px;
+  padding: 0;
+  background: transparent;
+  color: var(--yellow);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.field-grid input,
+.field-grid select {
+  padding: 7px 8px;
+  background: linear-gradient(180deg, #0c0c0c 0%, #080808 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.field-grid input:focus,
+.field-grid select:focus {
+  outline: none;
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px rgba(243, 190, 34, 0.16);
+}
+
+/* ---------- Actions ---------- */
+.actions-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.actions-left,
+.actions-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.action-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  text-decoration: none;
+  cursor: pointer;
+}
+.action-link:hover:not(:disabled),
+.action-link[aria-pressed="true"] { color: var(--yellow); }
+
+/* Base button — engineered, flat, uppercase. */
+button {
+  padding: 8px 18px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease),
+              background 0.15s var(--ease),
+              color 0.15s var(--ease);
+}
+button:hover:not(:disabled) {
+  border-color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* .primary in the HTML is the "Preview" button — in this theme it stays
+   quiet so the red .danger can carry the page's single primary action. */
+button.primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent);
+  color: var(--text);
+  border-color: var(--border-strong);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  border-color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* .danger is the Apply button — the one red action on the page.
+   Iconic through restraint: flat solid red, white lettering, upright caps. */
+button.danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+button.danger:hover:not(:disabled) {
+  background: var(--red-hover);
+  border-color: var(--red-hover);
+  filter: none;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+button.secondary:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+  cursor: not-allowed;
+}
+
+.icon-btn {
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.icon-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+#settings-open { font-size: 18px; padding: 2px 6px; line-height: 1; }
+
+/* ---------- Diff ---------- */
+/* Diff and apply sections shed their card chrome in this theme and live as
+   a bare list, separated by hairlines. More instrument-panel, less card. */
+.diff-section,
+.apply-section {
+  padding: 0;
+  padding-top: 18px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.diff-file {
+  border-top: 1px solid var(--border);
+  padding: 20px 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.diff-file:first-child { border-top: none; padding-top: 4px; }
+.diff-file-main { min-width: 0; }
+
+.diff-file-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.diff-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.diff-file-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.diff-thumb-link {
+  display: block;
+  line-height: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.diff-thumb {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: block;
+}
+
+.diff-file-lens-select {
+  min-width: 180px;
+  max-width: 240px;
+  padding: 5px 8px;
+  background: linear-gradient(180deg, #161616 0%, #111 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.diff-add-keyword-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--yellow);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  text-decoration: none;
+}
+.diff-add-keyword-link:hover:not(:disabled) { color: var(--text); }
+
+.diff-file-keyword-editor { margin-bottom: 12px; }
+.diff-file-keyword-input {
+  width: 100%;
+  padding: 7px 10px;
+  background: linear-gradient(180deg, #161616 0%, #111 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.diff-file-keyword-input:focus { outline: none; border-color: var(--text); }
+.diff-file-keyword-hint {
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.diff-changes { display: flex; flex-direction: column; gap: 3px; }
+
+.diff-row {
+  display: grid;
+  grid-template-columns: 196px 56px 1fr;
+  gap: 12px;
+  font-size: 13px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.diff-tag {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  font-weight: 600;
+}
+.diff-action {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  font-weight: 600;
+}
+/* SET → calibration yellow ("this value is being stamped").
+   MERGE → neutral white (additive merge into an existing list).
+   SKIP → muted graphite (no-op).
+   Red stays reserved for the Apply button. */
+.diff-action.set   { color: var(--yellow); }
+.diff-action.merge { color: var(--text); }
+.diff-action.skip  { color: var(--muted); }
+.diff-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-word;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@media (max-width: 640px) {
+  .diff-file { grid-template-columns: 1fr; }
+  .diff-thumb {
+    width: 100%;
+    max-width: 160px;
+    height: auto;
+    aspect-ratio: 4 / 3;
+  }
+  .diff-row { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ---------- Drop overlay ---------- */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.9);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+.drop-overlay-inner {
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  padding: 56px 88px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(20, 20, 20, 0.96) 0%, rgba(10, 10, 10, 0.96) 100%);
+  box-shadow: none;
+}
+.drop-overlay-icon {
+  font-size: 42px;
+  margin-bottom: 18px;
+  color: var(--muted);
+}
+.drop-overlay-text {
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--text);
+}
+.drop-overlay-hint {
+  color: var(--yellow);
+  font-size: 10px;
+  margin-top: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+}
+
+/* ---------- Picker panel ---------- */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 10;
+}
+.picker-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 460px;
+  max-width: 100vw;
+  height: 100vh;
+  background: linear-gradient(180deg, #111 0%, #0a0a0a 100%);
+  border-left: 1px solid var(--border);
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px;
+  gap: 14px;
+  z-index: 20;
+}
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.picker-head h3 {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+#picker-search {
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #0c0c0c 0%, #080808 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+#picker-search:focus { outline: none; border-color: var(--text); }
+
+.picker-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 2px;
+  align-content: start;
+}
+.picker-grid.film-grid { grid-template-columns: 1fr; }
+.picker-group-label {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  padding: 12px 2px 4px;
+  font-style: normal;
+}
+.picker-group-label:first-child { padding-top: 2px; }
+
+.picker-tile {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, transparent 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s var(--ease);
+}
+.picker-tile:hover {
+  border-color: var(--text);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.032) 0%, transparent 100%);
+}
+/* Favorite gets a yellow calibration dot — small, upper-right. */
+.picker-tile.favorite { position: relative; }
+.picker-tile.favorite::before {
+  content: "";
+  position: absolute;
+  top: 9px; right: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--yellow);
+}
+.picker-tile-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  letter-spacing: 0;
+}
+.picker-tile-sub {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+/* Film stock tile — brand color strip on the left (from --brand-c1/--brand-c2
+   set by JS), sharp 2px corners, flat matte surface. */
+.picker-grid.film-grid .picker-tile {
+  background: linear-gradient(180deg, #141414 0%, #0e0e0e 100%);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  min-height: 56px;
+  position: relative;
+  overflow: hidden;
+  padding-left: 40px;
+  border-radius: 2px;
+}
+/* Higher specificity wins over .picker-tile.favorite::before — that's why
+   favorite film tiles lose the dot. The strip carries more identity anyway. */
+.picker-grid.film-grid .picker-tile::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 26px;
+  background: linear-gradient(
+    to bottom,
+    var(--brand-c1, #2a2a2a) 0%,
+    var(--brand-c1, #2a2a2a) 50%,
+    var(--brand-c2, #1e1e1e) 50%,
+    var(--brand-c2, #1e1e1e) 100%
+  );
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
+  border-right: 1px solid rgba(0, 0, 0, 0.7);
+}
+
+/* ISO pills — sharp rectangles, tabular numerals. Background encodes film
+   type (bw / color / slide); text stays white for legibility on all three. */
+.picker-tile .iso-badge {
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  font-variant-numeric: tabular-nums;
+}
+.picker-tile .iso-badge--bw {
+  background: #050505;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+}
+.picker-tile .iso-badge--color { background: #2f9d55; }
+.picker-tile .iso-badge--slide { background: #7b5be0; }
+
+.picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Settings ---------- */
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.settings-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.settings-section {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 16px 0 4px;
+  box-shadow: none;
+}
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.settings-section-head h3 {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.settings-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  padding: 12px 0 6px;
+  font-style: normal;
+}
+.settings-group-label:first-child { padding-top: 2px; }
+
+/* Settings rows are contiguous list items separated by hairlines — the
+   "contiguous settings list" the brief called for. No cards, no pills. */
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 2px;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+}
+.settings-row:hover { background: rgba(255, 255, 255, 0.025); }
+.settings-row.archived { opacity: 0.5; }
+.settings-row-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.settings-row-name .sub {
+  color: var(--muted);
+  font-size: 10px;
+  margin-left: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.settings-row-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--muted-2);
+  padding: 2px 6px;
+}
+.settings-row-star.on { color: var(--yellow); }
+
+.settings-row-edit,
+.settings-row-archive {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--font-ui);
+  padding: 3px 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+}
+.settings-row-edit:hover,
+.settings-row-archive:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.archived-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+/* ---------- Settings form panel ---------- */
+.settings-form {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 2px;
+}
+.settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-weight: 600;
+}
+.settings-form input,
+.settings-form select {
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #0c0c0c 0%, #080808 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.settings-form input:focus,
+.settings-form select:focus {
+  outline: none;
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px rgba(243, 190, 34, 0.16);
+}
+.settings-form .kinds-group {
+  display: flex;
+  gap: 12px;
+  padding: 6px 0;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.settings-form .kinds-group label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.settings-form-error {
+  color: var(--red);
+  font-size: 11px;
+  padding: 4px 2px;
+  min-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+/* Dual-input color row — native picker + hex text. */
+.color-hex-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.color-hex-row .color-hex-picker {
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.color-hex-row .color-hex-text {
+  flex: 1;
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
+@media (max-width: 860px) {
+  .top {
+    align-items: flex-start;
+  }
+
+  .status {
+    flex: 1;
+  }
+
+  .folder-row,
+  .actions-section,
+  .actions-left,
+  .actions-right,
+  .settings-section-head,
+  .settings-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .tile-row,
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-row {
+    grid-template-columns: 1fr auto auto;
+  }
+}
+
+/* ---------- Utility ---------- */
+.hidden { display: none !important; }
