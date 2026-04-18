@@ -15,6 +15,7 @@ const state = {
   film: null,
   previewInvert: false,
   lastDryRunResult: null,
+  previewBuildController: null,
   fileKeywords: {},
   fileLensOverrides: {},
   fileKeywordEditorOpen: {},
@@ -264,6 +265,37 @@ function renderPreviewInvertToggle() {
   const btn = document.getElementById("preview-invert-toggle");
   btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
   btn.textContent = `Invert previews: ${state.previewInvert ? "on" : "off"}`;
+}
+
+function fileHasPreview(file) {
+  if (!file) return false;
+  return state.previewInvert ? !!file.has_inverted_preview : !!file.has_thumbnail;
+}
+
+function missingPreviewCount() {
+  return (state.scan?.files || []).filter(file => !fileHasPreview(file)).length;
+}
+
+function renderCreatePreviewsButton() {
+  const btn = document.getElementById("create-previews-btn");
+  const missing = missingPreviewCount();
+  if (state.previewBuildController) {
+    btn.classList.remove("hidden");
+    btn.disabled = false;
+    btn.textContent = btn.dataset.progressText || "Stop";
+    return;
+  }
+  if (!state.scan || missing === 0) {
+    btn.classList.add("hidden");
+    btn.disabled = true;
+    btn.textContent = "Create previews";
+    delete btn.dataset.progressText;
+    return;
+  }
+  btn.classList.remove("hidden");
+  btn.disabled = false;
+  btn.textContent = missing === (state.scan.files || []).length ? "Create previews" : "Create missing previews";
+  delete btn.dataset.progressText;
 }
 
 // ---------- Tiles ----------
@@ -761,9 +793,11 @@ function updateActionButtons() {
   // Camera/lens/film are all optional — at minimum we still write Roll|<id>
   // and any extras/dev/scan keywords, which is useful even with no gear set.
   const ready = !!(state.folder && state.scan);
-  document.getElementById("create-previews-btn").disabled = !ready;
-  document.getElementById("dry-run-btn").disabled = !ready;
-  document.getElementById("apply-btn").disabled = !ready;
+  const busy = !!state.previewBuildController;
+  renderCreatePreviewsButton();
+  document.getElementById("dry-run-btn").disabled = !ready || busy;
+  document.getElementById("apply-btn").disabled = !ready || busy;
+  document.getElementById("preview-invert-toggle").disabled = !ready || busy;
 }
 
 async function onDryRun() {
@@ -781,29 +815,96 @@ async function onDryRun() {
 
 async function onCreatePreviews() {
   if (!state.folder || !state.scan) return;
+  if (state.previewBuildController) {
+    state.previewBuildController.abort();
+    return;
+  }
   const btn = document.getElementById("create-previews-btn");
-  btn.disabled = true;
-  btn.textContent = "Creating…";
   clearPreviewStatus();
+  const controller = new AbortController();
+  state.previewBuildController = controller;
+  btn.dataset.progressText = "Stop";
+  updateActionButtons();
+  let total = missingPreviewCount();
+  let processed = 0;
+  let created = 0;
+  let failed = 0;
   try {
-    const res = await api("/api/previews/create", {
+    const res = await fetch("/api/previews/create/stream", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ folder: state.folder, invert: state.previewInvert }),
+      signal: controller.signal,
     });
-    markPreviewFilesAvailable(res.created_files.concat(res.reused_files));
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let doneEvent = null;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "start") {
+          total = ev.total;
+          btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
+          renderCreatePreviewsButton();
+        } else if (ev.type === "progress") {
+          processed += 1;
+          if (ev.status === "created" || ev.status === "reused") {
+            created += 1;
+            markPreviewFilesAvailable([ev.file]);
+            if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
+          } else if (ev.status === "failed") {
+            failed += 1;
+          }
+          btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
+          renderCreatePreviewsButton();
+        } else if (ev.type === "done") {
+          doneEvent = ev;
+        }
+      }
+    }
+    const cancelled = !!doneEvent?.cancelled;
+    failed = doneEvent?.failed?.length ?? failed;
+    created = doneEvent?.created_files?.length ?? created;
     const parts = [];
-    if (res.created_files.length) parts.push(`${res.created_files.length} created`);
-    if (res.reused_files.length) parts.push(`${res.reused_files.length} reused`);
-    if (res.failed.length) parts.push(`${res.failed.length} failed`);
+    if (created) parts.push(`${created} ready`);
+    if (failed) parts.push(`${failed} failed`);
     renderPreviewStatus(
-      parts.length ? `Previews: ${parts.join(", ")}.` : "No previewable files found.",
-      res.failed.length ? "warn" : "ok"
+      parts.length
+        ? `Previews: ${parts.join(", ")}${cancelled ? ", cancelled early" : ""}.`
+        : cancelled
+          ? "Preview creation cancelled."
+          : "No previewable files were missing.",
+      failed || cancelled ? "warn" : "ok"
     );
+    if (doneEvent?.created_files?.length) markPreviewFilesAvailable(doneEvent.created_files);
     if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
   } catch (e) {
-    renderPreviewStatus(`Could not create previews: ${e.message}`, "bad");
+    if (e.name === "AbortError") {
+      const parts = [];
+      if (created) parts.push(`${created} ready`);
+      if (failed) parts.push(`${failed} failed`);
+      renderPreviewStatus(
+        parts.length ? `Preview creation stopped: ${parts.join(", ")}.` : "Preview creation stopped.",
+        "warn"
+      );
+    } else {
+      renderPreviewStatus(`Could not create previews: ${e.message}`, "bad");
+    }
   } finally {
-    btn.textContent = "Create previews";
+    state.previewBuildController = null;
+    delete btn.dataset.progressText;
     updateActionButtons();
   }
 }
@@ -811,7 +912,13 @@ async function onCreatePreviews() {
 function markPreviewFilesAvailable(fileNames) {
   const ready = new Set(fileNames);
   for (const file of state.scan?.files || []) {
-    if (ready.has(file.name)) file.has_thumbnail = true;
+    if (ready.has(file.name)) {
+      if (state.previewInvert) {
+        file.has_inverted_preview = true;
+      } else {
+        file.has_thumbnail = true;
+      }
+    }
   }
 }
 
@@ -825,7 +932,7 @@ function renderDiff(result) {
     const frag = document.createElement("div");
     frag.className = "diff-file";
     const scanFile = scanFilesByName.get(file.name);
-    const hasThumbnail = !!scanFile?.has_thumbnail;
+    const hasThumbnail = fileHasPreview(scanFile);
     const thumbUrl = hasThumbnail
       ? buildThumbnailUrl(state.folder, file.name, state.previewInvert)
       : "";

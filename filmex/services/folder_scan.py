@@ -46,6 +46,7 @@ class ScannedFile:
     long_edge_px: Optional[int]
     source_kind: str
     has_thumbnail: bool = False
+    has_inverted_preview: bool = False
 
 
 @dataclass
@@ -101,7 +102,8 @@ def scan_folder(folder: str | Path) -> ScanResult:
                 name=entry.name,
                 long_edge_px=long_edge,
                 source_kind=kind,
-                has_thumbnail=previews.has_preview(entry) or previews.has_any_cached_preview(entry),
+                has_thumbnail=previews.has_preview(entry, invert=False),
+                has_inverted_preview=previews.has_preview(entry, invert=True),
             )
         )
 

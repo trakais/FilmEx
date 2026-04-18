@@ -57,6 +57,7 @@ def test_tiff_with_thm_marks_thumbnail(make_thm, tmp_path):
     assert len(result.files) == 1
     assert result.files[0].name == "004243560012.tif"
     assert result.files[0].has_thumbnail is True
+    assert result.files[0].has_inverted_preview is False
 
 
 def test_raw_folder_detection(make_dng, tmp_path):

@@ -40,6 +40,17 @@ class PreviewBuildReport:
         return self.created_files + self.reused_files
 
 
+def previewable_entries(folder: str | Path) -> list[Path]:
+    folder_path = Path(folder).expanduser().resolve()
+    return [
+        entry
+        for entry in sorted(folder_path.iterdir())
+        if entry.is_file()
+        and not entry.is_symlink()
+        and entry.suffix.lower() in SUPPORTED_JPG_EXTS | SUPPORTED_TIF_EXTS | SUPPORTED_RAW_EXTS
+    ]
+
+
 def preview_cache_dir() -> Path:
     path = ensure_data_dir() / "preview_cache"
     path.mkdir(parents=True, exist_ok=True)
@@ -116,15 +127,12 @@ def ensure_preview(file_path: str | Path, *, invert: bool = False) -> tuple[Path
 
 
 def build_previews(folder: str | Path, *, invert: bool = False) -> PreviewBuildReport:
-    folder_path = Path(folder).expanduser().resolve()
     report = PreviewBuildReport()
-    for entry in sorted(folder_path.iterdir()):
-        if entry.is_symlink() or not entry.is_file():
-            continue
-        suffix = entry.suffix.lower()
-        if suffix not in SUPPORTED_JPG_EXTS | SUPPORTED_TIF_EXTS | SUPPORTED_RAW_EXTS:
-            continue
+    for entry in previewable_entries(folder):
         try:
+            if has_preview(entry, invert=invert):
+                report.reused_files.append(entry.name)
+                continue
             _, created = ensure_preview(entry, invert=invert)
         except PreviewUnavailable as e:
             report.failed.append(f"{entry.name}: {e}")
@@ -134,6 +142,10 @@ def build_previews(folder: str | Path, *, invert: bool = False) -> PreviewBuildR
         else:
             report.reused_files.append(entry.name)
     return report
+
+
+def missing_preview_entries(folder: str | Path, *, invert: bool = False) -> list[Path]:
+    return [entry for entry in previewable_entries(folder) if not has_preview(entry, invert=invert)]
 
 
 def _load_preview_image(path: Path, *, thm: Path | None) -> Image.Image:

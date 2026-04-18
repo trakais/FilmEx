@@ -39,6 +39,7 @@ def test_folder_scan_reports_tiff_thumbnail_presence(client, roll_factory):
     res = client.post("/api/folder/scan", json={"folder": str(folder)}).json()
     assert res["source_kind"] == "positive_master_tiff"
     assert res["files"][0]["has_thumbnail"] is True
+    assert res["files"][0]["has_inverted_preview"] is False
 
 
 def test_folder_scan_404_on_missing(client, tmp_path):
@@ -501,6 +502,28 @@ def test_create_previews_endpoint_reports_created_and_failed(client, roll_factor
     body = res.json()
     assert "scan_000.jpg" in body["created_files"]
     assert any(line.startswith("frame_000.dng:") for line in body["failed"])
+    assert list((data_dir / "preview_cache").glob("*.jpg"))
+
+
+def test_create_previews_stream_reports_progress_and_done(client, roll_factory, data_dir):
+    folder = roll_factory("2026-04-17_R108G", jpegs=1, tiffs=1, tiff_thumbnails=True)
+    with client.stream(
+        "POST",
+        "/api/previews/create/stream",
+        json={"folder": str(folder), "invert": False},
+    ) as res:
+        assert res.status_code == 200, res.text
+        events = [json.loads(line) for line in res.iter_lines() if line]
+
+    assert events[0]["type"] == "start"
+    assert events[0]["total"] == 1
+    assert events[1]["type"] == "progress"
+    assert events[1]["file"] == "scan_000.jpg"
+    assert events[1]["status"] == "created"
+    assert events[-1]["type"] == "done"
+    assert events[-1]["created_files"] == ["scan_000.jpg"]
+    assert events[-1]["failed"] == []
+    assert events[-1]["cancelled"] is False
     assert list((data_dir / "preview_cache").glob("*.jpg"))
 
 

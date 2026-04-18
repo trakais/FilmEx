@@ -7,6 +7,7 @@ service layer.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -17,7 +18,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -145,6 +146,7 @@ def folder_scan(req: FolderScanRequest) -> FolderScanResponse:
                 name=f.name,
                 long_edge_px=f.long_edge_px,
                 has_thumbnail=f.has_thumbnail,
+                has_inverted_preview=f.has_inverted_preview,
             )
             for f in result.files
         ],
@@ -354,6 +356,52 @@ def create_previews(req: PreviewBuildRequest) -> PreviewBuildResponse:
         reused_files=report.reused_files,
         failed=report.failed,
     )
+
+
+@router.post("/api/previews/create/stream")
+async def create_previews_stream(
+    req: PreviewBuildRequest,
+    request: Request,
+) -> StreamingResponse:
+    try:
+        targets = pv.missing_preview_entries(req.folder, invert=req.invert)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    async def gen():
+        created_files: list[str] = []
+        failed: list[str] = []
+        cancelled = False
+
+        yield json.dumps({"type": "start", "total": len(targets)}) + "\n"
+        for entry in targets:
+            if await request.is_disconnected():
+                cancelled = True
+                break
+            try:
+                _, created = await asyncio.to_thread(pv.ensure_preview, entry, invert=req.invert)
+                status = "created" if created else "reused"
+                if created:
+                    created_files.append(entry.name)
+                yield json.dumps({"type": "progress", "file": entry.name, "status": status}) + "\n"
+            except pv.PreviewUnavailable as e:
+                msg = f"{entry.name}: {e}"
+                failed.append(msg)
+                yield json.dumps(
+                    {"type": "progress", "file": entry.name, "status": "failed", "error": msg}
+                ) + "\n"
+
+        yield json.dumps(
+            {
+                "type": "done",
+                "folder": req.folder,
+                "created_files": created_files,
+                "failed": failed,
+                "cancelled": cancelled,
+            }
+        ) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 def _resolve_folder_file(folder: str, name: str) -> Path:

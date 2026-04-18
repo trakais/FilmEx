@@ -15,6 +15,7 @@ class FileEntry(BaseModel):
     name: str
     long_edge_px: Optional[int] = None
     has_thumbnail: bool = False
+    has_inverted_preview: bool = False
 
 
 class FolderScanResponse(BaseModel):
