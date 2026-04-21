@@ -272,7 +272,8 @@ def metadata_apply(
     for event in _run_apply(ctx):
         if event["type"] == "done":
             final = event
-    assert final is not None
+    if final is None:
+        raise RuntimeError("apply pipeline did not produce a done event")
     return ApplyResponse(
         folder=final["folder"],
         roll_id=final["roll_id"],
