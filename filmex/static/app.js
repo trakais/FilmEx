@@ -136,12 +136,14 @@ async function init() {
 }
 
 async function refreshExifToolStatus() {
+  // Only surface this pill when something is wrong. A green "EXIFTOOL OK"
+  // badge is backend plumbing the user has no reason to watch every time.
   const el = document.getElementById("exiftool-status");
   try {
     const h = await api("/api/health");
     if (h.exiftool_available) {
-      el.textContent = "exiftool ok";
-      el.className = "pill ok";
+      el.className = "pill ok hidden";
+      el.textContent = "";
     } else {
       el.textContent = "exiftool missing";
       el.className = "pill bad";
@@ -222,6 +224,15 @@ async function onScan() {
   }
 }
 
+// Feather-ish refresh-cw: 3/4 arc + single arrow head. Sized to match the
+// summary-value text height; strokes pick up currentColor so hover can
+// flip it yellow. Used as the rescan affordance next to the file count.
+const REFRESH_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<polyline points="23 4 23 10 17 10"/>' +
+    '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>' +
+  '</svg>';
+
 function renderScanSummary() {
   const el = document.getElementById("scan-summary");
   if (!state.scan) { el.classList.add("hidden"); return; }
@@ -229,8 +240,17 @@ function renderScanSummary() {
   const count = state.scan.files.length;
   const sourceLabel = scanSourceKindLabel(state.scan.source_kind);
   const tierLabel = scanTierLabel(state.scan.source_kind, state.scan.scan_tier);
+  const filesValue = `${count} image${count === 1 ? "" : "s"}`;
+  // Files item is hand-built so the count + rescan icon sit in the same
+  // flex line, right where the eye lands to check "did my new files land?".
+  const filesMarkup =
+    `<span class="summary-item">` +
+      `<span class="summary-label">Files</span>` +
+      `<span class="summary-value summary-value--accent">${escapeHtml(filesValue)}</span>` +
+      `<button id="scan-refresh-btn" type="button" class="summary-refresh" aria-label="Rescan folder" title="Rescan folder">${REFRESH_ICON_SVG}</button>` +
+    `</span>`;
   const parts = [
-    renderScanSummaryItem("Files", `${count} image${count === 1 ? "" : "s"}`, "summary-value--accent"),
+    filesMarkup,
     renderScanSummaryItem("Source", sourceLabel),
   ];
   if (tierLabel) {
@@ -238,6 +258,8 @@ function renderScanSummary() {
   }
   parts.push(renderScanSummaryItem("Folder", state.scan.roll_id, "summary-code"));
   el.innerHTML = parts.join("");
+  const refreshBtn = document.getElementById("scan-refresh-btn");
+  if (refreshBtn) refreshBtn.addEventListener("click", onScan);
 }
 
 function renderScanSummaryItem(label, value, valueClass = "") {
@@ -554,12 +576,12 @@ async function renderPickerGrid() {
 
   grid.innerHTML = "";
   if (activePickerKind === "film") {
-    for (const [brand, groupItems] of groupPickerFilms(filtered)) {
+    for (const group of groupPickerFilms(filtered)) {
       const label = document.createElement("div");
-      label.className = "picker-group-label";
-      label.textContent = brand;
+      label.className = "picker-group-label" + (group.modifier ? ` picker-group-label--${group.modifier}` : "");
+      label.textContent = group.label;
       grid.appendChild(label);
-      for (const item of groupItems) {
+      for (const item of group.items) {
         grid.appendChild(renderPickerTile(item, activePickerKind));
       }
     }
@@ -595,23 +617,39 @@ function filmBrandColors(brand) {
 }
 
 function groupPickerFilms(items) {
-  const sorted = [...items].sort((a, b) => {
+  // Returns [{ label, modifier, items }] — a "Favorites" group (if any
+  // favorites exist) followed by one group per brand. Favorites are NOT
+  // duplicated in their brand groups; pulling them out of the brand list
+  // is how the top group stays meaningful.
+  const byName = (a, b) => (a.display_name || "").localeCompare(b.display_name || "");
+  const favorites = items.filter(i => i.favorite).sort(byName);
+  const rest = items.filter(i => !i.favorite).sort((a, b) => {
     const brandCmp = (a.brand || "").localeCompare(b.brand || "");
     if (brandCmp !== 0) return brandCmp;
-    if (!!a.favorite !== !!b.favorite) return a.favorite ? -1 : 1;
-    return (a.display_name || "").localeCompare(b.display_name || "");
+    return byName(a, b);
   });
-  const groups = new Map();
-  for (const item of sorted) {
-    const brand = item.brand || "Other";
-    if (!groups.has(brand)) groups.set(brand, []);
-    groups.get(brand).push(item);
+
+  const groups = [];
+  if (favorites.length > 0) {
+    groups.push({ label: "Favorites", modifier: "favorites", items: favorites });
   }
-  return [...groups.entries()];
+  const brandGroups = new Map();
+  for (const item of rest) {
+    const brand = item.brand || "Other";
+    if (!brandGroups.has(brand)) brandGroups.set(brand, []);
+    brandGroups.get(brand).push(item);
+  }
+  for (const [brand, groupItems] of brandGroups) {
+    groups.push({ label: brand, modifier: null, items: groupItems });
+  }
+  return groups;
 }
 
 function renderPickerTile(item, kind) {
   const tile = document.createElement("div");
+  // Film tiles would collide with the brand-color strip if we reused the
+  // default .favorite ::before dot — the CSS resolves that by attaching the
+  // film-grid favorite marker to ::after instead, so the class is safe here.
   tile.className = "picker-tile" + (item.favorite ? " favorite" : "");
 
   if (kind === "film") {
@@ -656,14 +694,32 @@ function renderPickerTile(item, kind) {
   return tile;
 }
 
+// Case-insensitive mount comparison. AGENTS.md says lens.mount must exactly
+// match a camera's mount, but we normalize anyway so stray whitespace or
+// mixed-case DB edits don't wrongly clear a valid pairing.
+function lensMountMatchesCamera(lens, camera) {
+  if (!lens || !camera) return false;
+  const lm = (lens.mount || "").trim().toLowerCase();
+  const cm = (camera.mount || "").trim().toLowerCase();
+  if (!lm || !cm) return false;
+  return lm === cm;
+}
+
 function selectFromPicker(item) {
   if (activePickerKind === "camera") {
     state.camera = item;
     state.fileLensOverrides = {};
-    // If camera has a fixed lens, auto-populate it.
+    // Auto-populate the fixed lens first — a Fixed-Lens camera always mounts
+    // its own lens, and the compat check below then confirms it.
     if (item.fixed_lens_id) {
       const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
       if (lens) state.lens = lens;
+    }
+    // Drop the currently selected lens if its mount doesn't match the new
+    // camera. Saves the user from noticing the mismatch themselves; they
+    // can still bypass via "Show all (ignore mount)" in the lens picker.
+    if (state.lens && !lensMountMatchesCamera(state.lens, item)) {
+      state.lens = null;
     }
   } else if (activePickerKind === "lens") {
     state.lens = item;
@@ -1504,9 +1560,9 @@ function renderSettingsList(kind) {
 }
 
 function groupRows(rows, groupBy) {
-  // Sort: favorites first, then alpha by primary key or name.
+  // Sort alpha by primary key or name. Favorites no longer jump to the top
+  // so toggling a star in Settings does not make the row leap around.
   const sorted = [...rows].sort((a, b) => {
-    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
     const aKey = a.display_name || a.name || "";
     const bKey = b.display_name || b.name || "";
     return aKey.localeCompare(bKey);
@@ -1795,7 +1851,6 @@ function similarMountSuggestion(value) {
 window.addEventListener("DOMContentLoaded", () => {
   init();
 
-  document.getElementById("scan-btn").addEventListener("click", onScan);
   document.getElementById("browse-btn").addEventListener("click", onBrowse);
   document.getElementById("folder-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); onScan(); }

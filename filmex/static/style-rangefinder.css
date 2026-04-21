@@ -17,11 +17,16 @@
   --surface: #101010;
   --surface-2: #171717;
   --surface-3: #1d1d1d;
-  --border: #242424;
-  --border-strong: #404040;
+  /* Borders tuned for bright-room readability: --border is the hairline
+     separator (folder input, summary rails, settings rows), --border-strong
+     carries intentional structure (primary/secondary buttons, selected tile,
+     drop overlay). The gap between them has to survive a glossy laptop panel
+     at noon, so keep them two notches apart, not one. */
+  --border: #2d2d2d;
+  --border-strong: #4a4a4a;
   --text: #f3f3f0;
   --muted: #999890;
-  --muted-2: #66645d;
+  --muted-2: #7a7870;
 
   --red: #d90d16;
   --red-hover: #f12630;
@@ -60,9 +65,19 @@ body {
   /* Tabular figures everywhere — aligned numerics are a Leica hallmark. */
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  background:
+  /* Three stacked layers, top → bottom:
+     1. SVG fractal-noise tile (matte vulcanite grain, ~3% alpha)
+     2. top-left soft wash (the "glass reflection" on a camera back)
+     3. base near-black → --bg vertical falloff.
+     Noise is fixed-attachment so it doesn't crawl while the preview scrolls. */
+  background-color: var(--bg);
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.035 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"),
     radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.035), transparent 24%),
     linear-gradient(180deg, #0a0a0a 0%, var(--bg) 28%);
+  background-attachment: fixed, fixed, fixed;
+  background-size: 160px 160px, 100% 100%, 100% 100%;
+  background-repeat: repeat, no-repeat, no-repeat;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -167,7 +182,7 @@ section h2::after {
 .folder-row input[type=text]:focus {
   outline: none;
   border-color: var(--text);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 0 1px rgba(243, 190, 34, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 0 0 2px rgba(243, 190, 34, 0.22);
 }
 
 .summary {
@@ -249,6 +264,39 @@ section h2::after {
   text-transform: none;
 }
 
+/* Rescan icon lives inside the Files summary-item. Reset every caps/padding
+   rule the base button style dumps on it, then size the SVG to match the
+   count it sits next to. Hover flips to calibration yellow — same cue as
+   the rest of the "something changed" microstates. */
+.summary-refresh {
+  padding: 2px 4px;
+  margin-left: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--muted);
+  line-height: 0;
+  font-size: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  cursor: pointer;
+  transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.summary-refresh:hover:not(:disabled) {
+  color: var(--yellow);
+  border-color: var(--border);
+  background: transparent;
+}
+.summary-refresh:active:not(:disabled) {
+  color: var(--text);
+}
+.summary-refresh svg { display: block; }
+
 @media (max-width: 640px) {
   #scan-summary {
     gap: 10px;
@@ -294,20 +342,39 @@ section h2::after {
 }
 .tile:active { transform: none; }
 
-/* Selected state: red bar down the left edge — the "active channel" marker
-   on a precision instrument. Exactly 3px wide, flush with the border. */
+/* Selected state: just the four yellow corner brackets — rangefinder
+   frameline cue. The earlier red-bar + yellow underline clashed with them
+   and made the tile feel busy next to the calibration ticks elsewhere. */
 .tile.selected {
   border-color: var(--border-strong);
-  box-shadow: inset 0 -1px 0 var(--yellow);
 }
-.tile.selected::before {
+/* Four yellow L-brackets, one at each corner. Each L is a 7px horizontal
+   + 7px vertical stroke painted as background layers on ::after. */
+.tile.selected::after {
   content: "";
   position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--red);
+  inset: 4px;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow)),
+    linear-gradient(var(--yellow), var(--yellow));
+  background-repeat: no-repeat;
+  background-position:
+    top left, top left,
+    top right, top right,
+    bottom left, bottom left,
+    bottom right, bottom right;
+  background-size:
+    7px 1px, 1px 7px,
+    7px 1px, 1px 7px,
+    7px 1px, 1px 7px,
+    7px 1px, 1px 7px;
 }
 
 .tile-clear {
@@ -470,7 +537,7 @@ section h2::after {
 .field-grid select:focus {
   outline: none;
   border-color: var(--text);
-  box-shadow: 0 0 0 1px rgba(243, 190, 34, 0.16);
+  box-shadow: 0 0 0 2px rgba(243, 190, 34, 0.22);
 }
 
 /* ---------- Actions ---------- */
@@ -540,16 +607,33 @@ button.primary:hover:not(:disabled) {
 }
 
 /* .danger is the Apply button — the one red action on the page.
-   Iconic through restraint: flat solid red, white lettering, upright caps. */
+   Iconic through restraint: flat solid red, white lettering, upright caps.
+   The two thin knurl stripes along top and bottom are vertical 1-px hairlines
+   every 3px — a camera-grip texture cue, kept at 8% white so it registers
+   as tactility, not stripes. */
 button.danger {
-  background: var(--red);
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.08) 0 1px,
+      transparent 1px 3px) top / 100% 3px no-repeat,
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.08) 0 1px,
+      transparent 1px 3px) bottom / 100% 3px no-repeat,
+    var(--red);
   border-color: var(--red);
   color: #fff;
   font-weight: 600;
   letter-spacing: 0.18em;
 }
 button.danger:hover:not(:disabled) {
-  background: var(--red-hover);
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.12) 0 1px,
+      transparent 1px 3px) top / 100% 3px no-repeat,
+    repeating-linear-gradient(90deg,
+      rgba(255, 255, 255, 0.12) 0 1px,
+      transparent 1px 3px) bottom / 100% 3px no-repeat,
+    var(--red-hover);
   border-color: var(--red-hover);
   filter: none;
 }
@@ -557,16 +641,17 @@ button.danger:hover:not(:disabled) {
 button.secondary {
   background: transparent;
   color: var(--text);
-  border-color: var(--border);
+  border-color: var(--border-strong);
 }
 button.secondary:hover:not(:disabled) {
-  border-color: var(--border-strong);
+  border-color: var(--text);
   color: var(--text);
 }
 
 button:disabled {
-  opacity: 0.4;
-  filter: grayscale(0.7);
+  color: var(--muted-2);
+  border-color: var(--border);
+  background: transparent;
   cursor: not-allowed;
 }
 
@@ -588,27 +673,51 @@ button:disabled {
 
 /* ---------- Diff ---------- */
 /* Diff and apply sections shed their card chrome in this theme and live as
-   a bare list, separated by hairlines. More instrument-panel, less card. */
+   a bare list. Each row separator is a three-layer focus-scale strip:
+     - major ticks every 110px (border-strong, 3px tall)
+     - minor ticks every 22px  (border, 4px tall)
+     - baseline hairline at the bottom of the strip (fading)
+   Painted as a background stack so no extra DOM is needed; the scale sits
+   in the top padding of each block and reads as a calibrated row divider. */
+.diff-section,
+.apply-section,
+.diff-file {
+  background-image:
+    repeating-linear-gradient(90deg,
+      var(--border-strong) 0 1px,
+      transparent 1px 110px),
+    repeating-linear-gradient(90deg,
+      var(--border) 0 1px,
+      transparent 1px 22px),
+    linear-gradient(90deg, var(--border) 0%, rgba(36, 36, 36, 0) 100%);
+  background-position: 0 0, 0 0, 0 4px;
+  background-size: 100% 3px, 100% 4px, 100% 1px;
+  background-repeat: no-repeat;
+}
+
 .diff-section,
 .apply-section {
   padding: 0;
-  padding-top: 18px;
-  background: transparent;
+  padding-top: 22px;
+  background-color: transparent;
   border: none;
-  border-top: 1px solid var(--border);
   border-radius: 0;
   box-shadow: none;
 }
 
 .diff-file {
-  border-top: 1px solid var(--border);
-  padding: 20px 0;
+  padding: 22px 0 20px;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 18px;
   align-items: start;
 }
-.diff-file:first-child { border-top: none; padding-top: 4px; }
+/* First file in a section inherits the section's scale strip above it, so
+   it drops its own — two back-to-back scales would just look like stripes. */
+.diff-file:first-child {
+  padding-top: 6px;
+  background-image: none;
+}
 .diff-file-main { min-width: 0; }
 
 .diff-file-header {
@@ -708,7 +817,7 @@ button:disabled {
 
 .diff-row {
   display: grid;
-  grid-template-columns: 196px 56px 1fr;
+  grid-template-columns: 196px 72px 1fr;
   gap: 12px;
   font-size: 13px;
   align-items: baseline;
@@ -726,6 +835,21 @@ button:disabled {
   letter-spacing: 0.18em;
   font-size: 10px;
   font-weight: 600;
+}
+/* Bracket the action tag so the column reads as an LCD state readout —
+   [ SET ], [ MERGE ], [ SKIP ] — rather than a lonely word. Brackets stay
+   in the muted-2 tone so the action word itself keeps the color accent. */
+.diff-action::before {
+  content: "[";
+  color: var(--muted-2);
+  margin-right: 4px;
+  font-weight: 500;
+}
+.diff-action::after {
+  content: "]";
+  color: var(--muted-2);
+  margin-left: 4px;
+  font-weight: 500;
 }
 /* SET → calibration yellow ("this value is being stamped").
    MERGE → neutral white (additive merge into an existing list).
@@ -866,6 +990,24 @@ button:disabled {
 }
 .picker-group-label:first-child { padding-top: 2px; }
 
+/* Favorites pseudo-group at the top of the film picker. Yellow caps with a
+   calibration dot matches the dot on individual favorite tiles — same cue,
+   different scale, so the eye chains them together. */
+.picker-group-label--favorites {
+  color: var(--yellow);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.picker-group-label--favorites::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--yellow);
+  flex: none;
+}
+
 .picker-tile {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, transparent 100%);
   border: 1px solid var(--border);
@@ -919,12 +1061,27 @@ button:disabled {
   border-radius: 2px;
 }
 /* Higher specificity wins over .picker-tile.favorite::before — that's why
-   favorite film tiles lose the dot. The strip carries more identity anyway. */
+   favorite film tiles lose the dot. We re-instate it on ::after instead. */
+.picker-grid.film-grid .picker-tile.favorite::after {
+  content: "";
+  position: absolute;
+  top: 9px; right: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--yellow);
+}
 .picker-grid.film-grid .picker-tile::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
   width: 26px;
+  /* Explicitly reset height and border-radius — the generic
+     .picker-tile.favorite::before rule also sets these, and specificity
+     only resolves per-property: anything film-grid doesn't redeclare leaks
+     through and collapses the strip into a squished oval on favorite rows. */
+  height: auto;
+  border-radius: 0;
   background: linear-gradient(
     to bottom,
     var(--brand-c1, #2a2a2a) 0%,
@@ -949,12 +1106,22 @@ button:disabled {
   grid-row: 1 / span 2;
   font-variant-numeric: tabular-nums;
 }
+/* Muted tints that stay inside the graphite/yellow instrument palette.
+   Each pill is a tiny machined plate: top-to-bottom gradient for depth,
+   a hairline inset highlight to pick out the edge against the tile surface.
+   Color negative = warm amber, Slide = cool violet, BW = graphite silver. */
 .picker-tile .iso-badge--bw {
-  background: #050505;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, #3a3a3a 0%, #1e1e1e 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
-.picker-tile .iso-badge--color { background: #2f9d55; }
-.picker-tile .iso-badge--slide { background: #7b5be0; }
+.picker-tile .iso-badge--color {
+  background: linear-gradient(180deg, #bd7a2c 0%, #8c5821 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.picker-tile .iso-badge--slide {
+  background: linear-gradient(180deg, #6a5a92 0%, #463961 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
 
 .picker-foot {
   display: flex;
@@ -1124,7 +1291,7 @@ button:disabled {
 .settings-form select:focus {
   outline: none;
   border-color: var(--text);
-  box-shadow: 0 0 0 1px rgba(243, 190, 34, 0.16);
+  box-shadow: 0 0 0 2px rgba(243, 190, 34, 0.22);
 }
 .settings-form .kinds-group {
   display: flex;
