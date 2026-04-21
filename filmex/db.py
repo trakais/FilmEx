@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from typing import Optional
 
 from sqlmodel import Session, SQLModel, create_engine
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
 from filmex.config import DEFAULT_DB, db_path, ensure_data_dir
@@ -25,7 +26,19 @@ def get_engine() -> Engine:
         _engine = create_engine(
             url, echo=False, connect_args={"check_same_thread": False}
         )
+        _enable_sqlite_foreign_keys(_engine)
     return _engine
+
+
+def _enable_sqlite_foreign_keys(engine: Engine) -> None:
+    """SQLite ships with FK enforcement off; turn it on for every connection
+    so Camera.fixed_lens_id → Lens.id is actually checked."""
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.close()
 
 
 def _bootstrap_from_default_if_missing() -> None:

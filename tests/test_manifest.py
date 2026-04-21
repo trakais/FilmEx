@@ -190,15 +190,3 @@ def test_set_file_overrides_replaces_with_cleaned_keywords(tmp_path):
     }
 
 
-def test_diff_to_jsonable_accepts_dataclasses():
-    from filmex.services.exiftool import TagChange
-
-    payload = mf.diff_to_jsonable(
-        [
-            TagChange(tag="Make", action="set", before=None, after="FED"),
-            {"tag": "x", "action": "skip", "before": None, "after": None},
-        ]
-    )
-    assert payload[0]["tag"] == "Make"
-    assert payload[0]["after"] == "FED"
-    assert payload[1]["tag"] == "x"

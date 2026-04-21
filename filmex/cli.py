@@ -42,8 +42,6 @@ from filmex.schemas import (
 )
 
 _VALID_PROVIDER_KINDS = {"development", "scan"}
-_VALID_FILM_TYPES = {"color_negative", "bw_negative", "slide", "other"}
-_VALID_PROCESS_TYPES = {"c41", "bw", "e6", "ecn2", "other"}
 
 _BATCH_SECTIONS = (
     "providers",
@@ -312,18 +310,6 @@ def _process_film_stocks(
             payload = FilmStockCreate(**raw)
         except ValidationError as exc:
             sr.errors.append(f"{label}: {_err(exc)}")
-            continue
-        if payload.film_type not in _VALID_FILM_TYPES:
-            sr.errors.append(
-                f"{label}: film_type '{payload.film_type}' invalid; "
-                f"use one of {sorted(_VALID_FILM_TYPES)}"
-            )
-            continue
-        if payload.process_type not in _VALID_PROCESS_TYPES:
-            sr.errors.append(
-                f"{label}: process_type '{payload.process_type}' invalid; "
-                f"use one of {sorted(_VALID_PROCESS_TYPES)}"
-            )
             continue
         if _find_film_brand(session, payload.brand) is None:
             sr.errors.append(

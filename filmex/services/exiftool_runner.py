@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,17 +10,27 @@ from typing import Any
 
 from filmex.services import exiftool as et
 
+_log = logging.getLogger(__name__)
+
 
 def exiftool_available() -> bool:
     return shutil.which("exiftool") is not None
 
 
 def read_tags(path: Path | str, tags: list[str]) -> dict[str, Any]:
-    """Read `tags` from `path` via exiftool, returning a dict."""
+    """Read `tags` from `path` via exiftool, returning a dict.
+
+    Non-zero exit with stdout still parses (exiftool warns on benign issues
+    like missing optional tags but still emits valid JSON), but the stderr is
+    surfaced via the logger so failures aren't entirely silent.
+    """
     argv = et.build_read_argv(path, tags)
     result = subprocess.run(argv, capture_output=True, check=False)
-    if result.returncode != 0 and not result.stdout:
-        return {}
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", "replace").strip()
+        _log.warning("exiftool read_tags(%s) exit=%s stderr=%s", path, result.returncode, stderr)
+        if not result.stdout:
+            return {}
     return et.parse_read_output(result.stdout)
 
 
@@ -42,7 +53,6 @@ def apply_intent(path: Path | str, intent: et.WriteIntent) -> subprocess.Complet
     argv = et.build_argv(
         path,
         intent,
-        dry_run=False,
         overwrite_original=True,
         sidecar_exists=sidecar_exists,
         sidecar_path=sidecar_path,

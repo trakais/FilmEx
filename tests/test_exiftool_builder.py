@@ -112,8 +112,8 @@ def test_sidecar_path_override_edits_legacy_named_xmp():
     assert "photo.xmp" not in argv
 
 
-def test_dry_run_strips_overwrite_original():
-    argv = et.build_argv("photo.jpg", _intent(), dry_run=True)
+def test_overwrite_original_can_be_disabled():
+    argv = et.build_argv("photo.jpg", _intent(), overwrite_original=False)
     assert "-overwrite_original" not in argv
 
 

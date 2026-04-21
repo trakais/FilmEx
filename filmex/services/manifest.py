@@ -165,12 +165,3 @@ def merge_existing_manifest(
     return merged
 
 
-def diff_to_jsonable(diffs: list[Any]) -> list[dict]:
-    """Convert TagChange dataclasses (or dicts) to JSON-safe dicts."""
-    out = []
-    for d in diffs:
-        if hasattr(d, "__dict__"):
-            out.append({k: v for k, v in d.__dict__.items()})
-        elif isinstance(d, dict):
-            out.append(d)
-    return out

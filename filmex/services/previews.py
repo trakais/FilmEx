@@ -73,11 +73,6 @@ def has_preview(file_path: str | Path, *, invert: bool = False) -> bool:
     return existing_preview_path(file_path, invert=invert) is not None
 
 
-def has_any_cached_preview(file_path: str | Path) -> bool:
-    path = Path(file_path)
-    return any(cached_preview_path_for(path, invert=flag).is_file() for flag in (False, True))
-
-
 def existing_preview_path(file_path: str | Path, *, invert: bool = False) -> Path | None:
     path = Path(file_path)
     if not invert:

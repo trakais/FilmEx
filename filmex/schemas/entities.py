@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+# Mirror the documented vocabularies in AGENTS.md (Data model → FilmStock).
+# Centralised here so both the API and the CLI reject typos identically.
+FilmType = Literal["color_negative", "bw_negative", "slide", "other"]
+ProcessType = Literal["c41", "bw", "e6", "ecn2", "other"]
 
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -69,8 +74,8 @@ class FilmStockOut(BaseModel):
     name: str
     display_name: str
     box_speed_iso: int
-    film_type: str
-    process_type: str
+    film_type: FilmType
+    process_type: ProcessType
     notes: Optional[str]
     aliases: list[str] = Field(default_factory=list)
     favorite: bool
@@ -132,8 +137,8 @@ class FilmStockCreate(BaseModel):
     name: str
     display_name: str
     box_speed_iso: int
-    film_type: str
-    process_type: str
+    film_type: FilmType
+    process_type: ProcessType
     notes: Optional[str] = None
     favorite: bool = False
     aliases: list[str] = Field(default_factory=list)
@@ -205,8 +210,8 @@ class FilmStockUpdate(BaseModel):
     name: Optional[str] = None
     display_name: Optional[str] = None
     box_speed_iso: Optional[int] = None
-    film_type: Optional[str] = None
-    process_type: Optional[str] = None
+    film_type: Optional[FilmType] = None
+    process_type: Optional[ProcessType] = None
     notes: Optional[str] = None
     favorite: Optional[bool] = None
     archived: Optional[bool] = None

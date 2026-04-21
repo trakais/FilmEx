@@ -166,7 +166,11 @@ def metadata_dry_run(
     diffs: list[FileDiff] = []
     for file_path in ctx.files:
         existing = _read_existing_tags(file_path)
-        changes = et.diff(existing, _intent_for_file(ctx, file_path.name))
+        changes = et.diff(
+            existing,
+            _intent_for_file(ctx, file_path.name),
+            replace_managed=ctx.replace_managed_metadata,
+        )
         diffs.append(
             FileDiff(
                 name=file_path.name,
@@ -413,7 +417,8 @@ def _resolve_folder_file(folder: str, name: str) -> Path:
     folder_path = Path(folder).expanduser().resolve()
     if not folder_path.is_dir():
         raise HTTPException(status_code=404, detail=f"Folder not found: {folder_path}")
-    if Path(name).name != name:
+    parts = Path(name).parts
+    if len(parts) != 1 or parts[0] in ("", ".", ".."):
         raise HTTPException(status_code=400, detail="name must be a basename, not a path")
 
     target = (folder_path / name).resolve()

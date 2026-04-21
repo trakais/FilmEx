@@ -133,7 +133,6 @@ def build_argv(
     target: Path | str,
     intent: WriteIntent,
     *,
-    dry_run: bool = False,
     overwrite_original: bool = True,
     sidecar_exists: bool = False,
     sidecar_path: Optional[Path | str] = None,
@@ -150,6 +149,9 @@ def build_argv(
     `sidecar_path` lets the caller pin the exact sidecar file to read/write.
     The runner passes this when it found a legacy-named sidecar so we keep
     editing the existing file instead of silently creating a second one.
+
+    There is no dry-run mode here — preview is computed by `diff()` against
+    the file's current tags, not by invoking exiftool.
     """
     path = Path(target)
     mode = detect_mode(path)
@@ -164,7 +166,7 @@ def build_argv(
         "||",
     ]
 
-    if overwrite_original and not dry_run:
+    if overwrite_original:
         argv.append("-overwrite_original")
 
     # Gear fields — silent overwrite of managed whitelist.
@@ -229,11 +231,6 @@ def build_argv(
             argv += ["-o", str(xmp_path), str(path)]
     else:
         argv.append(str(path))
-
-    if dry_run:
-        argv.insert(1, "-n")  # no numerical conversions; no-op
-        # Remove -overwrite_original just in case (defensive)
-        argv = [a for a in argv if a != "-overwrite_original"]
 
     return argv
 
@@ -339,13 +336,3 @@ def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(v) for v in value]
     return [str(value)]
-
-
-def _merge_lists(existing: list[str], new: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in list(existing) + list(new):
-        if item not in seen:
-            seen.add(item)
-            out.append(item)
-    return out
