@@ -6,10 +6,12 @@
 
 const STORAGE_KEY = "filmex.state.v1";
 const RECENT_FOLDERS_KEY = "filmex.recentFolders.v1";
+const THEME_KEY = "filmex.theme.v1";
 const DEFAULT_PAGE_TITLE = document.title;
 
 const state = {
   folder: "",
+  theme: "dark",
   scan: null,
   camera: null,
   lens: null,
@@ -79,6 +81,40 @@ function recentFolders() {
 function pushRecentFolder(path) {
   const list = [path, ...recentFolders().filter(p => p !== path)].slice(0, 10);
   localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(list));
+}
+
+function loadTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === "paper" || saved === "dark") state.theme = saved;
+  } catch (e) {
+    console.warn("Theme load failed", e);
+  }
+  applyTheme(state.theme, { persist: false });
+}
+
+function applyTheme(theme, { persist = true } = {}) {
+  const nextTheme = theme === "paper" ? "paper" : "dark";
+  state.theme = nextTheme;
+  document.body.dataset.theme = nextTheme;
+  renderThemeSwitch();
+  if (!persist) return;
+  try {
+    localStorage.setItem(THEME_KEY, nextTheme);
+  } catch (e) {
+    console.warn("Theme save failed", e);
+  }
+}
+
+function renderThemeSwitch() {
+  const darkBtn = document.getElementById("theme-dark");
+  const paperBtn = document.getElementById("theme-paper");
+  if (!darkBtn || !paperBtn) return;
+  const isDark = state.theme !== "paper";
+  darkBtn.classList.toggle("active", isDark);
+  darkBtn.setAttribute("aria-pressed", String(isDark));
+  paperBtn.classList.toggle("active", !isDark);
+  paperBtn.setAttribute("aria-pressed", String(!isDark));
 }
 
 // ---------- API ----------
@@ -1849,6 +1885,7 @@ function similarMountSuggestion(value) {
 // ---------- Wiring ----------
 
 window.addEventListener("DOMContentLoaded", () => {
+  loadTheme();
   init();
 
   document.getElementById("browse-btn").addEventListener("click", onBrowse);
@@ -1915,6 +1952,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Settings view toggle
   document.getElementById("settings-open").addEventListener("click", openSettings);
+  document.getElementById("theme-dark").addEventListener("click", () => applyTheme("dark"));
+  document.getElementById("theme-paper").addEventListener("click", () => applyTheme("paper"));
   document.getElementById("settings-back").addEventListener("click", closeSettings);
   document.getElementById("settings-show-archived").addEventListener("change", (e) => {
     settingsState.showArchived = e.target.checked;

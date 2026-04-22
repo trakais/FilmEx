@@ -62,6 +62,7 @@ body {
   font-size: 15px;
   line-height: 1.32;
   font-weight: 400;
+  color-scheme: dark;
   /* Tabular figures everywhere — aligned numerics are a Leica hallmark. */
   font-variant-numeric: tabular-nums;
   color: var(--text);
@@ -81,6 +82,166 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Paper theme keeps the same rangefinder vocabulary but shifts the material
+   stack from lacquered graphite to warm card stock, anodized brass, and
+   faded darkroom paperwork. The page still reads like an instrument, just
+   one laid out on a cutting mat instead of a black camera back. */
+body[data-theme="paper"] {
+  color-scheme: light;
+  --bg: #e6ddcf;
+  --surface: #f6efe3;
+  --surface-2: #eee5d7;
+  --surface-3: #e4d9c8;
+  --border: #cabbab;
+  --border-strong: #9f8d76;
+  --text: #352d24;
+  --muted: #76695a;
+  --muted-2: #958877;
+
+  --red: #b63a28;
+  --red-hover: #cd523b;
+
+  --yellow: #b68425;
+  --yellow-dim: rgba(182, 132, 37, 0.12);
+  --white-line: rgba(255, 250, 242, 0.5);
+
+  --accent-dim: #7e2d20;
+  --ok: #58714d;
+
+  background-color: var(--bg);
+  background-image:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.46  0 0 0 0 0.37  0 0 0 0 0.25  0 0 0 0.03 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"),
+    radial-gradient(circle at 12% 0%, rgba(255, 251, 245, 0.72), transparent 28%),
+    linear-gradient(180deg, #ddd1be 0%, var(--bg) 32%);
+}
+
+body[data-theme="paper"] .top {
+  background: linear-gradient(180deg, #faf3e8 0%, #ebdfcf 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 250, 242, 0.72);
+}
+
+body[data-theme="paper"] .brand::after {
+  background: linear-gradient(90deg, var(--yellow) 0%, rgba(172, 122, 28, 0.26) 100%);
+}
+
+body[data-theme="paper"] .theme-switch {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.82), rgba(236, 227, 213, 0.5));
+}
+
+body[data-theme="paper"] .folder-row input[type=text],
+body[data-theme="paper"] .field-grid input,
+body[data-theme="paper"] .field-grid select,
+body[data-theme="paper"] #picker-search,
+body[data-theme="paper"] .settings-form input,
+body[data-theme="paper"] .settings-form select,
+body[data-theme="paper"] .diff-file-lens-select,
+body[data-theme="paper"] .diff-file-keyword-input {
+  background: linear-gradient(180deg, #fcf7ef 0%, #f0e5d5 100%);
+}
+
+body[data-theme="paper"] .folder-row input[type=text]:focus {
+  box-shadow: inset 0 0 0 1px rgba(255, 250, 242, 0.7), 0 0 0 2px rgba(182, 132, 37, 0.14);
+}
+
+body[data-theme="paper"] .field-grid input:focus,
+body[data-theme="paper"] .field-grid select:focus,
+body[data-theme="paper"] .settings-form input:focus,
+body[data-theme="paper"] .settings-form select:focus {
+  box-shadow: 0 0 0 2px rgba(182, 132, 37, 0.14);
+}
+
+body[data-theme="paper"] .advanced-body {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.56) 0%, rgba(255, 251, 245, 0.18) 100%);
+}
+
+body[data-theme="paper"] .tile {
+  background: linear-gradient(180deg, rgba(255, 252, 247, 0.62) 0%, rgba(255, 250, 242, 0.12) 100%), var(--surface);
+}
+
+body[data-theme="paper"] .tile:hover {
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.76) 0%, rgba(255, 251, 245, 0.18) 100%), var(--surface);
+}
+
+body[data-theme="paper"] button.primary,
+body[data-theme="paper"] button.secondary,
+body[data-theme="paper"] .settings-row-edit,
+body[data-theme="paper"] .settings-row-archive {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.88), rgba(238, 229, 214, 0.52));
+}
+
+body[data-theme="paper"] .pill {
+  background: rgba(255, 250, 242, 0.42);
+}
+
+body[data-theme="paper"] .pill.warn {
+  border-color: rgba(182, 132, 37, 0.34);
+}
+
+body[data-theme="paper"] .pill.bad {
+  border-color: rgba(182, 58, 40, 0.34);
+}
+
+body[data-theme="paper"] button.primary:hover:not(:disabled),
+body[data-theme="paper"] button.secondary:hover:not(:disabled),
+body[data-theme="paper"] .settings-row-edit:hover,
+body[data-theme="paper"] .settings-row-archive:hover {
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.95), rgba(242, 234, 221, 0.68));
+}
+
+body[data-theme="paper"] button.primary {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.92), rgba(231, 221, 203, 0.66));
+}
+
+body[data-theme="paper"] button.primary:hover:not(:disabled),
+body[data-theme="paper"] button.secondary:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.98), rgba(239, 230, 216, 0.74));
+}
+
+body[data-theme="paper"] button.secondary {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.68), rgba(239, 230, 216, 0.3));
+}
+
+body[data-theme="paper"] button:disabled {
+  background: rgba(241, 233, 220, 0.5);
+  border-color: #d4c7b5;
+}
+
+body[data-theme="paper"] .icon-btn:hover {
+  background: rgba(116, 87, 44, 0.08);
+}
+
+body[data-theme="paper"] .drop-overlay {
+  background: rgba(78, 61, 38, 0.52);
+}
+
+body[data-theme="paper"] .drop-overlay-inner {
+  background: linear-gradient(180deg, rgba(250, 242, 231, 0.97) 0%, rgba(236, 226, 209, 0.97) 100%);
+}
+
+body[data-theme="paper"] .backdrop {
+  background: rgba(75, 58, 36, 0.22);
+}
+
+body[data-theme="paper"] .picker-panel {
+  background: linear-gradient(180deg, #f5ecdf 0%, #e8dccb 100%);
+}
+
+body[data-theme="paper"] .picker-tile {
+  background: linear-gradient(180deg, rgba(255, 251, 245, 0.62) 0%, rgba(247, 239, 227, 0.18) 100%);
+}
+
+body[data-theme="paper"] .picker-tile:hover {
+  background: linear-gradient(180deg, rgba(255, 253, 249, 0.88) 0%, rgba(248, 241, 230, 0.28) 100%);
+}
+
+body[data-theme="paper"] .picker-grid.film-grid .picker-tile {
+  background: linear-gradient(180deg, #efe5d7 0%, #e4d8c5 100%);
+}
+
+body[data-theme="paper"] .settings-row:hover {
+  background: rgba(118, 92, 58, 0.045);
 }
 
 /* ---------- Header ---------- */
@@ -122,6 +283,37 @@ body {
   gap: 10px;
 }
 
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent);
+}
+
+.theme-chip {
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.theme-chip:hover:not(:disabled) {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.theme-chip.active {
+  border-color: var(--border-strong);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--yellow);
+}
+
 /* ---------- Pills ---------- */
 .pill {
   display: inline-block;
@@ -138,6 +330,14 @@ body {
 .pill.ok   { color: var(--text);   border-color: var(--border-strong); }
 .pill.warn { color: var(--yellow); border-color: rgba(243, 190, 34, 0.45); }
 .pill.bad  { color: var(--red);    border-color: rgba(217, 13, 22, 0.48); }
+
+/* Status pills inside summary/readout rails should feel stamped and passive,
+   not like tappable controls. Pull them flatter than buttons. */
+.summary .pill {
+  padding: 2px 7px;
+  background: transparent;
+  box-shadow: none;
+}
 
 /* ---------- Main layout ---------- */
 main {
