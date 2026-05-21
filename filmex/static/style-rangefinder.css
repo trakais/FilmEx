@@ -1338,6 +1338,43 @@ button:disabled {
   gap: 16px;
   margin-bottom: 14px;
 }
+.settings-head .archived-toggle {
+  margin-left: auto;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.settings-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+/* Tabs mean only one section is on-screen at a time — its h3 would just
+   repeat the active tab label, so drop the section header to its "+ Add"
+   button. The tab itself is the heading. */
+.settings-section[hidden] { display: none; }
+.settings-section .settings-section-head h3 { display: none; }
+.settings-section .settings-section-head { justify-content: flex-end; }
 .settings-head h2 {
   margin: 0;
   font-size: 13px;

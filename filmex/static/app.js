@@ -1498,11 +1498,42 @@ const settingsState = {
   showArchived: false,
   rowsByKind: {},  // kind -> [rows] fetched from the API
   cameraMounts: [],
+  activeTab: null,
 };
+
+const SETTINGS_TAB_STORAGE_KEY = "filmex.settingsTab";
+const DEFAULT_SETTINGS_TAB = "camera";
+
+function setActiveSettingsTab(tab) {
+  const tabs = Array.from(document.querySelectorAll(".settings-tab"));
+  const valid = tabs.some((b) => b.dataset.tab === tab);
+  const next = valid ? tab : DEFAULT_SETTINGS_TAB;
+  settingsState.activeTab = next;
+  for (const button of tabs) {
+    const on = button.dataset.tab === next;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  for (const section of document.querySelectorAll(".settings-section")) {
+    section.hidden = section.dataset.kind !== next;
+  }
+  try {
+    sessionStorage.setItem(SETTINGS_TAB_STORAGE_KEY, next);
+  } catch {
+    // sessionStorage can throw in private mode / disabled storage — fine.
+  }
+}
 
 async function openSettings() {
   document.getElementById("workflow-view").classList.add("hidden");
   document.getElementById("settings-view").classList.remove("hidden");
+  let remembered = null;
+  try {
+    remembered = sessionStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+  } catch {
+    // ignore — fall through to default
+  }
+  setActiveSettingsTab(remembered || DEFAULT_SETTINGS_TAB);
   await refreshAllSettingsLists();
 }
 
@@ -1961,6 +1992,9 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   for (const btn of document.querySelectorAll("[data-add]")) {
     btn.addEventListener("click", () => openSettingsForm(btn.dataset.add, null));
+  }
+  for (const btn of document.querySelectorAll(".settings-tab")) {
+    btn.addEventListener("click", () => setActiveSettingsTab(btn.dataset.tab));
   }
   document.getElementById("settings-form-close").addEventListener("click", closeSettingsForm);
   document.getElementById("settings-form-cancel").addEventListener("click", closeSettingsForm);

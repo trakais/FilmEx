@@ -39,6 +39,8 @@ def apply_intent(path: Path | str, intent: et.WriteIntent) -> subprocess.Complet
 
     For sidecar-mode files (ARW/DNG), checks whether the XMP already exists so
     `build_argv` picks the correct exiftool invocation (direct edit vs -o seed).
+    The sidecar-create path returns two invocations (seed + edit); we stop on
+    the first non-zero exit so the caller's check sees the failure.
     """
     sidecar_exists = False
     sidecar_path = None
@@ -50,11 +52,17 @@ def apply_intent(path: Path | str, intent: et.WriteIntent) -> subprocess.Complet
         if existing is not None:
             sidecar_exists = True
             sidecar_path = existing
-    argv = et.build_argv(
+    invocations = et.build_argv(
         path,
         intent,
         overwrite_original=True,
         sidecar_exists=sidecar_exists,
         sidecar_path=sidecar_path,
     )
-    return subprocess.run(argv, capture_output=True, check=False)
+    result: subprocess.CompletedProcess | None = None
+    for argv in invocations:
+        result = subprocess.run(argv, capture_output=True, check=False)
+        if result.returncode != 0:
+            return result
+    assert result is not None  # build_argv never returns an empty list
+    return result

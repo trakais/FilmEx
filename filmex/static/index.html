@@ -152,7 +152,21 @@
     <div class="settings-head">
       <button id="settings-back" class="secondary">← Back</button>
       <h2>Settings</h2>
+      <label class="archived-toggle">
+        <input type="checkbox" id="settings-show-archived" />
+        Show archived
+      </label>
     </div>
+
+    <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+      <button class="settings-tab active" role="tab" data-tab="camera" aria-selected="true">Cameras</button>
+      <button class="settings-tab" role="tab" data-tab="lens" aria-selected="false">Lenses</button>
+      <button class="settings-tab" role="tab" data-tab="film-brand" aria-selected="false">Film brands</button>
+      <button class="settings-tab" role="tab" data-tab="film" aria-selected="false">Film stocks</button>
+      <button class="settings-tab" role="tab" data-tab="provider" aria-selected="false">Providers</button>
+      <button class="settings-tab" role="tab" data-tab="dev-method" aria-selected="false">Development</button>
+      <button class="settings-tab" role="tab" data-tab="scan-method" aria-selected="false">Scanning</button>
+    </nav>
 
     <section class="settings-section" data-kind="camera">
       <div class="settings-section-head">
@@ -210,10 +224,6 @@
       <div class="settings-list"></div>
     </section>
 
-    <label class="archived-toggle">
-      <input type="checkbox" id="settings-show-archived" />
-      Show archived
-    </label>
   </main>
 
   <!-- Settings entity form (right-side panel for add/edit). -->

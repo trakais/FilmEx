@@ -63,8 +63,13 @@ def test_find_existing_sidecar_prefers_canonical(tmp_path):
     assert et.find_existing_sidecar(raw) == canonical
 
 
+def _only(invocations: list[list[str]]) -> list[str]:
+    assert len(invocations) == 1
+    return invocations[0]
+
+
 def test_embed_argv_contains_gear_and_keywords():
-    argv = et.build_argv("photo.jpg", _intent())
+    argv = _only(et.build_argv("photo.jpg", _intent()))
     assert argv[0] == "exiftool"
     assert "-Make=FED" in argv
     assert "-Model=2b" in argv
@@ -76,19 +81,34 @@ def test_embed_argv_contains_gear_and_keywords():
     assert any(a.startswith("-XMP-lr:HierarchicalSubject=") for a in argv)
 
 
-def test_sidecar_create_uses_o_and_raw_source():
-    argv = et.build_argv("photo.arw", _intent(), sidecar_exists=False)
-    assert "-o" in argv
-    # Canonical Lightroom form: photo.arw → photo.xmp (not photo.arw.xmp).
-    assert "photo.xmp" in argv
-    assert "photo.arw.xmp" not in argv
-    assert argv[-1] == "photo.arw"
-    # IPTC:Keywords is dropped for sidecars — it's not an XMP concept.
-    assert not any(a.startswith("-IPTC:Keywords") for a in argv)
+def test_sidecar_create_seeds_then_edits():
+    # Combining `-o` with `-Tag=value` in one exiftool call lets the raw's
+    # tags win over the assignments — so the create path must be two passes:
+    # first seed the XMP from the raw, then write the intent values into it.
+    invocations = et.build_argv("photo.arw", _intent(), sidecar_exists=False)
+    assert len(invocations) == 2
+    seed, edit = invocations
+
+    # Seed pass: pure -o copy, no assignments at all.
+    assert "-o" in seed
+    assert seed[-1] == "photo.arw"
+    assert "photo.xmp" in seed
+    assert "photo.arw.xmp" not in seed
+    assert not any(a.startswith("-Make=") for a in seed)
+    assert not any(a.startswith("-LensModel=") for a in seed)
+    assert not any(a.startswith("-DateTimeOriginal=") for a in seed)
+    assert not any(a.startswith("-XMP-dc:Subject=") for a in seed)
+
+    # Edit pass: targets the new XMP and carries the intent overrides.
+    assert "-o" not in edit
+    assert edit[-1] == "photo.xmp"
+    assert "-Make=FED" in edit
+    assert "-LensModel=Industar-50 50mm f/3.5" in edit
+    assert not any(a.startswith("-IPTC:Keywords") for a in edit)
 
 
 def test_sidecar_update_edits_xmp_directly():
-    argv = et.build_argv("photo.arw", _intent(), sidecar_exists=True)
+    argv = _only(et.build_argv("photo.arw", _intent(), sidecar_exists=True))
     assert "-o" not in argv
     # Default sidecar path is the canonical replaced-extension form.
     assert argv[-1] == "photo.xmp"
@@ -101,11 +121,13 @@ def test_sidecar_path_override_edits_legacy_named_xmp():
     # When the runner finds a legacy `photo.arw.xmp` on disk it pins that path
     # via sidecar_path= so we keep editing the same file Lightroom is reading,
     # rather than silently seeding a second canonical-named sidecar alongside.
-    argv = et.build_argv(
-        "photo.arw",
-        _intent(),
-        sidecar_exists=True,
-        sidecar_path="photo.arw.xmp",
+    argv = _only(
+        et.build_argv(
+            "photo.arw",
+            _intent(),
+            sidecar_exists=True,
+            sidecar_path="photo.arw.xmp",
+        )
     )
     assert "-o" not in argv
     assert argv[-1] == "photo.arw.xmp"
@@ -113,13 +135,13 @@ def test_sidecar_path_override_edits_legacy_named_xmp():
 
 
 def test_overwrite_original_can_be_disabled():
-    argv = et.build_argv("photo.jpg", _intent(), overwrite_original=False)
+    argv = _only(et.build_argv("photo.jpg", _intent(), overwrite_original=False))
     assert "-overwrite_original" not in argv
 
 
 def test_argv_omits_gear_when_unset():
     intent = et.WriteIntent(hierarchical_keywords=["Roll|R001"], flat_keywords=["R001"])
-    argv = et.build_argv("photo.jpg", intent)
+    argv = _only(et.build_argv("photo.jpg", intent))
     assert not any(a.startswith("-Make=") for a in argv)
     assert not any(a.startswith("-Model=") for a in argv)
     assert not any(a.startswith("-LensModel=") for a in argv)
@@ -127,25 +149,27 @@ def test_argv_omits_gear_when_unset():
 
 def test_capture_date_written_when_provided():
     intent = _intent(capture_date="2026:04:16 14:30:00")
-    argv = et.build_argv("photo.jpg", intent)
+    argv = _only(et.build_argv("photo.jpg", intent))
     assert "-DateTimeOriginal=2026:04:16 14:30:00" in argv
 
 
 def test_capture_date_not_written_when_absent():
-    argv = et.build_argv("photo.jpg", _intent())
+    argv = _only(et.build_argv("photo.jpg", _intent()))
     assert not any(a.startswith("-DateTimeOriginal=") for a in argv)
 
 
 def test_description_written_when_provided():
-    argv = et.build_argv("photo.jpg", _intent(description="Pushed two stops"))
+    argv = _only(et.build_argv("photo.jpg", _intent(description="Pushed two stops")))
     assert "-XMP-dc:Description=Pushed two stops" in argv
     assert "-IPTC:Caption-Abstract=Pushed two stops" in argv
 
 
 def test_sidecar_description_omits_iptc_caption():
-    argv = et.build_argv("photo.arw", _intent(description="Roll note"), sidecar_exists=False)
-    assert "-XMP-dc:Description=Roll note" in argv
-    assert not any(a.startswith("-IPTC:Caption-Abstract=") for a in argv)
+    _seed, edit = et.build_argv(
+        "photo.arw", _intent(description="Roll note"), sidecar_exists=False
+    )
+    assert "-XMP-dc:Description=Roll note" in edit
+    assert not any(a.startswith("-IPTC:Caption-Abstract=") for a in edit)
 
 
 # ---- diff ----

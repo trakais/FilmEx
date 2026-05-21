@@ -136,15 +136,15 @@ def build_argv(
     overwrite_original: bool = True,
     sidecar_exists: bool = False,
     sidecar_path: Optional[Path | str] = None,
-) -> list[str]:
-    """Build the exiftool argv for applying `intent` to `target`.
+) -> list[list[str]]:
+    """Build the exiftool invocation(s) for applying `intent` to `target`.
 
-    Embed mode (JPG/TIFF): writes into the file in place.
-
-    Sidecar mode (ARW/DNG): two sub-paths —
-      * If a sidecar already exists, edit the XMP directly so we merge with any
-        Lightroom-written XMP content.
-      * If no sidecar exists yet, use `-o` to seed one from the raw + intent.
+    Returns a list of argv lists — one per exiftool subprocess call. Embed
+    mode and the sidecar-update path produce a single invocation; the
+    sidecar-create path produces two (seed the XMP from the raw, then write
+    the intent values into the new XMP) because combining `-o source.arw`
+    with `-Tag=value` assignments in one call lets the raw's embedded tags
+    overwrite the assignments — that's the bug this two-pass shape fixes.
 
     `sidecar_path` lets the caller pin the exact sidecar file to read/write.
     The runner passes this when it found a legacy-named sidecar so we keep
@@ -156,7 +156,38 @@ def build_argv(
     path = Path(target)
     mode = detect_mode(path)
 
-    argv: list[str] = [
+    if mode == "sidecar":
+        xmp_path = Path(sidecar_path) if sidecar_path is not None else sidecar_path_for(path)
+        edit_argv = (
+            _exiftool_prefix(overwrite_original)
+            + _intent_args(intent, drop_iptc=True)
+            + [str(xmp_path)]
+        )
+        if sidecar_exists:
+            return [edit_argv]
+        # Seed-then-edit. `-o` refuses to overwrite, so this branch only fires
+        # when the xmp is absent. We keep the seed call free of assignments —
+        # otherwise exiftool's copy-from-source step would win over them.
+        seed_argv = [
+            "exiftool",
+            "-charset",
+            "filename=utf8",
+            "-o",
+            str(xmp_path),
+            str(path),
+        ]
+        return [seed_argv, edit_argv]
+
+    embed_argv = (
+        _exiftool_prefix(overwrite_original)
+        + _intent_args(intent, drop_iptc=False)
+        + [str(path)]
+    )
+    return [embed_argv]
+
+
+def _exiftool_prefix(overwrite_original: bool) -> list[str]:
+    argv = [
         "exiftool",
         "-charset",
         "filename=utf8",
@@ -165,74 +196,46 @@ def build_argv(
         "-sep",
         "||",
     ]
-
     if overwrite_original:
         argv.append("-overwrite_original")
+    return argv
 
+
+def _intent_args(intent: WriteIntent, *, drop_iptc: bool) -> list[str]:
+    args: list[str] = []
     # Gear fields — silent overwrite of managed whitelist.
     if intent.camera_make is not None:
-        argv += [f"-Make={intent.camera_make}"]
+        args += [f"-Make={intent.camera_make}"]
     if intent.camera_model is not None:
-        argv += [f"-Model={intent.camera_model}"]
+        args += [f"-Model={intent.camera_model}"]
     if intent.lens_model is not None:
-        argv += [f"-LensModel={intent.lens_model}", f"-Lens={intent.lens_model}"]
+        args += [f"-LensModel={intent.lens_model}", f"-Lens={intent.lens_model}"]
 
     # Keywords — caller passes the fully resolved final list (existing
     # user-owned values preserved, FilmEx-managed taxonomy paths replaced).
-    # We therefore write the exact final list in one shot.
     if intent.flat_keywords:
         joined = "||".join(intent.flat_keywords)
-        argv += [
-            f"-XMP-dc:Subject={joined}",
-            f"-IPTC:Keywords={joined}",
-        ]
+        args += [f"-XMP-dc:Subject={joined}"]
+        if not drop_iptc:
+            args += [f"-IPTC:Keywords={joined}"]
     if intent.hierarchical_keywords:
         joined = "||".join(intent.hierarchical_keywords)
-        argv += [
-            f"-XMP-lr:HierarchicalSubject={joined}",
-        ]
+        args += [f"-XMP-lr:HierarchicalSubject={joined}"]
 
     if intent.capture_date is not None:
         # Write all three date tags in one shot so Lightroom, Bridge, and raw
         # EXIF readers all agree. Day-precision timestamps are stamped at noon
         # local (handled upstream) to signal "roll-level approximation".
-        argv += [
+        args += [
             f"-DateTimeOriginal={intent.capture_date}",
             f"-CreateDate={intent.capture_date}",
             f"-XMP-photoshop:DateCreated={intent.capture_date}",
         ]
     if intent.description is not None:
-        argv += [
-            f"-XMP-dc:Description={intent.description}",
-            f"-IPTC:Caption-Abstract={intent.description}",
-        ]
-
-    if mode == "sidecar":
-        xmp_path = Path(sidecar_path) if sidecar_path is not None else sidecar_path_for(path)
-        if sidecar_exists:
-            # Direct edit of the existing sidecar. IPTC:Keywords does not apply
-            # in XMP-only files, so drop the IPTC arg to avoid exiftool warnings.
-            argv = [
-                a
-                for a in argv
-                if not a.startswith("-IPTC:Keywords")
-                and not a.startswith("-IPTC:Caption-Abstract")
-            ]
-            argv.append(str(xmp_path))
-        else:
-            # Seed a fresh sidecar from the raw. `-o` refuses to overwrite, so
-            # the caller must only reach this branch when the xmp is absent.
-            argv = [
-                a
-                for a in argv
-                if not a.startswith("-IPTC:Keywords")
-                and not a.startswith("-IPTC:Caption-Abstract")
-            ]
-            argv += ["-o", str(xmp_path), str(path)]
-    else:
-        argv.append(str(path))
-
-    return argv
+        args += [f"-XMP-dc:Description={intent.description}"]
+        if not drop_iptc:
+            args += [f"-IPTC:Caption-Abstract={intent.description}"]
+    return args
 
 
 def diff(existing: dict[str, Any], intent: WriteIntent, *, replace_managed: bool = False) -> list[TagChange]:
