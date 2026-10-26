@@ -1790,3 +1790,56 @@ body[data-theme="paper"] .library-root-path { background: rgba(255, 251, 245, 0.
   .lib-row { grid-template-columns: 80px 1fr auto; }
   .lib-meta, .lib-date { display: none; }
 }
+
+/* ---------- Naming panel (Library ▸ Normalize names) ---------- */
+.naming-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: linear-gradient(180deg, #121212 0%, #0d0d0d 100%);
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.naming-head { display: flex; align-items: center; gap: 16px; }
+.naming-head h3 {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.naming-template { flex: 1; font-size: 11px; color: var(--muted); }
+.naming-template code { font-family: var(--font-mono); color: var(--yellow); margin: 0 6px; }
+.naming-warning {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  border-left: 2px solid var(--yellow);
+  padding: 4px 0 4px 12px;
+}
+.naming-warning code { font-family: var(--font-mono); color: var(--text); }
+.naming-list { border: 1px solid var(--border); border-radius: 2px; }
+.naming-row {
+  display: grid;
+  grid-template-columns: 24px 110px minmax(200px, 1fr) 24px minmax(200px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.naming-row:last-child { border-bottom: none; }
+.naming-row.rename .naming-new { color: var(--text); }
+.naming-row.conflict .naming-new, .naming-row.skipped .naming-reason { color: var(--red); }
+.naming-row.conforms, .naming-row.skipped { opacity: 0.6; }
+.naming-row input[type=checkbox] { width: 14px; height: 14px; margin: 0; accent-color: var(--yellow); }
+.naming-old, .naming-new { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.naming-old { color: var(--muted); }
+.naming-arrow { color: var(--muted-2); text-align: center; }
+.naming-reason { font-family: var(--font-ui); font-size: 11px; color: var(--muted); grid-column: 3 / -1; }
+.naming-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.naming-foot .lib-sub { margin-right: auto; }
+body[data-theme="paper"] .naming-panel { background: linear-gradient(180deg, rgba(255, 251, 245, 0.5) 0%, rgba(247, 239, 227, 0.2) 100%); }

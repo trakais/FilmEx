@@ -11,6 +11,8 @@ const state = {
   view: "workflow",
   viewInitialised: false,
   library: null,          // last `/api/library` payload
+  naming: null,           // last `/api/naming/propose` payload
+  namingLastOperation: null,
   libraryRescanning: false,
   fileSubset: null,       // { folder, files } when tagging only part of a roll
   folder: "",
@@ -2021,6 +2023,152 @@ function clearFileSubset() {
   updateActionButtons();
 }
 
+// ---------- Library: normalize folder names ----------
+
+async function openNamingPanel() {
+  const panel = document.getElementById("naming-panel");
+  const status = document.getElementById("naming-status");
+  panel.classList.remove("hidden");
+  status.textContent = "Proposing names…";
+  document.getElementById("naming-list").innerHTML = "";
+  document.getElementById("naming-apply").disabled = true;
+  try {
+    state.naming = await api("/api/naming/propose", { method: "POST", body: JSON.stringify({}) });
+    renderNamingPanel();
+  } catch (e) {
+    status.textContent = `Could not propose names: ${e.message}`;
+  }
+}
+
+function closeNamingPanel() {
+  document.getElementById("naming-panel").classList.add("hidden");
+}
+
+const NAMING_STATUS_LABEL = { rename: "Rename", conforms: "OK", skipped: "Skip", conflict: "Conflict" };
+const NAMING_STATUS_CLASS = { rename: "warn", conforms: "ok", skipped: "", conflict: "bad" };
+
+function renderNamingPanel() {
+  const data = state.naming;
+  const list = document.getElementById("naming-list");
+  const counts = data.counts || {};
+  document.getElementById("naming-template").textContent = data.template;
+  document.getElementById("naming-counts").textContent =
+    `${counts.rename || 0} to rename · ${counts.conforms || 0} already fine · ${counts.conflict || 0} conflicts · ${counts.skipped || 0} skipped`;
+  const order = { rename: 0, conflict: 1, conforms: 2, skipped: 3 };
+  const rows = data.proposals.slice().sort((a, b) => (order[a.status] - order[b.status]) || a.current.localeCompare(b.current, undefined, { numeric: true }));
+  list.innerHTML = "";
+  for (const p of rows) {
+    const el = document.createElement("label");
+    el.className = `naming-row ${p.status}`;
+    const checkable = p.status === "rename";
+    el.innerHTML = `
+      <input type="checkbox" ${checkable ? "checked" : "disabled"} data-path="${escapeHtml(p.path)}" data-proposed="${escapeHtml(p.proposed || "")}" />
+      <span class="pill ${NAMING_STATUS_CLASS[p.status] || ""}">${NAMING_STATUS_LABEL[p.status] || p.status}</span>
+      <span class="naming-old" title="${escapeHtml(p.path)}">${escapeHtml((p.parent ? p.parent + "/" : "") + p.current)}</span>
+      ${p.proposed && p.status !== "conforms"
+        ? `<span class="naming-arrow">→</span><span class="naming-new" title="${escapeHtml(p.proposed)}">${escapeHtml(p.proposed)}</span>`
+        : `<span></span><span class="naming-new"></span>`}
+      ${p.reason ? `<span class="naming-reason">${escapeHtml(p.reason)}</span>` : ""}
+    `;
+    el.querySelector("input").addEventListener("change", updateNamingApplyButton);
+    list.appendChild(el);
+  }
+  if (!rows.length) list.innerHTML = `<div class="naming-row skipped"><span></span><span></span><span class="naming-old">No roll folders found.</span></div>`;
+  document.getElementById("naming-status").textContent = "";
+  document.getElementById("naming-undo").classList.toggle("hidden", !state.namingLastOperation);
+  updateNamingApplyButton();
+}
+
+function selectedRenames() {
+  return Array.from(document.querySelectorAll("#naming-list input[type=checkbox]:checked"))
+    .map((cb) => ({ path: cb.dataset.path, proposed: cb.dataset.proposed }))
+    .filter((item) => item.proposed);
+}
+
+function updateNamingApplyButton() {
+  const btn = document.getElementById("naming-apply");
+  const n = selectedRenames().length;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Rename ${n} folder${n === 1 ? "" : "s"}` : "Rename";
+}
+
+async function applySelectedRenames() {
+  const items = selectedRenames();
+  if (!items.length) return;
+  const ok = await ask(
+    `Rename ${items.length} folder${items.length === 1 ? "" : "s"} and rewrite the Roll keyword on their tagged files?`,
+    { okLabel: "Rename" }
+  );
+  if (!ok) return;
+  const btn = document.getElementById("naming-apply");
+  const status = document.getElementById("naming-status");
+  btn.disabled = true;
+  let renamed = 0;
+  let keywordFiles = 0;
+  try {
+    const res = await fetch("/api/naming/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    let done = null;
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "progress" && ev.step === "rename" && ev.ok) {
+        renamed += 1;
+        status.textContent = `Renamed ${renamed}/${items.length}…`;
+      } else if (ev.type === "progress" && ev.step === "keywords") {
+        keywordFiles += ev.ok ? 1 : 0;
+        status.textContent = `Renamed ${renamed}/${items.length} · keywords ${keywordFiles}…`;
+      } else if (ev.type === "done") {
+        done = ev;
+      } else if (ev.type === "error") {
+        throw new Error(ev.error || "rename failed");
+      }
+    });
+    if (!done) throw new Error("stream ended without completion");
+    state.namingLastOperation = done.operation_id;
+    const problems = done.errors && done.errors.length ? ` · ${done.errors.length} problem${done.errors.length === 1 ? "" : "s"}` : "";
+    const summary = `Renamed ${done.renamed.length} folder${done.renamed.length === 1 ? "" : "s"}, rewrote keywords on ${done.keyword_files} file${done.keyword_files === 1 ? "" : "s"}${problems}.`;
+    status.textContent = summary;
+    if (done.errors && done.errors.length) await notify(done.errors.join("\n"), "Some renames did not go through");
+    await loadLibrary({ rescan: true });
+    state.naming = await api("/api/naming/propose", { method: "POST", body: JSON.stringify({}) });
+    renderNamingPanel();
+    document.getElementById("naming-status").textContent = summary;
+  } catch (e) {
+    status.textContent = `Rename failed: ${e.message}`;
+    btn.disabled = false;
+  }
+}
+
+async function undoLastRename() {
+  const opId = state.namingLastOperation;
+  if (!opId) return;
+  const ok = await ask("Put the renamed folders back under their previous names and restore their Roll keywords?", { okLabel: "Undo renames" });
+  if (!ok) return;
+  const status = document.getElementById("naming-status");
+  status.textContent = "Undoing…";
+  try {
+    const res = await fetch(`/api/operations/${encodeURIComponent(opId)}/undo`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    let done = null;
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "done") done = ev;
+      else if (ev.type === "error") throw new Error(ev.error || "undo failed");
+    });
+    if (!done) throw new Error("stream ended without completion");
+    state.namingLastOperation = null;
+    await loadLibrary({ rescan: true });
+    state.naming = await api("/api/naming/propose", { method: "POST", body: JSON.stringify({}) });
+    renderNamingPanel();
+    const problems = done.errors && done.errors.length ? ` · ${done.errors.length} problem${done.errors.length === 1 ? "" : "s"}` : "";
+    document.getElementById("naming-status").textContent = `Restored ${done.restored.length} folder${done.restored.length === 1 ? "" : "s"}${problems}.`;
+  } catch (e) {
+    status.textContent = `Undo failed: ${e.message}`;
+  }
+}
+
 async function onChooseLibraryRoot() {
   try {
     const folder = await pickFolder();
@@ -2571,6 +2719,10 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
   document.getElementById("library-rescan").addEventListener("click", () => void rescanLibrary());
+  document.getElementById("library-normalize").addEventListener("click", () => void openNamingPanel());
+  document.getElementById("naming-close").addEventListener("click", closeNamingPanel);
+  document.getElementById("naming-apply").addEventListener("click", () => void applySelectedRenames());
+  document.getElementById("naming-undo").addEventListener("click", () => void undoLastRename());
   document.getElementById("library-choose-root").addEventListener("click", onChooseLibraryRoot);
   document.getElementById("theme-dark").addEventListener("click", () => applyTheme("dark"));
   document.getElementById("theme-paper").addEventListener("click", () => applyTheme("paper"));

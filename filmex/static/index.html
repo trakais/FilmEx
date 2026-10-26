@@ -40,10 +40,31 @@
       <div class="library-toolbar">
         <code id="library-root-path" class="library-root-path"></code>
         <button id="library-choose-root" class="secondary" type="button">Choose root…</button>
+        <button id="library-normalize" class="secondary" type="button">Normalize names…</button>
         <button id="library-rescan" class="secondary" type="button">Rescan</button>
       </div>
     </section>
     <div id="library-banner" class="summary hidden"></div>
+
+    <!-- Naming panel: proposed renames from the folder name template. -->
+    <section id="naming-panel" class="naming-panel hidden">
+      <div class="naming-head">
+        <h3>Normalize folder names</h3>
+        <div class="naming-template">Template <code id="naming-template"></code> <span id="naming-counts" class="lib-sub"></span></div>
+        <button id="naming-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="naming-warning">
+        Folders are renamed in place and the <code>Roll|…</code> keyword is rewritten on every tagged file.
+        Folders already imported into a Lightroom catalog will show as missing there until you relink the parent folder once.
+        Every batch can be undone.
+      </div>
+      <div id="naming-list" class="naming-list"></div>
+      <div class="naming-foot">
+        <span id="naming-status" class="lib-sub"></span>
+        <button id="naming-undo" class="secondary hidden" type="button">Undo last batch</button>
+        <button id="naming-apply" class="primary" type="button" disabled>Rename</button>
+      </div>
+    </section>
     <div id="library-summary" class="summary hidden"></div>
     <div id="library-groups" class="library-groups"></div>
   </main>
