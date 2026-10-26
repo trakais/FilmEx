@@ -228,6 +228,22 @@ film stock rows.
   Never spawn a bare `"exiftool"`; take the argv prefix from the locator.
 - **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
 
+## Naming system
+
+`services/naming.py` renders roll folder names from the template in
+Settings ▸ General (default `{date}-{camera}-{film}`, optional `-{place}`
+suffix). Tokens: `{date} {year} {month} {camera} {film} {lens} {place}
+{roll}`. `{camera}` and `{film}` use the entity's `short_name` when set
+(`F3`, `Gold`), else the slugged display name. Slugs keep Unicode letters,
+drop characters illegal in file names, turn whitespace into `-`, and are
+NFC. `{roll}` numbers rolls per year in date order among the proposals.
+
+`services/renames.py` proposes names for tagged rolls (untagged folders
+and loose year folders are skipped), applies the chosen renames in place
+(same parent, never over an existing target), fixes the manifest, swaps
+the `Roll|` keyword through the normal reconciliation, journals the batch
+in `operation_log`, and can undo it. Renames and undos are exclusive jobs.
+
 ## Library view
 
 `services/library.py` indexes the library root (Settings ▸ General) with a
@@ -317,8 +333,11 @@ Optional, off by default:
   `scripts/build_default_db.py`. Keep it generic (no private labs, no
   user-specific gear).
 - One `roll_manifest.json` per roll folder. The folder basename is the
-  `roll_id`; rename after apply leaves the manifest stale by design (the
-  re-tag workflow is "strip and redo", not "update in place").
+  `roll_id`. Rename folders through the app (Library ▸ Normalize names or
+  the naming API), never by hand: a managed rename updates `roll_id` and
+  `folder_relative_path`, records the change under `renames`, and rewrites
+  the `Roll|…` keyword on every tagged file. A hand rename leaves all of
+  that stale.
 
 ---
 

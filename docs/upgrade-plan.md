@@ -301,46 +301,55 @@ Goal: one folder naming convention, enforced on new folders and offered as a
 reviewable batch rename for existing ones.
 
 ### P3.1 Short names and template
-- [ ] Migration v7: `short_name` (nullable) on `camera` and `film_stock`.
+- [x] Migration v7: `short_name` (nullable) on `camera` and `film_stock`.
       Settings UI fields. Fallback when null: slugified display name.
-- [ ] `services/naming.py`: tokens `{date}` (YYYY-MM-DD), `{year}`,
+- [x] `services/naming.py`: tokens `{date}` (YYYY-MM-DD), `{year}`,
       `{month}`, `{camera}`, `{film}`, `{lens}`, `{place}`, `{roll}` (per
       year sequence derived from existing names matching the template,
       zero-padded per setting). Slug rule: NFC, keep Unicode letters and
       digits, strip `/\:*?"<>|`, whitespace to `-`, collapse repeats.
       `render(template, context)` and `parse(template, name)` so existing
       names can be recognized.
-- [ ] Place/title lives on the roll: new optional `place` field in the
+- [x] Place/title lives on the roll: new optional `place` field in the
       manifest and in `DryRunRequest`; shown in the Tag view's advanced
       section.
-- [ ] Tests: render, parse round trip, slug edge cases incl. Latvian
-      letters, roll sequence detection.
+- [x] Tests: render, slug edge cases incl. Latvian letters, roll sequence.
+      (`parse` dropped: conformity is checked by rendering and comparing.)
 
 ### P3.2 Managed rename
-- [ ] `services/fileops.py` (shared with phase 4): `plan_rename`,
-      `apply_rename` (same-parent `os.rename` only), refuse if target
-      exists, write to the operation log.
-- [ ] Migration v8: `operation_log(id, kind, started_at, finished_at,
+- [x] `services/renames.py` (fileops for phase 4 will reuse its journal):
+      propose / apply (same-parent `os.rename` only) / undo; refuses an
+      existing target; every batch goes to the operation log.
+- [x] Migration v8: `operation_log(id, kind, started_at, finished_at,
       status, plan_json, result_json, undone_at)`.
-- [ ] Rename updates the manifest `roll_id` and `folder_relative_path` and
+- [x] Rename updates the manifest `roll_id` and `folder_relative_path` and
       appends a `renamed_from` note to history.
-- [ ] Re-apply of the `Roll|` keyword after rename: builder support for
-      `-HierarchicalSubject-=Roll|old` + `+=Roll|new` and the flat
-      `Subject` leaf likewise, run as an exclusive job across the folder.
+- [x] Re-apply of the `Roll|` keyword after rename: done through the normal
+      intent reconciliation (a new `Roll|…` path replaces the Roll family
+      and keeps everything else), no new builder flags needed; runs inside
+      the exclusive rename job.
       This replaces the "rename leaves the manifest stale by design" rule
       in AGENTS.md.
-- [ ] Routes: `POST /api/naming/propose` (root; list of old/new/reason/
+- [x] Routes: `POST /api/naming/propose` (root; list of old/new/reason/
       conflicts; folders without enough manifest data are listed as
       skipped), `POST /api/naming/apply` (selected proposals, job), `POST
       /api/operations/{id}/undo`.
-- [ ] UI: "Normalize names" in the Library view showing the full old/new
+- [x] UI: "Normalize names" in the Library view showing the full old/new
       list with checkboxes and conflicts, confirm, progress, undo of the
       last batch. Warning text: folders already in a Lightroom catalog
       will need the parent folder relinked once in Lightroom.
-- [ ] Tests: propose on the fixture tree, apply, undo, conflict refusal,
+- [x] Tests: propose on the fixture tree, apply, undo, conflict refusal,
       keyword re-apply idempotent.
 
 ---
+
+**Phase 3 status (2026-10-26): complete.** Verified in a browser on a
+synthetic scratch library (not the NAS): proposals classified rename /
+conforms / conflict / skipped with reasons, three folders renamed with
+manifests updated and the `Roll|` keyword rewritten by real ExifTool, then
+undone back to the original names and keyword. 197 tests pass. Short names
+are not yet set on the user's real gear, so proposals against the NAS will
+use slugged display names until they are.
 
 ## Phase 4: Inbox import and roll split
 
