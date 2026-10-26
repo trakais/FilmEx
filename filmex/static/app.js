@@ -18,6 +18,7 @@ const state = {
   lastDryRunResult: null,
   previewStale: false,
   previewBuildController: null,
+  previewBuildJobId: null,
   fileKeywords: {},
   fileLensOverrides: {},
   fileKeywordEditorOpen: {},
@@ -202,6 +203,50 @@ async function api(path, opts = {}) {
     throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }
   return res.status === 204 ? null : res.json();
+}
+
+// Read an NDJSON response line by line, calling `onEvent` for each object as
+// it arrives so progress can render live. Exceptions thrown by `onEvent`
+// abort the read and propagate to the caller.
+async function consumeNdjson(res, onEvent) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      onEvent(JSON.parse(line));
+    }
+  }
+  const tail = buf.trim();
+  if (tail) onEvent(JSON.parse(tail));
+}
+
+// Follow a server job: replays the events already emitted, then streams live
+// ones until the job reaches a terminal status. Use after a reload to pick a
+// long apply or import back up.
+async function followJob(jobId, onEvent, { signal, fromSeq = 0 } = {}) {
+  const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/events?from_seq=${fromSeq}`, { signal });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  await consumeNdjson(res, onEvent);
+}
+
+async function cancelJob(jobId) {
+  if (!jobId) return;
+  try {
+    await api(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  } catch (e) {
+    console.warn("Cancel request failed", e);
+  }
 }
 
 // ---------- Initial load ----------
@@ -1106,6 +1151,7 @@ async function onCreatePreviews() {
   if (!state.folder || !state.scan) return;
   if (state.previewBuildController) {
     state.previewBuildController.abort();
+    void cancelJob(state.previewBuildJobId);
     return;
   }
   const btn = document.getElementById("create-previews-btn");
@@ -1129,40 +1175,30 @@ async function onCreatePreviews() {
       const text = await res.text();
       throw new Error(text || `HTTP ${res.status}`);
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
     let doneEvent = null;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const ev = JSON.parse(line);
-        if (ev.type === "start") {
-          total = ev.total;
-          btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
-          renderCreatePreviewsButton();
-        } else if (ev.type === "progress") {
-          processed += 1;
-          if (ev.status === "created" || ev.status === "reused") {
-            created += 1;
-            markPreviewFilesAvailable([ev.file]);
-            if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
-          } else if (ev.status === "failed") {
-            failed += 1;
-          }
-          btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
-          renderCreatePreviewsButton();
-        } else if (ev.type === "done") {
-          doneEvent = ev;
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "start") {
+        state.previewBuildJobId = ev.job_id || null;
+        total = ev.total;
+        btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
+        renderCreatePreviewsButton();
+      } else if (ev.type === "progress") {
+        processed += 1;
+        if (ev.status === "created" || ev.status === "reused") {
+          created += 1;
+          markPreviewFilesAvailable([ev.file]);
+          if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
+        } else if (ev.status === "failed") {
+          failed += 1;
         }
+        btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
+        renderCreatePreviewsButton();
+      } else if (ev.type === "done") {
+        doneEvent = ev;
+      } else if (ev.type === "error") {
+        throw new Error(ev.error || "preview job failed");
       }
-    }
+    });
     const cancelled = !!doneEvent?.cancelled;
     failed = doneEvent?.failed?.length ?? failed;
     created = doneEvent?.created_files?.length ?? created;
@@ -1193,6 +1229,7 @@ async function onCreatePreviews() {
     }
   } finally {
     state.previewBuildController = null;
+    state.previewBuildJobId = null;
     delete btn.dataset.progressText;
     updateActionButtons();
   }
@@ -1314,38 +1351,26 @@ async function onApply() {
       throw new Error(text || `HTTP ${res.status}`);
     }
 
-    // NDJSON: one JSON object per line. Parse as they stream in so the button
-    // can show `3/12` live — matters on a slow NAS where apply takes minutes.
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
+    // NDJSON: one JSON object per line, parsed as it streams in so the
+    // button can show `3/12` live — matters on a slow NAS.
     let total = 0;
     let done_event = null;
-
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) !== -1) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        const ev = JSON.parse(line);
-        if (ev.type === "start") {
-          total = ev.total;
-          btn.textContent = `Applying… 0/${total}`;
-          setPageTitleProgress("Applying", 0, total);
-        } else if (ev.type === "progress") {
-          const n = Number(btn.dataset.n || 0) + 1;
-          btn.dataset.n = String(n);
-          btn.textContent = `Applying… ${n}/${total}`;
-          setPageTitleProgress("Applying", n, total);
-        } else if (ev.type === "done") {
-          done_event = ev;
-        }
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "start") {
+        total = ev.total;
+        btn.textContent = `Applying… 0/${total}`;
+        setPageTitleProgress("Applying", 0, total);
+      } else if (ev.type === "progress") {
+        const n = Number(btn.dataset.n || 0) + 1;
+        btn.dataset.n = String(n);
+        btn.textContent = `Applying… ${n}/${total}`;
+        setPageTitleProgress("Applying", n, total);
+      } else if (ev.type === "done") {
+        done_event = ev;
+      } else if (ev.type === "error") {
+        throw new Error(ev.error || "apply failed");
       }
-    }
+    });
     if (!done_event) throw new Error("stream ended without completion event");
     renderApplyResult(done_event);
   } catch (e) {

@@ -17,8 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
 from filmex.db import get_engine, init_db
-from filmex.routes import entities, health, settings, workflow
+from filmex.routes import entities, health, jobs, settings, workflow
 from filmex.security import TOKEN_COOKIE, TOKEN_QUERY_PARAM, LoopbackGuard
+from filmex.services import jobs as job_service
 from filmex.services import settings as settings_service
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -30,6 +31,9 @@ async def _lifespan(app: FastAPI):
     with Session(get_engine()) as session:
         settings_service.apply_runtime_settings(session)
     yield
+    # Drop the job manager so a later startup (tests, restarts) gets a fresh
+    # executor instead of one that has been shut down.
+    job_service.reset_manager()
 
 
 def create_app(token: str | None = None) -> FastAPI:
@@ -46,6 +50,7 @@ def create_app(token: str | None = None) -> FastAPI:
     app.add_middleware(LoopbackGuard, token=token)
     app.include_router(health.router)
     app.include_router(settings.router)
+    app.include_router(jobs.router)
     app.include_router(entities.router)
     app.include_router(workflow.router)
 

@@ -7,18 +7,17 @@ service layer.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 import subprocess
 import sys
 import textwrap
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
@@ -48,6 +47,7 @@ from filmex.schemas import (
 )
 from filmex.services import exiftool as et
 from filmex.services import folder_scan as fs
+from filmex.services import jobs
 from filmex.services import keywords as kw
 from filmex.services import manifest as mf
 from filmex.services import previews as pv
@@ -61,7 +61,7 @@ router = APIRouter()
 
 
 class FolderPickResponse(BaseModel):
-    folder: Optional[str] = None
+    folder: str | None = None
     cancelled: bool = False
 
 
@@ -183,35 +183,70 @@ def metadata_dry_run(
     return DryRunResponse(folder=str(ctx.folder), roll_id=ctx.roll_id, diffs=diffs)
 
 
-def _run_apply(ctx: "_Pipeline"):
-    """Generator: yields (file_name, ok, error_msg, changes) per file, then finalizes.
+def _run_apply(ctx: _Pipeline, *, cancelled: Callable[[], bool] = lambda: False):
+    """Generator: yields a progress event per file, then a `done` event.
 
-    Shared by the JSON and streaming endpoints. The caller decides how to surface
-    progress; manifest writes happen once at the end regardless.
+    Runs inside a job. `cancelled` is checked between files; a cancelled or
+    failed roll still gets its manifest written with the files that were
+    actually applied, so tagged files are never left unrecorded.
     """
     applied: list[str] = []
     errors: list[str] = []
     all_diffs: list[dict] = []
+    was_cancelled = False
 
-    for file_path in ctx.files:
-        existing = _read_existing_tags(file_path)
-        intent = _intent_for_file(ctx, file_path.name)
-        resolved_intent = et.resolve_intent(
-            existing,
-            intent,
-            replace_managed=ctx.replace_managed_metadata,
-        )
-        changes = et.diff(existing, intent, replace_managed=ctx.replace_managed_metadata)
-        result = apply_intent(file_path, resolved_intent)
-        if result.returncode != 0:
-            err = f"{file_path.name}: {result.stderr.decode('utf-8', 'replace').strip()}"
-            errors.append(err)
-            yield {"type": "progress", "file": file_path.name, "ok": False, "error": err}
-            continue
-        applied.append(file_path.name)
-        all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in changes]})
-        yield {"type": "progress", "file": file_path.name, "ok": True}
+    try:
+        for file_path in ctx.files:
+            if cancelled():
+                was_cancelled = True
+                break
+            _apply_one(ctx, file_path, applied, errors, all_diffs)
+            if errors and errors[-1].startswith(f"{file_path.name}:"):
+                yield {"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]}
+            else:
+                yield {"type": "progress", "file": file_path.name, "ok": True}
+    except BaseException:
+        if applied:
+            _write_apply_manifest(ctx, applied, all_diffs)
+        raise
 
+    manifest_path = _write_apply_manifest(ctx, applied, all_diffs)
+    yield {
+        "type": "done",
+        "folder": str(ctx.folder),
+        "roll_id": ctx.roll_id,
+        "manifest_path": str(manifest_path),
+        "applied_files": applied,
+        "errors": errors,
+        "cancelled": was_cancelled,
+    }
+
+
+def _apply_one(
+    ctx: _Pipeline,
+    file_path: Path,
+    applied: list[str],
+    errors: list[str],
+    all_diffs: list[dict],
+) -> None:
+    existing = _read_existing_tags(file_path)
+    intent = _intent_for_file(ctx, file_path.name)
+    resolved_intent = et.resolve_intent(
+        existing,
+        intent,
+        replace_managed=ctx.replace_managed_metadata,
+    )
+    changes = et.diff(existing, intent, replace_managed=ctx.replace_managed_metadata)
+    result = apply_intent(file_path, resolved_intent)
+    if result.returncode != 0:
+        err = f"{file_path.name}: {result.stderr.decode('utf-8', 'replace').strip()}"
+        errors.append(err)
+        return
+    applied.append(file_path.name)
+    all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in changes]})
+
+
+def _write_apply_manifest(ctx: _Pipeline, applied: list[str], all_diffs: list[dict]) -> Path:
     existing_manifest = mf.read_manifest(ctx.folder)
     fresh = mf.build_new_manifest(
         folder=ctx.folder,
@@ -247,16 +282,35 @@ def _run_apply(ctx: "_Pipeline"):
         },
     )
     mf.append_apply_history(merged, applied_files=applied, diffs=all_diffs, dry_run=False)
-    manifest_path = mf.write_manifest(ctx.folder, merged)
+    return mf.write_manifest(ctx.folder, merged)
 
-    yield {
-        "type": "done",
-        "folder": str(ctx.folder),
-        "roll_id": ctx.roll_id,
-        "manifest_path": str(manifest_path),
-        "applied_files": applied,
-        "errors": errors,
-    }
+
+def _apply_job(job_ctx: jobs.JobContext, pipeline: _Pipeline) -> dict:
+    final: dict | None = None
+    for event in _run_apply(pipeline, cancelled=job_ctx.cancelled):
+        job_ctx.emit(event)
+        if event["type"] == "done":
+            final = event
+    if final is None:
+        raise RuntimeError("apply pipeline did not produce a done event")
+    return final
+
+
+def _submit_apply(pipeline: _Pipeline) -> jobs.Job:
+    return jobs.get_manager().submit(
+        "apply", lambda job_ctx: _apply_job(job_ctx, pipeline), exclusive=True
+    )
+
+
+def _follow_job_events(job: jobs.Job, *, total: int):
+    """NDJSON lines: a `start` line, then the job's own events until it ends."""
+    yield json.dumps({"type": "start", "total": total, "job_id": job.id}) + "\n"
+    for event in jobs.get_manager().follow(job.id):
+        if event["type"] == jobs.STATUS_EVENT:
+            if event["status"] == jobs.FAILED:
+                yield json.dumps({"type": "error", "error": event["error"]}) + "\n"
+            continue
+        yield json.dumps(event) + "\n"
 
 
 @router.post("/api/metadata/apply", response_model=ApplyResponse)
@@ -268,12 +322,10 @@ def metadata_apply(
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
     ctx = _build_pipeline(req, session)
-    final = None
-    for event in _run_apply(ctx):
-        if event["type"] == "done":
-            final = event
-    if final is None:
-        raise RuntimeError("apply pipeline did not produce a done event")
+    job = jobs.get_manager().wait(_submit_apply(ctx).id)
+    if job.status == jobs.FAILED:
+        raise HTTPException(status_code=500, detail=job.error or "apply failed")
+    final = job.result
     return ApplyResponse(
         folder=final["folder"],
         roll_id=final["roll_id"],
@@ -297,14 +349,10 @@ def metadata_apply_stream(
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
     ctx = _build_pipeline(req, session)
-    total = len(ctx.files)
-
-    def gen():
-        yield json.dumps({"type": "start", "total": total}) + "\n"
-        for event in _run_apply(ctx):
-            yield json.dumps(event) + "\n"
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    job = _submit_apply(ctx)
+    return StreamingResponse(
+        _follow_job_events(job, total=len(ctx.files)), media_type="application/x-ndjson"
+    )
 
 
 @router.get("/api/manifests/{roll_id}", response_model=ManifestResponse)
@@ -368,50 +416,49 @@ def create_previews(req: PreviewBuildRequest) -> PreviewBuildResponse:
     )
 
 
+def _previews_job(job_ctx: jobs.JobContext, folder: str, targets: list[Path], invert: bool) -> dict:
+    created_files: list[str] = []
+    failed: list[str] = []
+    cancelled = False
+    for entry in targets:
+        if job_ctx.cancelled():
+            cancelled = True
+            break
+        try:
+            _, created = pv.ensure_preview(entry, invert=invert)
+            status = "created" if created else "reused"
+            if created:
+                created_files.append(entry.name)
+            job_ctx.emit({"type": "progress", "file": entry.name, "status": status})
+        except pv.PreviewUnavailable as e:
+            msg = f"{entry.name}: {e}"
+            failed.append(msg)
+            job_ctx.emit({"type": "progress", "file": entry.name, "status": "failed", "error": msg})
+    done = {
+        "type": "done",
+        "folder": folder,
+        "created_files": created_files,
+        "failed": failed,
+        "cancelled": cancelled,
+    }
+    job_ctx.emit(done)
+    return done
+
+
 @router.post("/api/previews/create/stream")
-async def create_previews_stream(
-    req: PreviewBuildRequest,
-    request: Request,
-) -> StreamingResponse:
+def create_previews_stream(req: PreviewBuildRequest) -> StreamingResponse:
     try:
         targets = pv.missing_preview_entries(req.folder, invert=req.invert)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-    async def gen():
-        created_files: list[str] = []
-        failed: list[str] = []
-        cancelled = False
-
-        yield json.dumps({"type": "start", "total": len(targets)}) + "\n"
-        for entry in targets:
-            if await request.is_disconnected():
-                cancelled = True
-                break
-            try:
-                _, created = await asyncio.to_thread(pv.ensure_preview, entry, invert=req.invert)
-                status = "created" if created else "reused"
-                if created:
-                    created_files.append(entry.name)
-                yield json.dumps({"type": "progress", "file": entry.name, "status": status}) + "\n"
-            except pv.PreviewUnavailable as e:
-                msg = f"{entry.name}: {e}"
-                failed.append(msg)
-                yield json.dumps(
-                    {"type": "progress", "file": entry.name, "status": "failed", "error": msg}
-                ) + "\n"
-
-        yield json.dumps(
-            {
-                "type": "done",
-                "folder": req.folder,
-                "created_files": created_files,
-                "failed": failed,
-                "cancelled": cancelled,
-            }
-        ) + "\n"
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    job = jobs.get_manager().submit(
+        "previews",
+        lambda job_ctx: _previews_job(job_ctx, req.folder, targets, req.invert),
+    )
+    return StreamingResponse(
+        _follow_job_events(job, total=len(targets)), media_type="application/x-ndjson"
+    )
 
 
 def _resolve_folder_file(folder: str, name: str) -> Path:
@@ -482,16 +529,16 @@ class _Pipeline:
         dev_method_snapshot: mf.NamedSnapshot,
         scan_provider_snapshot: mf.NamedSnapshot,
         scan_method_snapshot: mf.NamedSnapshot,
-        capture_date_value: Optional[str],
+        capture_date_value: str | None,
         capture_date_precision: str,
-        capture_date_source: Optional[str],
+        capture_date_source: str | None,
         file_keywords_by_name: dict[str, list[str]],
         file_lens_by_name: dict[str, Lens],
         keyword_context: kw.WriteContext,
-        camera_make: Optional[str],
-        camera_model: Optional[str],
-        capture_date_exif: Optional[str],
-        roll_notes: Optional[str],
+        camera_make: str | None,
+        camera_model: str | None,
+        capture_date_exif: str | None,
+        roll_notes: str | None,
         replace_managed_metadata: bool,
     ) -> None:
         self.folder = folder
@@ -528,13 +575,13 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
 
     # All three of camera/lens/film are optional. The user may only know one
     # piece of context for a given roll — tagging just that is still useful.
-    camera: Optional[Camera] = None
+    camera: Camera | None = None
     if req.camera_id:
         camera = session.get(Camera, req.camera_id)
         if camera is None:
             raise HTTPException(status_code=404, detail="Camera not found")
 
-    lens: Optional[Lens] = None
+    lens: Lens | None = None
     if camera and camera.fixed_lens_id:
         lens = session.get(Lens, camera.fixed_lens_id)
     elif req.lens_id:
@@ -542,7 +589,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         if lens is None:
             raise HTTPException(status_code=404, detail="Lens not found")
 
-    film: Optional[FilmStock] = None
+    film: FilmStock | None = None
     if req.film_stock_id:
         film = session.get(FilmStock, req.film_stock_id)
         if film is None:
@@ -637,7 +684,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _normalize_roll_date(raw: Optional[str]) -> Optional[str]:
+def _normalize_roll_date(raw: str | None) -> str | None:
     """Validate `YYYY-MM-DD`; reject anything else so garbage never hits exiftool."""
     if raw is None:
         return None
@@ -649,14 +696,14 @@ def _normalize_roll_date(raw: Optional[str]) -> Optional[str]:
     return s
 
 
-def _exif_date(iso_date: Optional[str]) -> Optional[str]:
+def _exif_date(iso_date: str | None) -> str | None:
     """Convert `YYYY-MM-DD` -> `YYYY:MM:DD 12:00:00` (noon local, day-precision proxy)."""
     if iso_date is None:
         return None
     return iso_date.replace("-", ":") + " 12:00:00"
 
 
-def _maybe(session: Session, model, entity_id: Optional[str], label: str):
+def _maybe(session: Session, model, entity_id: str | None, label: str):
     if not entity_id:
         return None
     row = session.get(model, entity_id)
@@ -665,7 +712,7 @@ def _maybe(session: Session, model, entity_id: Optional[str], label: str):
     return row
 
 
-def _require_provider_kind(row: Optional[Provider], kind: str, label: str) -> None:
+def _require_provider_kind(row: Provider | None, kind: str, label: str) -> None:
     if row is None or row.has_kind(kind):
         return
     raise HTTPException(status_code=400, detail=f"{label} must support {kind}")
@@ -692,14 +739,14 @@ def _normalize_file_keywords(
     return out
 
 
-def _normalize_roll_notes(raw: Optional[str]) -> Optional[str]:
+def _normalize_roll_notes(raw: str | None) -> str | None:
     if raw is None:
         return None
     cleaned = raw.strip()
     return cleaned or None
 
 
-def _lens_compatible_with_camera(camera: Optional[Camera], lens: Lens) -> bool:
+def _lens_compatible_with_camera(camera: Camera | None, lens: Lens) -> bool:
     if camera is None:
         return True
     if camera.fixed_lens_id:
@@ -713,7 +760,7 @@ def _normalize_file_lenses(
     session: Session,
     raw: dict[str, str],
     valid_file_names: list[str],
-    camera: Optional[Camera],
+    camera: Camera | None,
 ) -> dict[str, Lens]:
     valid = set(valid_file_names)
     out: dict[str, Lens] = {}
