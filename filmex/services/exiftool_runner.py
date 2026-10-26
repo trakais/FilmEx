@@ -13,6 +13,20 @@ from filmex.services import exiftool_locator as locator
 _log = logging.getLogger(__name__)
 
 
+# Every tag FilmEx manages; read before a diff or write so merges see the
+# current state.
+MANAGED_READ_TAGS = [
+    "Make",
+    "Model",
+    "LensModel",
+    "Subject",
+    "Keywords",
+    "HierarchicalSubject",
+    "Description",
+    "Caption-Abstract",
+]
+
+
 class ExifToolMissing(RuntimeError):
     """Raised when a write or read is attempted without a usable ExifTool."""
 
@@ -78,3 +92,20 @@ def apply_intent(path: Path | str, intent: et.WriteIntent) -> subprocess.Complet
             return result
     assert result is not None  # build_argv never returns an empty list
     return result
+
+
+def read_managed_tags(path: Path | str) -> dict[str, Any]:
+    """The managed tag set as currently on disk.
+
+    For raw files this reads the XMP sidecar (canonical or legacy name), never
+    the raw itself, so the "before" state reflects the metadata layer FilmEx
+    manages rather than the camera EXIF inside the raw. No sidecar yet means
+    nothing is managed yet.
+    """
+    target = Path(path)
+    if et.detect_mode(target) == "sidecar":
+        sidecar = et.find_existing_sidecar(target)
+        if sidecar is None:
+            return {}
+        return read_tags(sidecar, list(MANAGED_READ_TAGS))
+    return read_tags(target, list(MANAGED_READ_TAGS))

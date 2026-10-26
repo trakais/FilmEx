@@ -54,7 +54,7 @@ from filmex.services import previews as pv
 from filmex.services.exiftool_runner import (
     apply_intent,
     exiftool_available,
-    read_tags,
+    read_managed_tags,
 )
 
 router = APIRouter()
@@ -505,27 +505,13 @@ def _open_with_default_app(path: Path) -> None:
 
 # ---- internals ----
 
-_READ_TAGS = ["Make", "Model", "LensModel", "Subject", "Keywords", "HierarchicalSubject"]
-_READ_TAGS += ["Description", "Caption-Abstract"]
 
 
 def _read_existing_tags(file_path: Path) -> dict:
-    """Read tags for a dry-run/apply diff.
-
-    For raw files we read the XMP sidecar rather than the raw so the "before"
-    state reflects the managed metadata layer, not the original digital-camera
-    EXIF inside the raw (which we never touch).
-    """
+    """Managed tags as currently on disk (sidecar for raw). See the runner."""
     if not exiftool_available():
         return {}
-    if et.detect_mode(file_path) == "sidecar":
-        # Tolerate legacy `photo.arw.xmp` alongside the canonical `photo.xmp`
-        # so the diff view matches whatever actually exists on disk.
-        sidecar = et.find_existing_sidecar(file_path)
-        if sidecar is None:
-            return {}
-        return read_tags(sidecar, _READ_TAGS)
-    return read_tags(file_path, _READ_TAGS)
+    return read_managed_tags(file_path)
 
 
 class _Pipeline:

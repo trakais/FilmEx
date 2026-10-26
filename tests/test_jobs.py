@@ -161,7 +161,7 @@ def test_cancelled_apply_still_writes_manifest(client, roll_factory, monkeypatch
 
     folder = roll_factory("2026-04-17_R777", jpegs=4)
     monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_tags", lambda path, tags: {})
+    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
     calls: list[str] = []
 
     def fake_apply(path, intent):
@@ -197,7 +197,7 @@ def test_failed_apply_reports_error_and_keeps_partial_manifest(client, roll_fact
 
     folder = roll_factory("2026-04-17_R778", jpegs=3)
     monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_tags", lambda path, tags: {})
+    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
     calls: list[str] = []
 
     def fake_apply(path, intent):

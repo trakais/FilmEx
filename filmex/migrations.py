@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 def migrate_db(engine: Engine) -> None:
@@ -65,6 +65,9 @@ def _apply_migration(engine: Engine, version: int) -> None:
         return
     if version == 7:
         _migrate_to_v7(engine)
+        return
+    if version == 8:
+        _migrate_to_v8(engine)
         return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
@@ -224,6 +227,31 @@ def _migrate_to_v7(engine: Engine) -> None:
     """Short names for cameras and film stocks, used by the folder naming system."""
     _ensure_column(engine, "camera", "short_name", "VARCHAR")
     _ensure_column(engine, "film_stock", "short_name", "VARCHAR")
+
+
+def _migrate_to_v8(engine: Engine) -> None:
+    """Operation log for batch file operations (renames, splits, imports)."""
+    inspector = inspect(engine)
+    if inspector.has_table("operation_log"):
+        return
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE operation_log (
+                id VARCHAR PRIMARY KEY NOT NULL,
+                kind VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                root VARCHAR,
+                started_at VARCHAR NOT NULL,
+                finished_at VARCHAR,
+                undone_at VARCHAR,
+                plan_json VARCHAR NOT NULL DEFAULT '{}',
+                result_json VARCHAR NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.exec_driver_sql("CREATE INDEX ix_operation_log_kind ON operation_log(kind)")
+        conn.exec_driver_sql("CREATE INDEX ix_operation_log_status ON operation_log(status)")
 
 
 def _sync_film_brands(engine: Engine) -> None:

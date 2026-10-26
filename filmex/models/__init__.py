@@ -6,6 +6,7 @@ from filmex.models.film_brand import FilmBrand
 from filmex.models.film_stock import FilmStock
 from filmex.models.lens import Lens
 from filmex.models.library_folder import LibraryFolderRow
+from filmex.models.operation_log import OperationLog
 from filmex.models.provider import DevelopmentMethod, Provider, ScanMethod
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "FilmStock",
     "Lens",
     "LibraryFolderRow",
+    "OperationLog",
     "Provider",
     "ScanMethod",
 ]

@@ -7,6 +7,7 @@ import unicodedata
 import pytest
 
 from filmex.services import naming
+from tests.helpers import ensure_film
 
 
 def test_slug_keeps_unicode_letters_and_drops_illegal_chars():
@@ -81,13 +82,7 @@ def test_short_name_round_trips_through_the_api(client):
     patched = client.patch(f"/api/cameras/{cam['id']}", json={"short_name": "F3HP"}).json()
     assert patched["short_name"] == "F3HP"
 
-    brand = client.post("/api/film-brands", json={"name": "Kodak"}).json()
-    assert brand["name"] == "Kodak"
-    film = client.post(
-        "/api/film-stocks",
-        json={"brand": "Kodak", "name": "Gold 200", "display_name": "Kodak Gold 200", "box_speed_iso": 200,
-              "film_type": "color_negative", "process_type": "c41", "short_name": "Gold"},
-    ).json()
+    film = ensure_film(client, brand="Kodak", name="Gold 200", display_name="Kodak Gold 200", iso=200, short_name="Gold")
     assert film["short_name"] == "Gold"
 
 
@@ -99,7 +94,7 @@ def test_place_is_stored_in_the_manifest(client, roll_factory, monkeypatch):
 
     folder = roll_factory("2026-06-20-Fujica-ColorPlus", jpegs=1)
     monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_tags", lambda path, tags: {})
+    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
     monkeypatch.setattr(wr, "apply_intent", lambda path, intent: subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b""))
     cam = client.get("/api/cameras").json()[0]
     res = client.post("/api/metadata/apply", json={"folder": str(folder), "camera_id": cam["id"], "place": "  Jāņos "})
