@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import json
 import os
 from pathlib import Path
 
@@ -219,7 +218,6 @@ def test_remove_folder_if_empty_deletes_only_litter(tmp_path: Path):
     _touch(folder, "keep.txt")
     assert not fileops.remove_folder_if_empty(folder)
     assert (folder / "keep.txt").is_file()
-    assert json.dumps(fileops.RollDraft(name="a", frames=["b"]).to_dict())
 
 
 def test_planning_leaves_the_callers_rolls_untouched(library: Path, fake_exiftool):

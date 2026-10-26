@@ -98,16 +98,23 @@ def test_propose_with_custom_template_and_roll_numbers(client, rename_tree):
 
 
 def _tagged_files(fake, written):
-    """Files read back as tagged with their folder's Roll keyword plus user
-    keywords; every write is recorded as (name, hierarchical, flat)."""
+    """Files start tagged with their folder's Roll keyword plus user keywords
+    and read back whatever was last written to them, like a real file. Every
+    write is recorded as (name, hierarchical, flat)."""
+    on_disk: dict[str, dict] = {}
 
-    fake.tags = lambda path: {
-        "HierarchicalSubject": [f"Roll|{path.parent.name}", "Film|Kodak Gold 200", "People|Anna"],
-        "Subject": [path.parent.name, "Kodak Gold 200", "Anna"],
-    }
-    fake.on_write = lambda path, intent: written.append(
-        (path.name, list(intent.hierarchical_keywords), list(intent.flat_keywords))
-    )
+    def read(path):
+        return on_disk.get(path.name) or {
+            "HierarchicalSubject": [f"Roll|{path.parent.name}", "Film|Kodak Gold 200", "People|Anna"],
+            "Subject": [path.parent.name, "Kodak Gold 200", "Anna"],
+        }
+
+    def write(path, intent):
+        on_disk[path.name] = {"HierarchicalSubject": list(intent.hierarchical_keywords), "Subject": list(intent.flat_keywords)}
+        written.append((path.name, list(intent.hierarchical_keywords), list(intent.flat_keywords)))
+
+    fake.tags = read
+    fake.on_write = write
 
 
 def test_apply_rename_updates_manifest_and_roll_keyword_then_undo(client, rename_tree, fake_exiftool):
@@ -147,7 +154,8 @@ def test_apply_rename_updates_manifest_and_roll_keyword_then_undo(client, rename
     assert events[-1]["restored"] == [{"from": str(target), "to": str(source)}]
     assert source.is_dir() and not target.exists()
     assert mf.read_manifest(source)["roll_id"] == "jani-2026"
-    assert written[-1][1] == ["Film|Kodak Gold 200", "People|Anna", "Roll|jani-2026"] or "Roll|jani-2026" in written[-1][1]
+    # Undo read back the keywords the rename wrote and swapped the Roll family back.
+    assert written[-1] == ("c.jpg", ["Film|Kodak Gold 200", "People|Anna", "Roll|jani-2026"], ["Kodak Gold 200", "Anna", "jani-2026"])
     assert client.get("/api/operations?kind=rename").json()[0]["status"] == "undone"
     assert client.post(f"/api/operations/{done['operation_id']}/undo").status_code == 409
 
