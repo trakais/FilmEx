@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from filmex.config import ensure_data_dir
-from filmex.services.exiftool_runner import exiftool_available
+from filmex.services import exiftool_locator as locator
 
 SUPPORTED_JPG_EXTS = {".jpg", ".jpeg"}
 SUPPORTED_TIF_EXTS = {".tif", ".tiff"}
@@ -156,11 +156,12 @@ def _load_preview_image(path: Path, *, thm: Path | None) -> Image.Image:
 
 
 def _extract_embedded_preview_bytes(path: Path) -> bytes:
-    if not exiftool_available():
+    cmd = locator.command()
+    if cmd is None:
         raise PreviewUnavailable("exiftool not available for raw preview extraction")
     for tag in RAW_PREVIEW_TAGS:
         proc = subprocess.run(
-            ["exiftool", "-b", f"-{tag}", str(path)],
+            [*cmd, "-b", f"-{tag}", str(path)],
             capture_output=True,
             check=False,
         )

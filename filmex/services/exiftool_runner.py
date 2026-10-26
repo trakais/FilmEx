@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from filmex.services import exiftool as et
+from filmex.services import exiftool_locator as locator
 
 _log = logging.getLogger(__name__)
 
 
+class ExifToolMissing(RuntimeError):
+    """Raised when a write or read is attempted without a usable ExifTool."""
+
+
 def exiftool_available() -> bool:
-    return shutil.which("exiftool") is not None
+    return locator.available()
+
+
+def _command() -> list[str]:
+    cmd = locator.command()
+    if cmd is None:
+        raise ExifToolMissing("exiftool not found; set its path in Settings")
+    return cmd
 
 
 def read_tags(path: Path | str, tags: list[str]) -> dict[str, Any]:
@@ -24,7 +35,7 @@ def read_tags(path: Path | str, tags: list[str]) -> dict[str, Any]:
     like missing optional tags but still emits valid JSON), but the stderr is
     surfaced via the logger so failures aren't entirely silent.
     """
-    argv = et.build_read_argv(path, tags)
+    argv = et.build_read_argv(path, tags, command=_command())
     result = subprocess.run(argv, capture_output=True, check=False)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", "replace").strip()
@@ -58,6 +69,7 @@ def apply_intent(path: Path | str, intent: et.WriteIntent) -> subprocess.Complet
         overwrite_original=True,
         sidecar_exists=sidecar_exists,
         sidecar_path=sidecar_path,
+        command=_command(),
     )
     result: subprocess.CompletedProcess | None = None
     for argv in invocations:

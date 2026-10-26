@@ -7,6 +7,7 @@ layer. The actual invocation lives in `exiftool_runner.py`.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -18,6 +19,10 @@ _EMBED_EXTS = {".jpg", ".jpeg", ".tif", ".tiff"}
 _SIDECAR_EXTS = {".arw", ".dng"}
 
 ModeName = Literal["embed", "sidecar"]
+
+# Default argv prefix. The runner substitutes the resolved location from
+# `exiftool_locator`; tests keep the bare name so assertions stay readable.
+DEFAULT_COMMAND: tuple[str, ...] = ("exiftool",)
 
 
 @dataclass
@@ -97,10 +102,15 @@ def find_existing_sidecar(raw_path: Path | str) -> Optional[Path]:
     return None
 
 
-def build_read_argv(path: Path | str, tags: list[str]) -> list[str]:
+def build_read_argv(
+    path: Path | str,
+    tags: list[str],
+    *,
+    command: Sequence[str] = DEFAULT_COMMAND,
+) -> list[str]:
     """Build argv for reading specified tags as JSON."""
     argv = [
-        "exiftool",
+        *command,
         "-charset",
         "filename=utf8",
         "-j",
@@ -136,6 +146,7 @@ def build_argv(
     overwrite_original: bool = True,
     sidecar_exists: bool = False,
     sidecar_path: Optional[Path | str] = None,
+    command: Sequence[str] = DEFAULT_COMMAND,
 ) -> list[list[str]]:
     """Build the exiftool invocation(s) for applying `intent` to `target`.
 
@@ -150,6 +161,9 @@ def build_argv(
     The runner passes this when it found a legacy-named sidecar so we keep
     editing the existing file instead of silently creating a second one.
 
+    `command` is the argv prefix for ExifTool itself (a resolved executable,
+    or `perl` plus the script for the pure-Perl distribution).
+
     There is no dry-run mode here — preview is computed by `diff()` against
     the file's current tags, not by invoking exiftool.
     """
@@ -159,7 +173,7 @@ def build_argv(
     if mode == "sidecar":
         xmp_path = Path(sidecar_path) if sidecar_path is not None else sidecar_path_for(path)
         edit_argv = (
-            _exiftool_prefix(overwrite_original)
+            _exiftool_prefix(overwrite_original, command)
             + _intent_args(intent, drop_iptc=True)
             + [str(xmp_path)]
         )
@@ -169,7 +183,7 @@ def build_argv(
         # when the xmp is absent. We keep the seed call free of assignments —
         # otherwise exiftool's copy-from-source step would win over them.
         seed_argv = [
-            "exiftool",
+            *command,
             "-charset",
             "filename=utf8",
             "-o",
@@ -179,16 +193,16 @@ def build_argv(
         return [seed_argv, edit_argv]
 
     embed_argv = (
-        _exiftool_prefix(overwrite_original)
+        _exiftool_prefix(overwrite_original, command)
         + _intent_args(intent, drop_iptc=False)
         + [str(path)]
     )
     return [embed_argv]
 
 
-def _exiftool_prefix(overwrite_original: bool) -> list[str]:
+def _exiftool_prefix(overwrite_original: bool, command: Sequence[str]) -> list[str]:
     argv = [
-        "exiftool",
+        *command,
         "-charset",
         "filename=utf8",
         # `|` is our hierarchical separator, so keyword values themselves cannot
