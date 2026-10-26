@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
+from filmex.services import frames as fr
 from filmex.services import jobs
 from filmex.services import library as lib
 from filmex.services import library_cache as cache
@@ -108,7 +109,7 @@ def read_library_folder(path: str, session: Session = Depends(get_session)) -> d
     parent = folder.parent.name if root and folder.parent != Path(root).expanduser() else None
     depth = 1 if root and folder.parent == Path(root).expanduser() else 2
     row = lib.inspect_folder(
-        folder, depth=depth, parent=lib.display_name(parent) if parent else None
+        folder, depth=depth, parent=fr.display_name(parent) if parent else None
     )
     row.is_flat_year = depth == 1 and row.image_count > 0
     return row.to_dict()

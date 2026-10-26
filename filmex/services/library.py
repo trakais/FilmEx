@@ -13,7 +13,6 @@ may store them NFD); ``display_name`` is the NFC form for the UI.
 from __future__ import annotations
 
 import os
-import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
@@ -21,17 +20,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from filmex.services import frames as fr
 from filmex.services import manifest as mf
-from filmex.services.folder_scan import SUPPORTED_EXTS, _source_kind_for
+from filmex.services.frames import display_name
 
 MAX_DEPTH = 2
-SIDECAR_EXTS = frozenset({".xmp"})
-
-# Junk that NAS shares and desktop file managers leave behind. Never listed,
-# never counted, never copied.
-SKIP_DIR_NAMES = frozenset({"@eaDir", "#recycle", "#snapshot", "lost+found", "$RECYCLE.BIN"})
-SKIP_FILE_NAMES = frozenset({"Thumbs.db", "desktop.ini"})
-SKIP_FILE_PREFIXES = ("._", "smbdelete")
 
 TAGGED = "tagged"
 PARTIAL = "partial"
@@ -67,18 +60,6 @@ class LibraryFolder:
         return data
 
 
-def is_junk_dir(name: str) -> bool:
-    return name.startswith(".") or name in SKIP_DIR_NAMES
-
-
-def is_junk_file(name: str) -> bool:
-    return name.startswith(".") or name.startswith(SKIP_FILE_PREFIXES) or name in SKIP_FILE_NAMES
-
-
-def display_name(name: str) -> str:
-    return unicodedata.normalize("NFC", name)
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -86,7 +67,7 @@ def _now() -> str:
 def _subdirs(folder: Path) -> Iterator[os.DirEntry]:
     try:
         with os.scandir(folder) as it:
-            entries = [e for e in it if _is_dir(e) and not is_junk_dir(e.name)]
+            entries = [e for e in it if _is_dir(e) and not fr.is_junk_dir(e.name)]
     except OSError:
         return iter(())
     entries.sort(key=lambda e: display_name(e.name).lower())
@@ -98,31 +79,6 @@ def _is_dir(entry: os.DirEntry) -> bool:
         return entry.is_dir(follow_symlinks=False)
     except OSError:
         return False
-
-
-def list_files(folder: Path) -> tuple[list[str], int]:
-    """Image file names (sorted) and the sidecar count directly in ``folder``."""
-    images: list[str] = []
-    sidecars = 0
-    try:
-        with os.scandir(folder) as it:
-            for entry in it:
-                if is_junk_file(entry.name):
-                    continue
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    continue
-                suffix = os.path.splitext(entry.name)[1].lower()
-                if suffix in SUPPORTED_EXTS:
-                    images.append(entry.name)
-                elif suffix in SIDECAR_EXTS:
-                    sidecars += 1
-    except OSError:
-        return [], 0
-    images.sort(key=lambda n: display_name(n).lower())
-    return images, sidecars
 
 
 def applied_files_from_manifest(manifest: dict[str, Any] | None) -> set[str]:
@@ -149,8 +105,12 @@ def last_applied_at(manifest: dict[str, Any] | None) -> str | None:
 
 
 def inspect_folder(folder: Path, *, depth: int, parent: str | None) -> LibraryFolder:
-    images, sidecars = list_files(folder)
-    kinds = Counter(_source_kind_for(os.path.splitext(n)[1].lower()) or "other" for n in images)
+    try:
+        listing = fr.list_frames(folder)
+        images, sidecars = listing.images, listing.sidecar_count
+    except OSError:  # vanished or unreadable mid-walk: show it as empty
+        images, sidecars = [], 0
+    kinds = Counter(fr.source_kind_for(n) or "other" for n in images)
     manifest = _safe_read_manifest(folder)
     applied = applied_files_from_manifest(manifest)
     # Compare on normalized names: the manifest was written from the same

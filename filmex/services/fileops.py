@@ -27,7 +27,6 @@ from sqlmodel import Session
 
 from filmex.schemas import DryRunRequest
 from filmex.services import frames as fr
-from filmex.services import library as lib
 from filmex.services import manifest as mf
 from filmex.services import operations
 from filmex.services import tagging as tg
@@ -39,10 +38,6 @@ Cancelled = Callable[[], bool]
 SIBLINGS = "siblings"
 SUBFOLDERS = "subfolders"
 
-# The only files a cleanup may delete: desktop and share litter that the
-# OS regenerates. Everything else keeps a folder alive.
-_DELETABLE_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
-_DELETABLE_PREFIXES = ("._",)
 
 
 class PlanError(ValueError):
@@ -105,12 +100,9 @@ def same_volume(a: Path, b: Path) -> bool:
         return False
 
 
-def is_deletable_junk(name: str) -> bool:
-    return name in _DELETABLE_NAMES or name.startswith(_DELETABLE_PREFIXES)
-
-
 def remove_folder_if_empty(folder: Path) -> bool:
-    """Delete desktop litter and remove the folder when nothing else is left."""
+    """Delete OS litter (``frames.is_litter``) and remove the folder when
+    nothing else is left."""
     try:
         with os.scandir(folder) as it:
             entries = list(it)
@@ -119,7 +111,7 @@ def remove_folder_if_empty(folder: Path) -> bool:
     except OSError:
         return False
     for entry in entries:
-        if is_deletable_junk(entry.name):
+        if fr.is_litter(entry.name):
             try:
                 os.remove(entry.path)
             except OSError:
@@ -144,7 +136,7 @@ def tagging_sidecars(folder: Path, image_names: list[str]) -> list[Path]:
             for entry in it:
                 if not entry.is_file(follow_symlinks=False):
                     continue
-                if os.path.splitext(entry.name)[1].lower() != ".xmp":
+                if os.path.splitext(entry.name)[1].lower() != fr.SIDECAR_EXT:
                     continue
                 if fr.stem_key(entry.name) in stems:
                     found.append(Path(entry.path))
@@ -433,8 +425,10 @@ def _move_file(src: Path, dst: Path) -> None:
 
 
 def _no_images_left(folder: Path) -> bool:
-    images, _ = lib.list_files(folder)
-    return not images
+    try:
+        return not fr.list_frames(folder).frames
+    except OSError:
+        return False
 
 
 def _retire_source(folder: Path, *, remove_folder: bool) -> tuple[dict[str, Any] | None, bool]:
