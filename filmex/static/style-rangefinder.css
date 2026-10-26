@@ -1626,3 +1626,43 @@ button:disabled {
   gap: 14px;
   padding-top: 6px;
 }
+
+/* ---------- In-page dialog (replaces alert / confirm) ---------- */
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  background: linear-gradient(180deg, #111 0%, #0a0a0a 100%);
+  border: 1px solid var(--border);
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  z-index: 30;
+}
+.dialog h3 {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dialog-message {
+  margin: 0;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+#dialog-backdrop { z-index: 29; }
+body[data-theme="paper"] .dialog {
+  background: linear-gradient(180deg, #f5ecdf 0%, #e8dccb 100%);
+}

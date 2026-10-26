@@ -11,7 +11,11 @@ dependencies = [
     "python-multipart>=0.0.9",
     "pillow>=10.4",
     "platformdirs>=4.13.5",
+    "pywebview>=6.2.1",
 ]
+
+[project.scripts]
+filmex = "filmex.desktop:main"
 
 [dependency-groups]
 dev = [

@@ -191,6 +191,85 @@ function renderThemeSwitch() {
   paperBtn.setAttribute("aria-pressed", String(!isDark));
 }
 
+// ---------- In-page dialogs ----------
+//
+// Replaces window.alert/confirm. Browsers offer to suppress repeated native
+// dialogs (after which `confirm` silently returns false), and the desktop
+// shell should never pop a WebKit sheet over the app.
+
+function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabel = null } = {}) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById("dialog");
+    const backdrop = document.getElementById("dialog-backdrop");
+    const okBtn = document.getElementById("dialog-ok");
+    const cancelBtn = document.getElementById("dialog-cancel");
+    document.getElementById("dialog-title").textContent = title;
+    document.getElementById("dialog-message").textContent = message;
+    okBtn.textContent = okLabel;
+    cancelBtn.textContent = cancelLabel || "Cancel";
+    cancelBtn.classList.toggle("hidden", !cancelLabel);
+    const previouslyFocused = document.activeElement;
+
+    const finish = (value) => { cleanup(); resolve(value); };
+    const onOk = () => finish(true);
+    const onCancel = () => finish(false);
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      else if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    };
+    function cleanup() {
+      dialog.classList.add("hidden");
+      backdrop.classList.add("hidden");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKey);
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") previouslyFocused.focus();
+    }
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKey);
+    dialog.classList.remove("hidden");
+    backdrop.classList.remove("hidden");
+    okBtn.focus();
+  });
+}
+
+function notify(message, title = "FilmEx") {
+  return showDialog({ title, message });
+}
+
+function ask(message, { title = "Confirm", okLabel = "Continue", cancelLabel = "Cancel" } = {}) {
+  return showDialog({ title, message, okLabel, cancelLabel });
+}
+
+// ---------- Desktop shell bridge ----------
+//
+// Inside the pywebview window the shell owns the native folder dialog and
+// receives real filesystem paths for drops; it calls into this object.
+
+function isDesktopShell() {
+  return !!window.pywebview;
+}
+
+window.filmexDesktop = {
+  // Absolute paths of the items dropped on the window, folder or files.
+  onDrop(paths) {
+    const path = (paths || [])[0];
+    if (path) acceptDroppedFolder(path);
+  },
+};
+
+function acceptDroppedFolder(path) {
+  const input = document.getElementById("folder-input");
+  input.value = path;
+  state.folder = path;
+  saveStickyState();
+  onScan();
+}
+
 // ---------- API ----------
 
 async function api(path, opts = {}) {
@@ -252,6 +331,19 @@ async function cancelJob(jobId) {
 // ---------- Initial load ----------
 
 async function init() {
+  document.body.dataset.ready = "";
+  try {
+    await initInner();
+    document.body.dataset.ready = "ok";
+  } catch (e) {
+    document.body.dataset.ready = "error";
+    throw e;
+  }
+}
+
+// Marked on <body data-ready> so the desktop shell's smoke check can tell
+// that settings and entity lists loaded through the authenticated API.
+async function initInner() {
   await loadSettings();
 
   await refreshExifToolStatus();
@@ -351,7 +443,7 @@ async function onBrowse() {
     saveStickyState();
     onScan();
   } catch (err) {
-    alert(`Could not open folder picker: ${err.message || err}`);
+    await notify(`Could not open folder picker: ${err.message || err}`);
   } finally {
     btn.disabled = false;
   }
@@ -1143,7 +1235,7 @@ async function onDryRun() {
     renderDiff(res);
     updateActionButtons();
   } catch (e) {
-    alert(`Dry-run failed:\n${e.message}`);
+    await notify(`Dry-run failed:\n${e.message}`);
   }
 }
 
@@ -1334,7 +1426,7 @@ function renderDiff(result) {
 }
 
 async function onApply() {
-  if (!confirm("Write metadata to all files in this folder?")) return;
+  if (!(await ask("Write metadata to all files in this folder?", { okLabel: "Write metadata" }))) return;
   const btn = document.getElementById("apply-btn");
   const dryBtn = document.getElementById("dry-run-btn");
   btn.disabled = true;
@@ -1374,7 +1466,7 @@ async function onApply() {
     if (!done_event) throw new Error("stream ended without completion event");
     renderApplyResult(done_event);
   } catch (e) {
-    alert(`Apply failed:\n${e.message}`);
+    await notify(`Apply failed:\n${e.message}`);
   } finally {
     delete btn.dataset.n;
     btn.textContent = "Apply";
@@ -1499,7 +1591,7 @@ async function openSourceFile(name) {
     const params = new URLSearchParams({ folder: state.folder, name });
     await api(`/api/files/open?${params.toString()}`, { method: "POST" });
   } catch (e) {
-    alert(`Could not open file:\n${e.message}`);
+    await notify(`Could not open file:\n${e.message}`);
   }
 }
 
@@ -2043,7 +2135,7 @@ async function submitSettingsForm() {
     } else {
       const suggestion = similarMountSuggestion(payload.mount);
       if (suggestion && suggestion !== payload.mount) {
-        const ok = confirm(`Mount "${payload.mount}" is very close to existing mount "${suggestion}". Save as a new mount anyway?`);
+        const ok = await ask(`Mount "${payload.mount}" is very close to existing mount "${suggestion}". Save as a new mount anyway?`, { okLabel: "Save as new mount" });
         if (!ok) {
           errorEl.textContent = `Use existing mount "${suggestion}" or type a different new mount`;
           return;
@@ -2234,12 +2326,13 @@ function setupWindowDrop() {
     e.preventDefault();
     hide();
 
+    // Inside the desktop shell the real path arrives through
+    // window.filmexDesktop.onDrop; the browser payload has no path.
+    if (isDesktopShell()) return;
+
     const path = extractPathFromDrop(e.dataTransfer);
     if (path) {
-      input.value = path;
-      state.folder = path;
-      saveStickyState();
-      onScan();
+      acceptDroppedFolder(path);
       return;
     }
 
@@ -2317,5 +2410,5 @@ function showPasteFallback(hintName) {
     "Easiest workaround: drag the same folder into Terminal to copy the full",
     "path, then paste it into the folder input.",
   ].filter(Boolean).join("\n");
-  alert(msg);
+  void notify(msg, "Folder path needed");
 }

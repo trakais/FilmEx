@@ -299,6 +299,17 @@
   </aside>
   <div id="picker-backdrop" class="backdrop hidden"></div>
 
+  <!-- In-page dialog (replaces alert / confirm) -->
+  <div id="dialog-backdrop" class="backdrop hidden"></div>
+  <div id="dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+    <h3 id="dialog-title">FilmEx</h3>
+    <pre id="dialog-message" class="dialog-message"></pre>
+    <div class="dialog-foot">
+      <button id="dialog-cancel" class="secondary">Cancel</button>
+      <button id="dialog-ok" class="primary">OK</button>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>
