@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 def migrate_db(engine: Engine) -> None:
@@ -56,6 +56,9 @@ def _apply_migration(engine: Engine, version: int) -> None:
         return
     if version == 4:
         _migrate_to_v4(engine)
+        return
+    if version == 5:
+        _migrate_to_v5(engine)
         return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
@@ -154,6 +157,28 @@ def _migrate_to_v4(engine: Engine) -> None:
     step is safe and makes the migration self-healing.
     """
     _sync_film_brands(engine)
+
+
+def _migrate_to_v5(engine: Engine) -> None:
+    """Add the `app_setting` key/value table.
+
+    `init_db` runs `create_all` before migrations, so on most databases the
+    table already exists by the time this runs. Creating it here as well keeps
+    the migration self-contained for databases upgraded by other paths.
+    """
+    inspector = inspect(engine)
+    if inspector.has_table("app_setting"):
+        return
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE app_setting (
+                key VARCHAR PRIMARY KEY NOT NULL,
+                value_json VARCHAR NOT NULL,
+                updated_at VARCHAR NOT NULL
+            )
+            """
+        )
 
 
 def _sync_film_brands(engine: Engine) -> None:

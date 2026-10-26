@@ -12,9 +12,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlmodel import Session
 
-from filmex.db import init_db
-from filmex.routes import entities, health, workflow
+from filmex.db import get_engine, init_db
+from filmex.routes import entities, health, settings, workflow
+from filmex.services import settings as settings_service
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
@@ -22,12 +24,15 @@ _STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     init_db()
+    with Session(get_engine()) as session:
+        settings_service.apply_runtime_settings(session)
     yield
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="FilmEx", version="0.1.0", lifespan=_lifespan)
     app.include_router(health.router)
+    app.include_router(settings.router)
     app.include_router(entities.router)
     app.include_router(workflow.router)
 
