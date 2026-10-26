@@ -2791,7 +2791,6 @@ function unassignedKeys() {
 async function openInbox({ folder = null, destination = null } = {}) {
   showView("inbox");
   if (destination) state.inbox.destination = destination;
-  else if (!state.inbox.destination) state.inbox.destination = `import-${state.settings?.import_mode || "copy"}`;
   renderInboxDestination();
   if (folder) {
     document.getElementById("inbox-folder").value = folder;
@@ -3345,21 +3344,24 @@ async function refreshRollName(seg) {
 
 // ----- destination and run -----
 
+// Where the Run button sends the rolls: what the user picked (default: the
+// import mode setting), except that without a library root only a split in
+// place is possible. Rendering reads this; it never changes the choice.
 function inboxDestination() {
-  const value = state.inbox.destination || "import-copy";
-  if (value === "split") return { kind: "split", mode: null };
-  return { kind: "import", mode: value.slice("import-".length) };
+  const root = state.settings?.library_root || "";
+  const chosen = state.inbox.destination || `import-${state.settings?.import_mode || "copy"}`;
+  const value = root ? chosen : "split";
+  if (value === "split") return { value, kind: "split", mode: null };
+  return { value, kind: "import", mode: value.slice("import-".length) };
 }
 
 function renderInboxDestination() {
   const select = document.getElementById("inbox-destination");
   const hint = document.getElementById("inbox-dest-hint");
   const root = state.settings?.library_root || "";
-  const current = state.inbox.destination || `import-${state.settings?.import_mode || "copy"}`;
-  state.inbox.destination = root || current === "split" ? current : "split";
-  for (const opt of select.options) opt.disabled = !root && opt.value !== "split";
-  select.value = state.inbox.destination;
   const dest = inboxDestination();
+  for (const opt of select.options) opt.disabled = !root && opt.value !== "split";
+  select.value = dest.value;
   const folder = (state.inbox.folder || "").replace(/\/+$/, "");
   if (dest.kind === "import") {
     hint.textContent = `${dest.mode === "move" ? "Move" : "Copy"} each roll to ${root}/<year>/<name>, verify every file, then tag it there.`;

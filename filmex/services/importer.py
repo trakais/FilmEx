@@ -107,6 +107,7 @@ class ImportItem:
     files: list[dict[str, Any]]  # {name, bytes}
     image_count: int
     bytes: int
+    tagging: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
 
@@ -188,6 +189,7 @@ def plan_import(source: Path | str, segments: list[Segment], *, root: str | None
                 files=files,
                 image_count=sum(len(f.images) for f in frames),
                 bytes=sum(f["bytes"] for f in files),
+                tagging=dict(seg.tagging),
                 errors=item_errors,
             )
         )
@@ -257,7 +259,6 @@ def apply_import(
     if not plan.ok:
         raise PlanError(plan.errors + [f"{i.name}: {e}" for i in plan.items for e in i.errors])
     source_path = Path(plan.source)
-    by_name = {seg.name: seg for seg in segments}
 
     op = operations.start(
         session,
@@ -336,7 +337,7 @@ def apply_import(
             break
 
         record["verified"] = True
-        tagged = fileops.tag_folder(session, target, by_name[item.name].tagging, progress=emit, cancelled=cancelled)
+        tagged = fileops.tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
         record["applied"] = tagged["applied"]
         record["errors"].extend(tagged["errors"])
         record["tag_skipped"] = tagged.get("skipped")

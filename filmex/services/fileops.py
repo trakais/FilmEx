@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import unicodedata
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -150,8 +150,9 @@ def resolve_segments(
 ) -> tuple[list[tuple[Segment, list[fr.Frame]]], list[str], list[str]]:
     """Match segment frame keys against the listing.
 
-    Returns ``(resolved, unassigned_keys, errors)``. Names are cleaned in
-    place. A frame may belong to one segment only; unknown keys and empty
+    Returns ``(resolved, unassigned_keys, errors)``. Each resolved segment is
+    a copy with its folder name cleaned; the caller's segments are left as
+    they are. A frame may belong to one segment only; unknown keys and empty
     segments are errors.
     """
     by_key = fr.frames_by_key(listing)
@@ -162,7 +163,7 @@ def resolve_segments(
     for index, seg in enumerate(segments, start=1):
         label = seg.name or f"roll {index}"
         try:
-            seg.name = clean_name(seg.name)
+            seg = replace(seg, name=clean_name(seg.name))
         except ValueError as exc:
             errors.append(f"{label}: {exc}")
         if any(same_name(seg.name, other) for other in seen_names):
@@ -232,6 +233,7 @@ class SplitItem:
     files: list[str]
     image_count: int
     bytes: int
+    tagging: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
 
@@ -302,6 +304,7 @@ def plan_split(source: Path | str, segments: list[Segment], *, root: str | None)
                 files=files,
                 image_count=sum(len(f.images) for f in frames),
                 bytes=sum(f.bytes for f in frames),
+                tagging=dict(seg.tagging),
                 errors=item_errors,
             )
         )
@@ -348,7 +351,6 @@ def apply_split(
     if not plan.ok:
         raise PlanError(plan.errors + [e for i in plan.items for e in (f"{i.name}: {x}" for x in i.errors)])
     source_path = Path(plan.source)
-    by_name = {seg.name: seg for seg in segments}
 
     op = operations.start(
         session,
@@ -386,7 +388,7 @@ def apply_split(
                 emit({"type": "progress", "step": "move", "segment": item.name, "file": name, "done": done, "total": total})
             if was_cancelled:
                 break
-            tagged = tag_folder(session, target, by_name[item.name].tagging, progress=emit, cancelled=cancelled)
+            tagged = tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
             record["applied"] = tagged["applied"]
             record["errors"] = tagged["errors"]
             record["tag_skipped"] = tagged.get("skipped")

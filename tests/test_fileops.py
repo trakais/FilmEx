@@ -220,3 +220,17 @@ def test_remove_folder_if_empty_deletes_only_litter(tmp_path: Path):
     assert not fileops.remove_folder_if_empty(folder)
     assert (folder / "keep.txt").is_file()
     assert json.dumps(fileops.Segment(name="a", frames=["b"]).to_dict())
+
+
+def test_planning_leaves_the_callers_rolls_untouched(library: Path, fake_exiftool):
+    mixed = library / "2026" / "EUR-04"
+    segs = _segments(fr.list_frames(mixed))
+    segs[0].name = "  2026-04-01-Fed2-Gold  "
+    plan = fileops.plan_split(mixed, segs, root=str(library))
+    assert plan.items[0].name == "2026-04-01-Fed2-Gold"
+    assert segs[0].name == "  2026-04-01-Fed2-Gold  "
+    # Apply still tags each new folder with its own roll's fields.
+    with Session(get_engine()) as session:
+        fileops.apply_split(session, mixed, segs, root=str(library))
+    assert mf.read_manifest(library / "2026" / "2026-04-01-Fed2-Gold")["capture_date_value"] == "2026-04-01"
+    assert mf.read_manifest(library / "2026" / "2026-04-09-Fed2-HP5")["capture_date_value"] == "2026-04-09"
