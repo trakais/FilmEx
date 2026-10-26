@@ -228,6 +228,27 @@ film stock rows.
   Never spawn a bare `"exiftool"`; take the argv prefix from the locator.
 - **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
 
+## Library view
+
+`services/library.py` indexes the library root (Settings ▸ General) with a
+shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
+
+- A folder's **tagged set** is the union of `applied_files` over manifest
+  `apply_history` entries with `dry_run == false`. Dry runs never count.
+- **Status**: no images → `empty`; no manifest or nothing applied →
+  `untagged`; some files applied → `partial`; all applied → `tagged`. A
+  depth-one folder holding images itself is a flat year folder
+  (`is_flat_year`, shown as "unsorted").
+- Names are taken from the directory listing as-is (SMB shares store some
+  NFD); `display_name` is NFC. Never retype a path from its display name.
+- Junk is skipped everywhere: hidden entries, `@eaDir`, `#recycle`, `._*`
+  AppleDouble files, `smbdelete*`, `Thumbs.db`.
+- Rows are cached in `library_folder` (per root) so the view opens
+  instantly and survives an unmounted share; `POST /api/library/rescan`
+  replaces the cache in one transaction as a job.
+- Dry-run and apply accept `files: [...]` to restrict to a subset; names
+  are validated against the scan. The UI shows the subset as a chip.
+
 ## Metadata write policy
 
 The app owns a **whitelist** of EXIF/XMP fields and touches nothing else:

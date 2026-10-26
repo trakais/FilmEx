@@ -250,44 +250,50 @@ Goal: point at the library root and see every roll folder with its tagging
 status, then tag the remainder of a partially tagged roll.
 
 ### P2.1 Library service
-- [ ] `services/library.py`: `scan_library(root)` shallow walk, depth <= 2,
+- [x] `services/library.py`: `scan_library(root)` shallow walk, depth <= 2,
       skip the junk list from section 1. Names come from `os.scandir`
       unmodified; a separate `display_name` is NFC.
-- [ ] Per folder: `image_count` by kind, `sidecar_count`, manifest summary
+- [x] Per folder: `image_count` by kind, `sidecar_count`, manifest summary
       (roll_id, film display, camera display, last real apply timestamp),
       `applied_set` = union of `applied_files` over history entries with
       `dry_run == false`, `untagged_files` = images minus applied_set,
       `status` in `tagged` | `partial` | `untagged` | `empty`,
       `is_flat_year` when the folder is a direct child of root and holds
       images itself.
-- [ ] Migration v6: cache table `library_folder(path PK, parent, name,
+- [x] Migration v6: cache table `library_folder(path PK, parent, name,
       depth, status, image_count, untagged_count, film_display,
       camera_display, last_applied_at, scanned_at)`.
-- [ ] Routes: `GET /api/library` (cached rows + `stale` flag + root
+- [x] Routes: `GET /api/library` (cached rows + `stale` flag + root
       reachability), `POST /api/library/rescan` (job), `GET
       /api/library/folder?path=` (details including untagged names).
-- [ ] Tests: tmp tree with tagged, partial, untagged, flat-year, NFD-named
+- [x] Tests: tmp tree with tagged, partial, untagged, flat-year, NFD-named
       and junk folders; dry-run entries ignored.
 
 ### P2.2 Subset apply
-- [ ] `DryRunRequest.files: Optional[list[str]]`; when set, the pipeline
+- [x] `DryRunRequest.files: Optional[list[str]]`; when set, the pipeline
       restricts `ctx.files` to those names after validating they exist in
       the scan. Manifest history appends as usual.
-- [ ] Tests: subset apply touches only listed files; manifest union grows.
+- [x] Tests: subset apply touches only listed files; manifest union grows.
 
 ### P2.3 UI
-- [ ] New `library-view` as the start screen when a library root is set.
+- [x] New `library-view` as the start screen when a library root is set.
       Header nav: Library | Tag | Inbox | Settings.
-- [ ] Rows grouped by year: display name, status chip, counts, film,
+- [x] Rows grouped by year: display name, status chip, counts, film,
       camera. Flat year folders labelled "unsorted" with counts.
-- [ ] Actions: Open (Tag view with folder set, scan, manifest prefill),
+- [x] Actions: Open (Tag view with folder set, scan, manifest prefill),
       Tag remaining (same, with the file subset preselected and the
       preview limited to it), Reveal in Finder.
-- [ ] Rescan button with job progress; stale banner when the NAS is
+- [x] Rescan button with job progress; stale banner when the NAS is
       unmounted.
-- [ ] AGENTS.md: library semantics, status derivation rule.
+- [x] AGENTS.md: library semantics, status derivation rule.
 
 ---
+
+**Phase 2 status (2026-10-26): complete.** Verified against the user's NAS
+copy in a browser: 36 folders indexed in about a second, 18 tagged, 2
+partial, 13 untagged, 3 empty; "Tag remaining" opened a roll with manifest
+prefill and a one-file subset, and the dry run returned exactly that file.
+Header nav is Library | Tag (Inbox arrives with phase 4). 193 tests pass.
 
 ## Phase 3: Naming system
 
