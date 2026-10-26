@@ -146,23 +146,23 @@ def metadata_dry_run(
     req: DryRunRequest,
     session: Session = Depends(get_session),
 ) -> DryRunResponse:
-    ctx = _pipeline(req, session)
+    plan = _tagging_plan(req, session)
     diffs = [
         FileDiff(
             name=name,
             changes=[TagChangeOut(tag=c.tag, action=c.action, before=c.before, after=c.after) for c in changes],
         )
-        for name, changes in tg.preview_all(ctx)
+        for name, changes in tg.preview_all(plan)
     ]
-    return DryRunResponse(folder=str(ctx.folder), roll_id=ctx.roll_id, diffs=diffs)
+    return DryRunResponse(folder=str(plan.folder), roll_id=plan.roll_id, diffs=diffs)
 
 
-def _submit_apply(pipeline: tg.Pipeline) -> jobs.Job:
+def _submit_apply(plan: tg.TaggingPlan) -> jobs.Job:
     return jobs.get_manager().submit(
         "apply",
-        lambda job_ctx: tg.apply_all(pipeline, progress=job_ctx.emit, cancelled=job_ctx.cancelled),
+        lambda job_ctx: tg.apply_all(plan, progress=job_ctx.emit, cancelled=job_ctx.cancelled),
         exclusive=True,
-        start={"total": len(pipeline.files)},
+        start={"total": len(plan.files)},
     )
 
 
@@ -174,8 +174,8 @@ def metadata_apply(
     if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
-    ctx = _pipeline(req, session)
-    job = jobs.get_manager().wait(_submit_apply(ctx).id)
+    plan = _tagging_plan(req, session)
+    job = jobs.get_manager().wait(_submit_apply(plan).id)
     if job.status == jobs.FAILED:
         raise HTTPException(status_code=500, detail=job.error or "apply failed")
     final = job.result
@@ -201,7 +201,7 @@ def metadata_apply_stream(
     if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
-    return job_routes.stream(_submit_apply(_pipeline(req, session)))
+    return job_routes.stream(_submit_apply(_tagging_plan(req, session)))
 
 
 @router.get("/api/manifests/{roll_id}", response_model=ManifestResponse)
@@ -350,9 +350,9 @@ def _open_with_default_app(path: Path) -> None:
 # ---- internals ----
 
 
-def _pipeline(req: DryRunRequest, session: Session) -> tg.Pipeline:
+def _tagging_plan(req: DryRunRequest, session: Session) -> tg.TaggingPlan:
     try:
-        return tg.build_pipeline(req, session)
+        return tg.plan_tagging(req, session)
     except tg.TaggingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

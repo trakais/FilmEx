@@ -13,7 +13,7 @@ from filmex.db import get_engine
 from filmex.services import fileops, importer, operations
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
-from filmex.services.fileops import Segment
+from filmex.services.fileops import RollDraft
 
 
 def _touch(folder: Path, name: str, data: bytes = b"x" * 4) -> Path:
@@ -39,13 +39,13 @@ def inbox(tmp_path: Path, client, make_jpeg):
     return root, source
 
 
-def _segments(source: Path):
+def _rolls(source: Path):
     listing = fr.list_frames(source)
     raw = [f.key for f in listing.frames if f.has_raw]
     lab = [f.key for f in listing.frames if not f.has_raw]
     return [
-        Segment(name="2026-05-14-Fed2-Gold", frames=raw, tagging={"roll_date": "2026-05-14"}),
-        Segment(name="2024-12-24-Fed2-HP5", frames=lab, tagging={"roll_date": "2024-12-24"}),
+        RollDraft(name="2026-05-14-Fed2-Gold", frames=raw, tagging={"roll_date": "2026-05-14"}),
+        RollDraft(name="2024-12-24-Fed2-HP5", frames=lab, tagging={"roll_date": "2024-12-24"}),
     ]
 
 
@@ -71,7 +71,7 @@ def test_copy_verify_detects_a_corrupted_destination(tmp_path: Path, monkeypatch
 
 def test_plan_import_resolves_years_and_stops_on_collision(inbox, monkeypatch):
     root, source = inbox
-    plan = importer.plan_import(source, _segments(source), root=str(root), mode="copy")
+    plan = importer.plan_import(source, _rolls(source), root=str(root), mode="copy")
     assert plan.ok, plan.to_dict()
     assert [i.year for i in plan.items] == ["2026", "2024"]
     assert plan.items[0].target == str(root / "2026" / "2026-05-14-Fed2-Gold")
@@ -80,18 +80,18 @@ def test_plan_import_resolves_years_and_stops_on_collision(inbox, monkeypatch):
     assert plan.total_bytes > 9000 and plan.to_dict()["file_count"] == 9
 
     (root / "2026" / "2026-05-14-Fed2-Gold").mkdir(parents=True)
-    plan2 = importer.plan_import(source, _segments(source), root=str(root), mode="copy")
+    plan2 = importer.plan_import(source, _rolls(source), root=str(root), mode="copy")
     assert not plan2.ok and "already exists" in plan2.items[0].errors[0]
     with Session(get_engine()) as session, pytest.raises(fileops.PlanError):
-        importer.apply_import(session, source, _segments(source), root=str(root), mode="copy")
+        importer.apply_import(session, source, _rolls(source), root=str(root), mode="copy")
     assert not list((root / "2026" / "2026-05-14-Fed2-Gold").iterdir())  # nothing copied
     assert not (root / "2024").exists()
 
     # Year from the oldest file when no date is set; no year at all is an error only when nothing works.
-    undated = [Segment(name="x", frames=["lab_001"], tagging={})]
+    undated = [RollDraft(name="x", frames=["lab_001"], tagging={})]
     assert importer.plan_import(source, undated, root=str(root), mode="copy").items[0].year == str(date.today().year)
     monkeypatch.setattr(importer.shutil, "disk_usage", lambda p: type("Usage", (), {"free": 10})())
-    low = importer.plan_import(source, _segments(source), root=str(root), mode="copy")
+    low = importer.plan_import(source, _rolls(source), root=str(root), mode="copy")
     assert any("free space" in e for e in low.errors)
 
 
@@ -99,7 +99,7 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, fake_e
     root, source = inbox
     events: list = []
     with Session(get_engine()) as session:
-        result = importer.apply_import(session, source, _segments(source), root=str(root), mode="copy", progress=events.append)
+        result = importer.apply_import(session, source, _rolls(source), root=str(root), mode="copy", progress=events.append)
 
     gold = root / "2026" / "2026-05-14-Fed2-Gold"
     hp5 = root / "2024" / "2024-12-24-Fed2-HP5"
@@ -118,7 +118,7 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, fake_e
     assert [len(c["applied"]) for c in result["created"]] == [6, 2]
     assert all(c["verified"] for c in result["created"])
     steps = [e.get("step") for e in events]
-    assert "copy" in steps and "verify" in steps and "tag" in steps and "segment" in steps
+    assert "copy" in steps and "verify" in steps and "tag" in steps and "roll" in steps
     last_verify = [e for e in events if e.get("step") == "verify"][-1]
     assert last_verify["bytes_done"] == last_verify["bytes_total"] and last_verify["files_done"] == 9
 
@@ -146,7 +146,7 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
 
     monkeypatch.setattr(importer, "copy_verify", flaky_copy)
     with Session(get_engine()) as session:
-        result = importer.apply_import(session, source, _segments(source), root=str(root), mode="move")
+        result = importer.apply_import(session, source, _rolls(source), root=str(root), mode="move")
 
     gold = root / "2026" / "2026-05-14-Fed2-Gold"
     hp5 = root / "2024" / "2024-12-24-Fed2-HP5"
@@ -174,9 +174,9 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
 
 def test_undo_keeps_a_copy_whose_source_vanished(inbox, fake_exiftool):
     root, source = inbox
-    segs = [Segment(name="only-lab", frames=["lab_001", "lab_002"], tagging={"roll_date": "2025-01-01"})]
+    rolls = [RollDraft(name="only-lab", frames=["lab_001", "lab_002"], tagging={"roll_date": "2025-01-01"})]
     with Session(get_engine()) as session:
-        result = importer.apply_import(session, source, segs, root=str(root), mode="copy")
+        result = importer.apply_import(session, source, rolls, root=str(root), mode="copy")
     target = root / "2025" / "only-lab"
     (source / "lab_001.jpg").unlink()
     with Session(get_engine()) as session:

@@ -69,7 +69,7 @@ def test_split_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
     root, mixed, _, cam, film = tree
     body = {
         "folder": str(mixed),
-        "segments": [
+        "rolls": [
             {"name": "2026-04-01-Fed2-Gold", "frames": ["DSC0001", "DSC0002"], "tagging": {"camera_id": cam["id"], "film_stock_id": film["id"], "roll_date": "2026-04-01"}},
             {"name": "2026-04-09-Lab", "frames": ["lab_001"], "tagging": {"roll_date": "2026-04-09"}},
         ],
@@ -78,7 +78,7 @@ def test_split_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
     assert plan.status_code == 200, plan.text
     assert plan.json()["ok"] and plan.json()["layout"] == "siblings" and plan.json()["file_count"] == 6
 
-    bad = client.post("/api/folder/split/apply", json={**body, "segments": body["segments"][:1] + [{"name": "2026-04-01-Fed2-Gold", "frames": ["lab_001"]}]})
+    bad = client.post("/api/folder/split/apply", json={**body, "rolls": body["rolls"][:1] + [{"name": "2026-04-01-Fed2-Gold", "frames": ["lab_001"]}]})
     assert bad.status_code == 400 and "same folder name" in bad.text
 
     events = _ndjson(client.post("/api/folder/split/apply", json=body))
@@ -104,7 +104,7 @@ def test_import_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
     root, _, inbox, cam, film = tree
     body = {
         "folder": str(inbox),
-        "segments": [{"name": "2026-05-14-Fed2-Gold", "frames": ["scan_000", "scan_001", "scan_002"],
+        "rolls": [{"name": "2026-05-14-Fed2-Gold", "frames": ["scan_000", "scan_001", "scan_002"],
                       "tagging": {"camera_id": cam["id"], "film_stock_id": film["id"], "roll_date": "2026-05-14"}}],
     }
     plan = client.post("/api/import/plan", json=body)
@@ -138,5 +138,5 @@ def test_import_without_root_is_a_plan_error(client, tmp_path: Path, make_jpeg):
     client.patch("/api/settings", json={"library_root": None})
     folder = tmp_path / "x"
     make_jpeg("a.jpg", long_edge=64, folder=folder)
-    res = client.post("/api/import/plan", json={"folder": str(folder), "segments": [{"name": "r", "frames": ["a"]}]})
+    res = client.post("/api/import/plan", json={"folder": str(folder), "rolls": [{"name": "r", "frames": ["a"]}]})
     assert res.status_code == 400 and "library root" in res.text

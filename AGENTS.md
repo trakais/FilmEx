@@ -242,7 +242,7 @@ film stock rows.
   Homebrew/system candidates → bundled copy. Never spawn a bare
   `"exiftool"`.
 - **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
-- **Tagging pipeline** (`services/tagging.py`): `build_pipeline(request,
+- **Tagging pipeline** (`services/tagging.py`): `plan_tagging(request,
   session)` resolves ids into snapshots and intents, `preview_all` is the
   dry run, `apply_all` writes file by file and the manifest at the end. The
   workflow routes wrap it for HTTP; the split and import jobs call it
@@ -303,10 +303,10 @@ notes, orphan sidecars) stay where they are and the plan says so. In a
 folder with raw frames, a JPEG-only frame is flagged `unmatched_jpeg` so
 the user can leave camera JPEGs behind.
 
-A **roll draft** (`fileops.Segment`) is a folder name, a list of frame
+A **roll draft** (`fileops.RollDraft`) is a folder name, a list of frame
 keys and the tagging fields of `DryRunRequest` minus folder and files. The
 Inbox view builds drafts on a contact sheet; the server never trusts them:
-`resolve_segments` re-checks names, duplicates and frame membership, and
+`resolve_rolls` re-checks names, duplicates and frame membership, and
 both apply paths re-plan right before running.
 
 **Split** (`services/fileops.py`): a roll folder under `<root>/<year>/`

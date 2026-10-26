@@ -24,7 +24,7 @@ from filmex.services import settings as settings_service
 router = APIRouter()
 
 
-class SegmentTagging(BaseModel):
+class RollTagging(BaseModel):
     """The ``DryRunRequest`` fields a roll draft carries (no folder, no files)."""
 
     camera_id: str | None = None
@@ -41,24 +41,24 @@ class SegmentTagging(BaseModel):
     replace_managed_metadata: bool = False
 
 
-class SegmentIn(BaseModel):
+class RollIn(BaseModel):
     name: str
     frames: list[str] = Field(default_factory=list)
-    tagging: SegmentTagging = Field(default_factory=SegmentTagging)
+    tagging: RollTagging = Field(default_factory=RollTagging)
     year: str | None = None
 
-    def to_segment(self) -> fileops.Segment:
-        return fileops.Segment(name=self.name, frames=list(self.frames), tagging=self.tagging.model_dump(), year=self.year)
+    def to_draft(self) -> fileops.RollDraft:
+        return fileops.RollDraft(name=self.name, frames=list(self.frames), tagging=self.tagging.model_dump(), year=self.year)
 
 
 class SplitRequest(BaseModel):
     folder: str
-    segments: list[SegmentIn] = Field(default_factory=list)
+    rolls: list[RollIn] = Field(default_factory=list)
 
 
 class ImportRequest(BaseModel):
     folder: str
-    segments: list[SegmentIn] = Field(default_factory=list)
+    rolls: list[RollIn] = Field(default_factory=list)
     mode: str | None = None  # defaults to the import_mode setting
 
 
@@ -88,7 +88,7 @@ def folder_frames(path: str) -> dict[str, Any]:
 def split_plan(req: SplitRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
     root = settings_service.get(session, "library_root")
     try:
-        plan = fileops.plan_split(req.folder, [s.to_segment() for s in req.segments], root=root)
+        plan = fileops.plan_split(req.folder, [s.to_draft() for s in req.rolls], root=root)
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     return plan.to_dict()
@@ -97,9 +97,9 @@ def split_plan(req: SplitRequest, session: Session = Depends(get_session)) -> di
 @router.post("/api/folder/split/apply")
 def split_apply(req: SplitRequest, session: Session = Depends(get_session)) -> StreamingResponse:
     root = settings_service.get(session, "library_root")
-    segments = [s.to_segment() for s in req.segments]
+    rolls = [s.to_draft() for s in req.rolls]
     try:
-        plan = fileops.plan_split(req.folder, segments, root=root)
+        plan = fileops.plan_split(req.folder, rolls, root=root)
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     if not plan.ok:
@@ -110,7 +110,7 @@ def split_apply(req: SplitRequest, session: Session = Depends(get_session)) -> S
         with Session(get_engine()) as job_session:
             try:
                 return fileops.apply_split(
-                    job_session, folder, segments, root=root, progress=job_ctx.emit, cancelled=job_ctx.cancelled
+                    job_session, folder, rolls, root=root, progress=job_ctx.emit, cancelled=job_ctx.cancelled
                 )
             except fileops.PlanError as exc:
                 raise RuntimeError("; ".join(exc.errors)) from exc
@@ -134,7 +134,7 @@ def _import_inputs(req: ImportRequest, session: Session) -> tuple[str | None, st
 def import_plan(req: ImportRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
     root, mode = _import_inputs(req, session)
     try:
-        plan = importer.plan_import(req.folder, [s.to_segment() for s in req.segments], root=root, mode=mode)
+        plan = importer.plan_import(req.folder, [s.to_draft() for s in req.rolls], root=root, mode=mode)
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     return plan.to_dict()
@@ -143,9 +143,9 @@ def import_plan(req: ImportRequest, session: Session = Depends(get_session)) -> 
 @router.post("/api/import/apply")
 def import_apply(req: ImportRequest, session: Session = Depends(get_session)) -> StreamingResponse:
     root, mode = _import_inputs(req, session)
-    segments = [s.to_segment() for s in req.segments]
+    rolls = [s.to_draft() for s in req.rolls]
     try:
-        plan = importer.plan_import(req.folder, segments, root=root, mode=mode)
+        plan = importer.plan_import(req.folder, rolls, root=root, mode=mode)
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     if not plan.ok:
@@ -156,7 +156,7 @@ def import_apply(req: ImportRequest, session: Session = Depends(get_session)) ->
         with Session(get_engine()) as job_session:
             try:
                 return importer.apply_import(
-                    job_session, folder, segments, root=root, mode=mode,
+                    job_session, folder, rolls, root=root, mode=mode,
                     progress=job_ctx.emit, cancelled=job_ctx.cancelled,
                 )
             except fileops.PlanError as exc:

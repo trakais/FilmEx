@@ -98,7 +98,7 @@ class RenderRequest(BaseModel):
 
 @router.post("/api/naming/render")
 def render_name(req: RenderRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
-    """Folder name for a roll draft (contact sheet segments) from the template."""
+    """Folder name for an Inbox roll draft, rendered from the template."""
     settings = settings_service.get_all(session)
     template = (req.template or settings["naming_template"] or naming.DEFAULT_TEMPLATE).strip()
     ctx = renames.context_from_ids(

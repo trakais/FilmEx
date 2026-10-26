@@ -24,7 +24,7 @@ const state = {
     indexByKey: null,
     thumbs: new Set(),
     thumbJob: false,
-    segments: [],
+    rolls: [],
     selection: new Set(),
     anchor: null,
     destination: null,    // "import-copy" | "import-move" | "split"
@@ -1359,7 +1359,7 @@ async function onCreatePreviews() {
   let created = 0;
   let failed = 0;
   try {
-    const doneEvent = await runJob("/api/previews/create/stream", {
+    const done = await runJob("/api/previews/create/stream", {
       body: { folder: state.folder, invert: state.previewInvert },
       signal: controller.signal,
       onStart: (ev) => {
@@ -1382,9 +1382,9 @@ async function onCreatePreviews() {
         renderCreatePreviewsButton();
       },
     });
-    const cancelled = !!doneEvent?.cancelled;
-    failed = doneEvent?.failed?.length ?? failed;
-    created = doneEvent?.created_files?.length ?? created;
+    const cancelled = !!done?.cancelled;
+    failed = done?.failed?.length ?? failed;
+    created = done?.created_files?.length ?? created;
     const parts = [];
     if (created) parts.push(`${created} ready`);
     if (failed) parts.push(`${failed} failed`);
@@ -1396,7 +1396,7 @@ async function onCreatePreviews() {
           : "No previewable files were missing.",
       failed || cancelled ? "warn" : "ok"
     );
-    if (doneEvent?.created_files?.length) markPreviewFilesAvailable(doneEvent.created_files);
+    if (done?.created_files?.length) markPreviewFilesAvailable(done.created_files);
     if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
   } catch (e) {
     if (e.name === "AbortError") {
@@ -1527,7 +1527,7 @@ async function onApply() {
   try {
     // Progress per file, so the button can show `3/12` live on a slow NAS.
     let total = 0;
-    const done_event = await runJob("/api/metadata/apply/stream", {
+    const done = await runJob("/api/metadata/apply/stream", {
       body: buildRequestBody(),
       onStart: (ev) => {
         total = ev.total;
@@ -1543,7 +1543,7 @@ async function onApply() {
     });
     state.fileSubset = null;
     renderScanSummary();
-    renderApplyResult(done_event);
+    renderApplyResult(done);
     if (state.settings && state.settings.library_root) void loadLibrary({ rescan: true });
   } catch (e) {
     await notify(`Apply failed:\n${e.message}`);
@@ -2714,10 +2714,10 @@ function similarMountSuggestion(value) {
 //
 // A frame is every file sharing one basename (raw + JPEG + sidecar + .thm);
 // the server lists them in sheet order. The user cuts the sequence into
-// segments, one per roll, each with its own gear, film, date and folder
-// name. The same sheet renders read-only in the Tag view.
+// rolls, each with its own gear, film, date and folder name. The same
+// sheet renders read-only in the Tag view.
 
-const SEGMENT_COLOR_COUNT = 8;
+const ROLL_HUE_COUNT = 8;
 const INBOX_NAME_DEBOUNCE_MS = 250;
 
 function inboxFrames() { return state.inbox.frames || []; }
@@ -2739,11 +2739,11 @@ function sortedKeys(keys) {
   return Array.from(new Set(keys)).filter(k => sheetIndexOf(k) >= 0).sort((a, b) => sheetIndexOf(a) - sheetIndexOf(b));
 }
 
-function segmentOf(key) {
-  return state.inbox.segments.find(s => s.frames.includes(key)) || null;
+function rollOf(key) {
+  return state.inbox.rolls.find(s => s.frames.includes(key)) || null;
 }
 
-let segmentSeq = 0;
+let rollSeq = 0;
 
 function defaultTagging() {
   // Start from the Tag view's sticky gear so the common case (same camera,
@@ -2762,10 +2762,10 @@ function defaultTagging() {
   };
 }
 
-function newSegment(frames, tagging = null) {
-  segmentSeq += 1;
+function newRoll(frames, tagging = null) {
+  rollSeq += 1;
   return {
-    id: `seg${segmentSeq}`,
+    id: `roll${rollSeq}`,
     name: "",
     nameAuto: true,
     nameError: null,
@@ -2774,15 +2774,15 @@ function newSegment(frames, tagging = null) {
   };
 }
 
-function normalizeSegments() {
-  const segs = state.inbox.segments.filter(s => s.frames.length);
-  for (const s of segs) s.frames = sortedKeys(s.frames);
-  segs.sort((a, b) => sheetIndexOf(a.frames[0]) - sheetIndexOf(b.frames[0]));
-  state.inbox.segments = segs;
+function normalizeRolls() {
+  const rolls = state.inbox.rolls.filter(s => s.frames.length);
+  for (const s of rolls) s.frames = sortedKeys(s.frames);
+  rolls.sort((a, b) => sheetIndexOf(a.frames[0]) - sheetIndexOf(b.frames[0]));
+  state.inbox.rolls = rolls;
 }
 
 function unassignedKeys() {
-  const assigned = new Set(state.inbox.segments.flatMap(s => s.frames));
+  const assigned = new Set(state.inbox.rolls.flatMap(s => s.frames));
   return inboxFrames().map(f => f.key).filter(k => !assigned.has(k));
 }
 
@@ -2819,7 +2819,7 @@ async function loadInboxFolder(folder) {
   inbox.listing = null;
   inbox.frames = [];
   inbox.indexByKey = null;
-  inbox.segments = [];
+  inbox.rolls = [];
   inbox.selection = new Set();
   inbox.anchor = null;
   inbox.thumbs = new Set();
@@ -2836,11 +2836,11 @@ async function loadInboxFolder(folder) {
     inbox.frames = listing.frames;
     inbox.indexByKey = null;
     for (const file of scan.files || []) if (file.has_thumbnail) inbox.thumbs.add(file.name);
-    inbox.segments = listing.frames.length ? [newSegment(listing.frames.map(f => f.key))] : [];
+    inbox.rolls = listing.frames.length ? [newRoll(listing.frames.map(f => f.key))] : [];
     pushRecentFolder(folder);
     renderRecentFolders();
     renderInbox();
-    for (const seg of inbox.segments) scheduleRollName(seg);
+    for (const roll of inbox.rolls) scheduleRollName(roll);
     void buildInboxThumbnails();
   } catch (e) {
     renderInboxBanner(`Could not read the folder: ${e.message}`, "bad");
@@ -2857,7 +2857,7 @@ async function buildInboxThumbnails() {
   inbox.thumbJob = true;
   const btn = document.getElementById("sheet-thumbs");
   try {
-    let done = 0;
+    let processed = 0;
     let total = needed.length;
     await runJob("/api/previews/create/stream", {
       body: { folder, invert: false },
@@ -2867,8 +2867,8 @@ async function buildInboxThumbnails() {
       },
       onEvent: (ev) => {
         if (inbox.folder !== folder) return;
-        done += 1;
-        btn.textContent = `Thumbnails ${done}/${total}`;
+        processed += 1;
+        btn.textContent = `Thumbnails ${processed}/${total}`;
         if (ev.status === "created" || ev.status === "reused") {
           inbox.thumbs.add(ev.file);
           updateSheetThumb(ev.file);
@@ -2942,38 +2942,38 @@ function renderInboxSummary() {
 
 function renderInboxSheet() {
   const inbox = state.inbox;
-  const segIndex = new Map();
-  inbox.segments.forEach((s, i) => s.frames.forEach(k => segIndex.set(k, i)));
+  const rollIndexByKey = new Map();
+  inbox.rolls.forEach((roll, i) => roll.frames.forEach(k => rollIndexByKey.set(k, i)));
   renderContactSheet(document.getElementById("contact-sheet"), {
     folder: inbox.folder,
     frames: inboxFrames(),
     hasThumb: (file) => inbox.thumbs.has(file),
     invert: false,
-    segmentIndex: (key) => (segIndex.has(key) ? segIndex.get(key) : null),
+    rollIndex: (key) => (rollIndexByKey.has(key) ? rollIndexByKey.get(key) : null),
     selection: inbox.selection,
     onClick: onSheetCellClick,
   });
 }
 
-// Generic grid. `segmentIndex(key)` → number | null (null = left out, no
+// Generic grid. `rollIndex(key)` → number | null (null = left out, no
 // stamp when every frame is in one roll). `selection` is a Set or null.
-function renderContactSheet(container, { folder, frames, hasThumb, invert, segmentIndex, selection, onClick, compact = false }) {
+function renderContactSheet(container, { folder, frames, hasThumb, invert, rollIndex, selection, onClick, compact = false }) {
   container.innerHTML = "";
   container.classList.toggle("compact", compact);
-  const multi = new Set(frames.map(f => segmentIndex ? segmentIndex(f.key) : 0).filter(v => v !== null)).size > 1;
+  const multi = new Set(frames.map(f => rollIndex ? rollIndex(f.key) : 0).filter(v => v !== null)).size > 1;
   const frag = document.createDocumentFragment();
   for (const frame of frames) {
-    const seg = segmentIndex ? segmentIndex(frame.key) : 0;
+    const index = rollIndex ? rollIndex(frame.key) : 0;
     const cell = document.createElement("div");
     cell.className = "sheet-cell";
     cell.dataset.key = frame.key;
-    if (seg === null) cell.classList.add("unassigned");
-    else if (multi) cell.classList.add(`seg-${seg % SEGMENT_COLOR_COUNT}`);
+    if (index === null) cell.classList.add("unassigned");
+    else if (multi) cell.classList.add(`roll-hue-${index % ROLL_HUE_COUNT}`);
     if (selection && selection.has(frame.key)) cell.classList.add("selected");
     const thumb = frame.preview && hasThumb(frame.preview)
       ? `<img src="${escapeHtml(buildThumbnailUrl(folder, frame.preview, invert))}" alt="" loading="lazy" />`
       : `<span class="sheet-thumb-placeholder">${escapeHtml(frame.display_key)}</span>`;
-    const stamp = seg !== null && multi ? `<span class="sheet-roll-tag">R${seg + 1}</span>` : "";
+    const stamp = index !== null && multi ? `<span class="sheet-roll-tag">R${index + 1}</span>` : "";
     const badge = frame.unmatched_jpeg ? `<span class="sheet-badge warn">jpg only</span>`
       : frame.has_raw && frame.images.length > 1 ? `<span class="sheet-badge">pair</span>` : "";
     cell.innerHTML = `
@@ -3013,7 +3013,7 @@ function updateSheetToolbar() {
     : "Click a frame, shift-click for a range, ⌘-click to add.";
   document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
   document.getElementById("sheet-new-roll").disabled = n === 0;
-  document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(inbox.selection).some(k => segmentOf(k));
+  document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(inbox.selection).some(k => rollOf(k));
   document.getElementById("sheet-clear").classList.toggle("hidden", n === 0);
   const thumbs = document.getElementById("sheet-thumbs");
   const missing = inboxFrames().some(f => f.preview && !inbox.thumbs.has(f.preview));
@@ -3022,7 +3022,7 @@ function updateSheetToolbar() {
   const toggle = document.getElementById("sheet-unmatched");
   toggle.classList.toggle("hidden", !unmatched.length);
   if (unmatched.length) {
-    const allOut = unmatched.every(f => !segmentOf(f.key));
+    const allOut = unmatched.every(f => !rollOf(f.key));
     toggle.textContent = allOut ? `Include ${unmatched.length} JPEG-only frame${unmatched.length === 1 ? "" : "s"}` : `Leave out ${unmatched.length} JPEG-only frame${unmatched.length === 1 ? "" : "s"}`;
     toggle.dataset.mode = allOut ? "include" : "exclude";
   }
@@ -3035,83 +3035,83 @@ function firstSelectedKey() {
 
 function canCutBefore(key) {
   if (!key) return false;
-  const seg = segmentOf(key);
-  return !!seg && seg.frames[0] !== key;
+  const roll = rollOf(key);
+  return !!roll && roll.frames[0] !== key;
 }
 
-// ----- segment operations -----
+// ----- roll operations -----
 
 function cutBeforeSelected() {
   const key = firstSelectedKey();
-  const seg = segmentOf(key);
-  if (!seg || !canCutBefore(key)) return;
-  const at = seg.frames.indexOf(key);
-  const tail = seg.frames.slice(at);
-  seg.frames = seg.frames.slice(0, at);
-  const next = newSegment(tail, seg.tagging);
-  next.tagging.roll_date = seg.tagging.roll_date;
-  const pos = state.inbox.segments.indexOf(seg);
-  state.inbox.segments.splice(pos + 1, 0, next);
+  const roll = rollOf(key);
+  if (!roll || !canCutBefore(key)) return;
+  const at = roll.frames.indexOf(key);
+  const tail = roll.frames.slice(at);
+  roll.frames = roll.frames.slice(0, at);
+  const next = newRoll(tail, roll.tagging);
+  next.tagging.roll_date = roll.tagging.roll_date;
+  const pos = state.inbox.rolls.indexOf(roll);
+  state.inbox.rolls.splice(pos + 1, 0, next);
   state.inbox.selection.clear();
-  afterSegmentsChanged([seg, next]);
+  afterRollsChanged([roll, next]);
 }
 
 function newRollFromSelection() {
   const keys = sortedKeys(Array.from(state.inbox.selection));
   if (!keys.length) return;
   const touched = new Set();
-  for (const seg of state.inbox.segments) {
-    const before = seg.frames.length;
-    seg.frames = seg.frames.filter(k => !keys.includes(k));
-    if (seg.frames.length !== before) touched.add(seg);
+  for (const roll of state.inbox.rolls) {
+    const before = roll.frames.length;
+    roll.frames = roll.frames.filter(k => !keys.includes(k));
+    if (roll.frames.length !== before) touched.add(roll);
   }
-  const template = segmentOf(keys[0]) || state.inbox.segments[0];
-  const next = newSegment(keys, template ? template.tagging : null);
-  state.inbox.segments.push(next);
+  const template = rollOf(keys[0]) || state.inbox.rolls[0];
+  const next = newRoll(keys, template ? template.tagging : null);
+  state.inbox.rolls.push(next);
   state.inbox.selection.clear();
-  afterSegmentsChanged([...touched, next]);
+  afterRollsChanged([...touched, next]);
 }
 
 function leaveOutSelection() {
   const keys = new Set(state.inbox.selection);
   const touched = [];
-  for (const seg of state.inbox.segments) {
-    const before = seg.frames.length;
-    seg.frames = seg.frames.filter(k => !keys.has(k));
-    if (seg.frames.length !== before) touched.push(seg);
+  for (const roll of state.inbox.rolls) {
+    const before = roll.frames.length;
+    roll.frames = roll.frames.filter(k => !keys.has(k));
+    if (roll.frames.length !== before) touched.push(roll);
   }
   state.inbox.selection.clear();
-  afterSegmentsChanged(touched);
+  afterRollsChanged(touched);
 }
 
-function addSelectionToSegment(id) {
-  const target = state.inbox.segments.find(s => s.id === id);
+function addSelectionToRoll(id) {
+  const target = state.inbox.rolls.find(s => s.id === id);
   const keys = Array.from(state.inbox.selection);
   if (!target || !keys.length) return;
   const touched = new Set([target]);
-  for (const seg of state.inbox.segments) {
-    if (seg === target) continue;
-    const before = seg.frames.length;
-    seg.frames = seg.frames.filter(k => !keys.includes(k));
-    if (seg.frames.length !== before) touched.add(seg);
+  for (const roll of state.inbox.rolls) {
+    if (roll === target) continue;
+    const before = roll.frames.length;
+    roll.frames = roll.frames.filter(k => !keys.includes(k));
+    if (roll.frames.length !== before) touched.add(roll);
   }
   target.frames = sortedKeys([...target.frames, ...keys]);
   state.inbox.selection.clear();
-  afterSegmentsChanged([...touched]);
+  afterRollsChanged([...touched]);
 }
 
-function mergeSegmentIntoPrevious(id) {
-  const segs = state.inbox.segments;
-  const pos = segs.findIndex(s => s.id === id);
+function mergeRollIntoPrevious(id) {
+  const rolls = state.inbox.rolls;
+  const pos = rolls.findIndex(s => s.id === id);
   if (pos <= 0) return;
-  segs[pos - 1].frames = sortedKeys([...segs[pos - 1].frames, ...segs[pos].frames]);
-  segs.splice(pos, 1);
-  afterSegmentsChanged([segs[pos - 1]]);
+  rolls[pos - 1].frames = sortedKeys([...rolls[pos - 1].frames, ...rolls[pos].frames]);
+  rolls.splice(pos, 1);
+  afterRollsChanged([rolls[pos - 1]]);
 }
 
-function removeSegment(id) {
-  state.inbox.segments = state.inbox.segments.filter(s => s.id !== id);
-  afterSegmentsChanged([]);
+function removeRoll(id) {
+  state.inbox.rolls = state.inbox.rolls.filter(s => s.id !== id);
+  afterRollsChanged([]);
 }
 
 function toggleUnmatchedFrames(mode) {
@@ -3125,15 +3125,15 @@ function toggleUnmatchedFrames(mode) {
   // assigned frame, else the first roll.
   const touched = new Set();
   for (const key of unmatched) {
-    if (segmentOf(key)) continue;
+    if (rollOf(key)) continue;
     let target = null;
-    for (let i = sheetIndexOf(key) - 1; i >= 0 && !target; i--) target = segmentOf(inboxFrames()[i].key);
-    target = target || state.inbox.segments[0];
-    if (!target) { state.inbox.segments.push(newSegment([key])); target = state.inbox.segments[0]; }
+    for (let i = sheetIndexOf(key) - 1; i >= 0 && !target; i--) target = rollOf(inboxFrames()[i].key);
+    target = target || state.inbox.rolls[0];
+    if (!target) { state.inbox.rolls.push(newRoll([key])); target = state.inbox.rolls[0]; }
     else target.frames = sortedKeys([...target.frames, key]);
     touched.add(target);
   }
-  afterSegmentsChanged([...touched]);
+  afterRollsChanged([...touched]);
 }
 
 function clearSheetSelection() {
@@ -3142,23 +3142,23 @@ function clearSheetSelection() {
   updateSheetToolbar();
 }
 
-function afterSegmentsChanged(touched) {
-  normalizeSegments();
+function afterRollsChanged(touched) {
+  normalizeRolls();
   renderInboxSheet();
   renderRollCards();
   updateSheetToolbar();
   updateInboxRunButton();
-  for (const seg of touched) if (state.inbox.segments.includes(seg)) scheduleRollName(seg);
+  for (const roll of touched) if (state.inbox.rolls.includes(roll)) scheduleRollName(roll);
 }
 
 // ----- roll cards -----
 
-function segmentRangeText(seg) {
-  const first = frameByKey(seg.frames[0]);
-  const last = frameByKey(seg.frames[seg.frames.length - 1]);
-  const n = seg.frames.length;
-  const files = seg.frames.reduce((acc, k) => acc + (frameByKey(k)?.files.length || 0), 0);
-  const bytes = seg.frames.reduce((acc, k) => acc + (frameByKey(k)?.bytes || 0), 0);
+function rollRangeText(roll) {
+  const first = frameByKey(roll.frames[0]);
+  const last = frameByKey(roll.frames[roll.frames.length - 1]);
+  const n = roll.frames.length;
+  const files = roll.frames.reduce((acc, k) => acc + (frameByKey(k)?.files.length || 0), 0);
+  const bytes = roll.frames.reduce((acc, k) => acc + (frameByKey(k)?.bytes || 0), 0);
   const range = first && last ? (first === last ? first.display_key : `${first.display_key} – ${last.display_key}`) : "";
   return `${n} frame${n === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"} · ${humanBytes(bytes)}${range ? ` · ${range}` : ""}`;
 }
@@ -3166,12 +3166,12 @@ function segmentRangeText(seg) {
 function renderRollCards() {
   const host = document.getElementById("inbox-rolls");
   host.innerHTML = "";
-  const segs = state.inbox.segments;
-  if (!segs.length) {
+  const rolls = state.inbox.rolls;
+  if (!rolls.length) {
     host.innerHTML = `<div class="library-empty">No rolls yet. Select frames on the sheet and press “New roll from selection”.</div>`;
     return;
   }
-  segs.forEach((seg, i) => host.appendChild(renderRollCard(seg, i)));
+  rolls.forEach((roll, i) => host.appendChild(renderRollCard(roll, i)));
   const left = unassignedKeys().length;
   if (left) {
     const note = document.createElement("div");
@@ -3181,7 +3181,7 @@ function renderRollCards() {
   }
 }
 
-function compactTile(kind, entity, seg) {
+function compactTile(kind, entity, roll) {
   const label = { camera: "Camera", lens: "Lens", film: "Film" }[kind];
   const copy = !entity ? null
     : kind === "camera" ? { title: entity.display_name, sub: cameraTypeLabel(entity.camera_type) || entity.mount || "" }
@@ -3190,7 +3190,7 @@ function compactTile(kind, entity, seg) {
   const colors = kind === "film" && entity ? filmBrandColors(entity.brand) : null;
   const style = colors ? ` style="--brand-c1:${escapeHtml(colors[0])};--brand-c2:${escapeHtml(colors[1])}"` : "";
   return `
-    <div class="tile compact ${kind}-tile${entity ? " selected" : ""}" data-kind="${kind}" data-seg="${seg.id}"${style}>
+    <div class="tile compact ${kind}-tile${entity ? " selected" : ""}" data-kind="${kind}" data-roll="${roll.id}"${style}>
       <div class="tile-label">${label}</div>
       <div class="tile-content${entity ? "" : " empty"}">${entity ? escapeHtml(copy.title) : `Pick a ${kind}`}</div>
       ${entity ? `<div class="tile-sub">${escapeHtml(copy.sub)}</div>` : ""}
@@ -3204,11 +3204,11 @@ function optionsHtml(items, selectedId, labelOf = (i) => i.display_name || i.nam
     `<option value="${escapeHtml(i.id)}"${i.id === selectedId ? " selected" : ""}>${escapeHtml(labelOf(i))}</option>`)].join("");
 }
 
-function renderRollCard(seg, index) {
+function renderRollCard(roll, index) {
   const el = document.createElement("div");
-  el.className = `roll-card seg-${index % SEGMENT_COLOR_COUNT}`;
-  el.dataset.id = seg.id;
-  const t = seg.tagging;
+  el.className = `roll-card roll-hue-${index % ROLL_HUE_COUNT}`;
+  el.dataset.id = roll.id;
+  const t = roll.tagging;
   const devProviders = state.providers.filter(p => p.kinds.includes("development"));
   const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
   const canMerge = index > 0;
@@ -3216,7 +3216,7 @@ function renderRollCard(seg, index) {
   el.innerHTML = `
     <div class="roll-card-head">
       <span class="roll-card-index">Roll ${index + 1}</span>
-      <span class="roll-card-range">${escapeHtml(segmentRangeText(seg))}</span>
+      <span class="roll-card-range">${escapeHtml(rollRangeText(roll))}</span>
       <span class="roll-card-actions">
         <button type="button" class="action-link" data-act="add" ${selected ? "" : "disabled"}>Add ${selected ? `${selected} selected` : "selection"}</button>
         ${canMerge ? `<button type="button" class="action-link" data-act="merge">Merge into roll ${index}</button>` : ""}
@@ -3225,14 +3225,14 @@ function renderRollCard(seg, index) {
     </div>
     <div class="roll-card-name">
       <span class="tile-label">Folder name</span>
-      <input type="text" class="roll-name-input" value="${escapeHtml(seg.name)}" placeholder="from the template…" spellcheck="false" />
-      <button type="button" class="action-link roll-name-auto${seg.nameAuto ? " hidden" : ""}">use template</button>
-      <span class="roll-name-error${seg.nameError ? "" : " hidden"}">${escapeHtml(seg.nameError || "")}</span>
+      <input type="text" class="roll-name-input" value="${escapeHtml(roll.name)}" placeholder="from the template…" spellcheck="false" />
+      <button type="button" class="action-link roll-name-auto${roll.nameAuto ? " hidden" : ""}">use template</button>
+      <span class="roll-name-error${roll.nameError ? "" : " hidden"}">${escapeHtml(roll.nameError || "")}</span>
     </div>
     <div class="tile-row compact">
-      ${compactTile("camera", t.camera, seg)}
-      ${compactTile("lens", t.lens, seg)}
-      ${compactTile("film", t.film, seg)}
+      ${compactTile("camera", t.camera, roll)}
+      ${compactTile("lens", t.lens, roll)}
+      ${compactTile("film", t.film, roll)}
     </div>
     <div class="field-grid compact">
       <label><span>Roll date</span><input type="date" data-field="roll_date" value="${escapeHtml(t.roll_date || "")}" /></label>
@@ -3244,50 +3244,50 @@ function renderRollCard(seg, index) {
       <label class="full"><span>Roll notes</span><input type="text" data-field="roll_notes" value="${escapeHtml(t.roll_notes || "")}" /></label>
     </div>
   `;
-  el.querySelector("[data-act=add]").addEventListener("click", () => addSelectionToSegment(seg.id));
-  el.querySelector("[data-act=merge]")?.addEventListener("click", () => mergeSegmentIntoPrevious(seg.id));
-  el.querySelector("[data-act=remove]").addEventListener("click", () => removeSegment(seg.id));
+  el.querySelector("[data-act=add]").addEventListener("click", () => addSelectionToRoll(roll.id));
+  el.querySelector("[data-act=merge]")?.addEventListener("click", () => mergeRollIntoPrevious(roll.id));
+  el.querySelector("[data-act=remove]").addEventListener("click", () => removeRoll(roll.id));
   const nameInput = el.querySelector(".roll-name-input");
   nameInput.addEventListener("input", (e) => {
-    seg.name = e.target.value;
-    seg.nameAuto = false;
-    seg.nameError = null;
+    roll.name = e.target.value;
+    roll.nameAuto = false;
+    roll.nameError = null;
     el.querySelector(".roll-name-auto").classList.remove("hidden");
     el.querySelector(".roll-name-error").classList.add("hidden");
     updateInboxRunButton();
   });
   el.querySelector(".roll-name-auto").addEventListener("click", () => {
-    seg.nameAuto = true;
-    void refreshRollName(seg);
+    roll.nameAuto = true;
+    void refreshRollName(roll);
   });
   for (const tile of el.querySelectorAll(".tile")) {
-    tile.addEventListener("click", () => openPicker(tile.dataset.kind, rollPickerTarget(seg)));
+    tile.addEventListener("click", () => openPicker(tile.dataset.kind, rollPickerTarget(roll)));
     tile.querySelector(".tile-clear")?.addEventListener("click", (e) => {
       e.stopPropagation();
       const kind = tile.dataset.kind;
       if (kind === "camera") {
-        if (seg.tagging.lens && state.cameras.some(c => c.fixed_lens_id === seg.tagging.lens.id)) seg.tagging.lens = null;
-        seg.tagging.camera = null;
-      } else if (kind === "lens") seg.tagging.lens = null;
-      else seg.tagging.film = null;
+        if (roll.tagging.lens && state.cameras.some(c => c.fixed_lens_id === roll.tagging.lens.id)) roll.tagging.lens = null;
+        roll.tagging.camera = null;
+      } else if (kind === "lens") roll.tagging.lens = null;
+      else roll.tagging.film = null;
       renderRollCards();
-      scheduleRollName(seg);
+      scheduleRollName(roll);
     });
   }
   for (const field of el.querySelectorAll("[data-field]")) {
     field.addEventListener("change", (e) => {
-      seg.tagging[e.target.dataset.field] = e.target.value;
-      if (["roll_date", "place"].includes(e.target.dataset.field)) scheduleRollName(seg);
+      roll.tagging[e.target.dataset.field] = e.target.value;
+      if (["roll_date", "place"].includes(e.target.dataset.field)) scheduleRollName(roll);
     });
   }
   return el;
 }
 
-function rollPickerTarget(seg) {
+function rollPickerTarget(roll) {
   return {
-    camera: () => seg.tagging.camera,
+    camera: () => roll.tagging.camera,
     set(kind, item) {
-      const t = seg.tagging;
+      const t = roll.tagging;
       if (kind === "camera") {
         t.camera = item;
         if (item.fixed_lens_id) {
@@ -3298,22 +3298,22 @@ function rollPickerTarget(seg) {
       } else if (kind === "lens") t.lens = item;
       else if (kind === "film") t.film = item;
       renderRollCards();
-      scheduleRollName(seg);
+      scheduleRollName(roll);
     },
   };
 }
 
 const rollNameTimers = new Map();
 
-function scheduleRollName(seg) {
-  if (!seg.nameAuto) return;
-  clearTimeout(rollNameTimers.get(seg.id));
-  rollNameTimers.set(seg.id, setTimeout(() => void refreshRollName(seg), INBOX_NAME_DEBOUNCE_MS));
+function scheduleRollName(roll) {
+  if (!roll.nameAuto) return;
+  clearTimeout(rollNameTimers.get(roll.id));
+  rollNameTimers.set(roll.id, setTimeout(() => void refreshRollName(roll), INBOX_NAME_DEBOUNCE_MS));
 }
 
-async function refreshRollName(seg) {
-  if (!seg.nameAuto) return;
-  const t = seg.tagging;
+async function refreshRollName(roll) {
+  if (!roll.nameAuto) return;
+  const t = roll.tagging;
   try {
     const res = await api("/api/naming/render", {
       method: "POST",
@@ -3325,19 +3325,19 @@ async function refreshRollName(seg) {
         place: t.place || null,
       }),
     });
-    if (!seg.nameAuto) return;
-    seg.name = res.name || "";
-    seg.nameError = res.error ? `Template: ${res.error}` : null;
+    if (!roll.nameAuto) return;
+    roll.name = res.name || "";
+    roll.nameError = res.error ? `Template: ${res.error}` : null;
   } catch (e) {
-    seg.nameError = `Could not render the name: ${e.message}`;
+    roll.nameError = `Could not render the name: ${e.message}`;
   }
-  const card = document.querySelector(`.roll-card[data-id="${cssEscape(seg.id)}"]`);
+  const card = document.querySelector(`.roll-card[data-id="${cssEscape(roll.id)}"]`);
   if (card) {
-    card.querySelector(".roll-name-input").value = seg.name;
+    card.querySelector(".roll-name-input").value = roll.name;
     const err = card.querySelector(".roll-name-error");
-    err.textContent = seg.nameError || "";
-    err.classList.toggle("hidden", !seg.nameError);
-    card.querySelector(".roll-name-auto").classList.toggle("hidden", seg.nameAuto);
+    err.textContent = roll.nameError || "";
+    err.classList.toggle("hidden", !roll.nameError);
+    card.querySelector(".roll-name-auto").classList.toggle("hidden", roll.nameAuto);
   }
   updateInboxRunButton();
 }
@@ -3375,12 +3375,12 @@ function renderInboxDestination() {
 }
 
 function inboxBlockers() {
-  const segs = state.inbox.segments;
+  const rolls = state.inbox.rolls;
   const problems = [];
-  if (!segs.length) problems.push("no rolls");
+  if (!rolls.length) problems.push("no rolls");
   const names = new Set();
-  for (const seg of segs) {
-    const name = (seg.name || "").trim();
+  for (const roll of rolls) {
+    const name = (roll.name || "").trim();
     if (!name) problems.push("a roll has no folder name");
     else if (names.has(name.toLowerCase())) problems.push(`two rolls are named ${name}`);
     names.add(name.toLowerCase());
@@ -3392,7 +3392,7 @@ function inboxBlockers() {
 function updateInboxRunButton() {
   const btn = document.getElementById("inbox-run");
   const dest = inboxDestination();
-  const n = state.inbox.segments.length;
+  const n = state.inbox.rolls.length;
   const verb = dest.kind === "split" ? "Split into" : dest.mode === "move" ? "Move" : "Import";
   btn.textContent = n ? `${verb} ${n} roll${n === 1 ? "" : "s"}` : verb;
   const blockers = inboxBlockers();
@@ -3401,8 +3401,8 @@ function updateInboxRunButton() {
   document.getElementById("inbox-undo").classList.toggle("hidden", !state.inbox.lastOperation);
 }
 
-function rollTagging(seg) {
-  const t = seg.tagging;
+function rollTagging(roll) {
+  const t = roll.tagging;
   return {
     camera_id: t.camera?.id || null,
     lens_id: t.lens?.id || null,
@@ -3421,7 +3421,7 @@ function inboxRequestBody() {
   const dest = inboxDestination();
   const body = {
     folder: state.inbox.folder,
-    segments: state.inbox.segments.map(seg => ({ name: seg.name.trim(), frames: seg.frames, tagging: rollTagging(seg) })),
+    rolls: state.inbox.rolls.map(roll => ({ name: roll.name.trim(), frames: roll.frames, tagging: rollTagging(roll) })),
   };
   if (dest.kind === "import") body.mode = dest.mode;
   return body;
@@ -3498,19 +3498,19 @@ async function runInboxBatch() {
       },
       onEvent: (ev) => {
         if (ev.step === "move") {
-          renderInboxProgress(`Moving ${ev.done}/${ev.total} · ${ev.segment}`, total ? ev.done / total : null);
+          renderInboxProgress(`Moving ${ev.done}/${ev.total} · ${ev.roll}`, total ? ev.done / total : null);
           setPageTitleProgress("Moving", ev.done, ev.total);
         } else if (ev.step === "copy") {
           const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
-          renderInboxProgress(`${dest.mode === "move" ? "Moving" : "Copying"} ${ev.segment} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`, frac);
+          renderInboxProgress(`${dest.mode === "move" ? "Moving" : "Copying"} ${ev.roll} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`, frac);
           setPageTitleProgress("Copying", ev.files_done, ev.files_total);
         } else if (ev.step === "verify" && ev.ok) {
           const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
-          renderInboxProgress(`Verified ${ev.files_done}/${ev.files_total} · ${ev.segment}`, frac);
+          renderInboxProgress(`Verified ${ev.files_done}/${ev.files_total} · ${ev.roll}`, frac);
         } else if (ev.step === "tag") {
-          renderInboxProgress(`Tagging ${ev.segment} · ${ev.file || ""}`, null);
+          renderInboxProgress(`Tagging ${ev.roll} · ${ev.file || ""}`, null);
         } else if (ev.step === "remove") {
-          renderInboxProgress(`Removing sources · ${ev.segment} · ${ev.file}`, null);
+          renderInboxProgress(`Removing sources · ${ev.roll} · ${ev.file}`, null);
         }
       },
     });
@@ -3541,7 +3541,7 @@ async function reloadInboxAfterBatch() {
     state.inbox.listing = null;
     state.inbox.frames = [];
     state.inbox.indexByKey = null;
-    state.inbox.segments = [];
+    state.inbox.rolls = [];
     state.inbox.selection = new Set();
     renderInbox();
     renderInboxResult(keepResult);
@@ -3676,7 +3676,7 @@ function renderTagSheet() {
     frames: listing.frames,
     hasThumb: (file) => fileHasPreview(scanFiles.get(file)),
     invert: state.previewInvert,
-    segmentIndex: null,
+    rollIndex: null,
     selection: null,
     onClick: (key) => {
       const frame = listing.frames.find(f => f.key === key);

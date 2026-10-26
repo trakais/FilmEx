@@ -42,7 +42,7 @@ class TaggingError(ValueError):
         self.status_code = status_code
 
 
-class Pipeline:
+class TaggingPlan:
     """Resolved inputs needed by both dry-run and apply."""
 
     def __init__(
@@ -99,7 +99,7 @@ class Pipeline:
         self.replace_managed_metadata = replace_managed_metadata
 
 
-def build_pipeline(req: DryRunRequest, session: Session) -> Pipeline:
+def plan_tagging(req: DryRunRequest, session: Session) -> TaggingPlan:
     try:
         scan = fs.scan_folder(req.folder)
     except FileNotFoundError as e:
@@ -127,17 +127,17 @@ def build_pipeline(req: DryRunRequest, session: Session) -> Pipeline:
         if film is None:
             raise TaggingError("Film stock not found", status_code=404)
 
-    dev_provider = _maybe(session, Provider, req.development_provider_id, "Development provider")
-    dev_method = _maybe(
+    dev_provider = _get_optional(session, Provider, req.development_provider_id, "Development provider")
+    dev_method = _get_optional(
         session, DevelopmentMethod, req.development_method_id, "Development method"
     )
-    scan_provider = _maybe(session, Provider, req.scan_provider_id, "Scan provider")
-    scan_method = _maybe(session, ScanMethod, req.scan_method_id, "Scan method")
+    scan_provider = _get_optional(session, Provider, req.scan_provider_id, "Scan provider")
+    scan_method = _get_optional(session, ScanMethod, req.scan_method_id, "Scan method")
 
     _require_provider_kind(dev_provider, "development", "Development provider")
     _require_provider_kind(scan_provider, "scan", "Scan provider")
 
-    ctx_kw = kw.WriteContext(
+    keyword_context = kw.WriteContext(
         roll_id=scan.roll_id,
         film_display_name=film.display_name if film else None,
         film_type=film.film_type if film else None,
@@ -161,12 +161,12 @@ def build_pipeline(req: DryRunRequest, session: Session) -> Pipeline:
     capture_date_precision = "day" if capture_date_value else "unknown"
     capture_date_source = "user_override" if capture_date_value else None
     exif_date = _exif_date(capture_date_value)
-    roll_notes = _normalize_roll_notes(req.roll_notes)
-    place = _normalize_roll_notes(req.place)
+    roll_notes = _clean_text(req.roll_notes)
+    place = _clean_text(req.place)
 
     files = select_files(scan, req.files)
 
-    return Pipeline(
+    return TaggingPlan(
         folder=scan.folder,
         roll_id=scan.roll_id,
         source_kind=scan.source_kind,
@@ -195,16 +195,16 @@ def build_pipeline(req: DryRunRequest, session: Session) -> Pipeline:
             film_type=film.film_type if film else None,
             process_type=film.process_type if film else None,
         ),
-        dev_provider_snapshot=_named(dev_provider),
-        dev_method_snapshot=_named(dev_method),
-        scan_provider_snapshot=_named(scan_provider),
-        scan_method_snapshot=_named(scan_method),
+        dev_provider_snapshot=_named_snapshot(dev_provider),
+        dev_method_snapshot=_named_snapshot(dev_method),
+        scan_provider_snapshot=_named_snapshot(scan_provider),
+        scan_method_snapshot=_named_snapshot(scan_method),
         capture_date_value=capture_date_value,
         capture_date_precision=capture_date_precision,
         capture_date_source=capture_date_source,
         file_keywords_by_name=file_keywords_by_name,
         file_lens_by_name=file_lens_by_name,
-        keyword_context=ctx_kw,
+        keyword_context=keyword_context,
         camera_make=camera.make if camera else None,
         camera_model=camera.model if camera else None,
         capture_date_exif=exif_date,
@@ -252,7 +252,7 @@ def _exif_date(iso_date: str | None) -> str | None:
     return iso_date.replace("-", ":") + " 12:00:00"
 
 
-def _maybe(session: Session, model, entity_id: str | None, label: str):
+def _get_optional(session: Session, model, entity_id: str | None, label: str):
     if not entity_id:
         return None
     row = session.get(model, entity_id)
@@ -267,7 +267,7 @@ def _require_provider_kind(row: Provider | None, kind: str, label: str) -> None:
     raise TaggingError(f"{label} must support {kind}", status_code=400)
 
 
-def _named(row) -> mf.NamedSnapshot:
+def _named_snapshot(row) -> mf.NamedSnapshot:
     if row is None:
         return mf.NamedSnapshot()
     return mf.NamedSnapshot(id=row.id, name=row.name)
@@ -288,7 +288,7 @@ def _normalize_file_keywords(
     return out
 
 
-def _normalize_roll_notes(raw: str | None) -> str | None:
+def _clean_text(raw: str | None) -> str | None:
     if raw is None:
         return None
     cleaned = raw.strip()
@@ -327,42 +327,42 @@ def _normalize_file_lenses(
     return out
 
 
-def intent_for_file(ctx: Pipeline, file_name: str) -> et.WriteIntent:
-    lens = ctx.file_lens_by_name.get(file_name)
-    file_kw_ctx = replace(
-        ctx.keyword_context,
-        lens_display_name=lens.display_name if lens else ctx.keyword_context.lens_display_name,
+def intent_for_file(plan: TaggingPlan, file_name: str) -> et.WriteIntent:
+    lens = plan.file_lens_by_name.get(file_name)
+    file_context = replace(
+        plan.keyword_context,
+        lens_display_name=lens.display_name if lens else plan.keyword_context.lens_display_name,
     )
-    hierarchical = kw.build_hierarchical_paths(file_kw_ctx)
+    hierarchical = kw.build_hierarchical_paths(file_context)
     flat = kw.leaves_of(hierarchical)
-    extra_keywords = ctx.file_keywords_by_name.get(file_name, [])
+    extra_keywords = plan.file_keywords_by_name.get(file_name, [])
     if extra_keywords:
         hierarchical = kw.merge_hierarchical(hierarchical, extra_keywords)
         flat = kw.merge_flat(flat, kw.leaves_of(extra_keywords))
     return et.WriteIntent(
-        camera_make=ctx.camera_make,
-        camera_model=ctx.camera_model,
-        lens_model=(lens.lens_model_write_value if lens else ctx.lens_snapshot.lens_model_write_value),
+        camera_make=plan.camera_make,
+        camera_model=plan.camera_model,
+        lens_model=(lens.lens_model_write_value if lens else plan.lens_snapshot.lens_model_write_value),
         hierarchical_keywords=hierarchical,
         flat_keywords=flat,
-        capture_date=ctx.capture_date_exif,
-        description=ctx.roll_notes,
+        capture_date=plan.capture_date_exif,
+        description=plan.roll_notes,
     )
 
 
-def preview_all(ctx: Pipeline) -> list[tuple[str, list[et.TagChange]]]:
+def preview_all(plan: TaggingPlan) -> list[tuple[str, list[et.TagChange]]]:
     """Dry run: per file, what an apply would change."""
     return [
         (
             file_path.name,
-            exiftool.preview(file_path, intent_for_file(ctx, file_path.name), replace_managed=ctx.replace_managed_metadata),
+            exiftool.preview(file_path, intent_for_file(plan, file_path.name), replace_managed=plan.replace_managed_metadata),
         )
-        for file_path in ctx.files
+        for file_path in plan.files
     ]
 
 
 def apply_all(
-    ctx: Pipeline,
+    plan: TaggingPlan,
     *,
     progress: Callable[[dict[str, Any]], None] | None = None,
     cancelled: Callable[[], bool] = lambda: False,
@@ -381,11 +381,11 @@ def apply_all(
     finished = False
 
     try:
-        for file_path in ctx.files:
+        for file_path in plan.files:
             if cancelled():
                 was_cancelled = True
                 break
-            _apply_one(ctx, file_path, applied, errors, all_diffs)
+            _apply_one(plan, file_path, applied, errors, all_diffs)
             if errors and errors[-1].startswith(f"{file_path.name}:"):
                 emit({"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]})
             else:
@@ -394,11 +394,11 @@ def apply_all(
     finally:
         # Files already written must be on record even when the loop died.
         if finished or applied:
-            manifest_path = _write_apply_manifest(ctx, applied, all_diffs)
+            manifest_path = _write_apply_manifest(plan, applied, all_diffs)
 
     return {
-        "folder": str(ctx.folder),
-        "roll_id": ctx.roll_id,
+        "folder": str(plan.folder),
+        "roll_id": plan.roll_id,
         "manifest_path": str(manifest_path),
         "applied_files": applied,
         "errors": errors,
@@ -407,7 +407,7 @@ def apply_all(
 
 
 def _apply_one(
-    ctx: Pipeline,
+    plan: TaggingPlan,
     file_path: Path,
     applied: list[str],
     errors: list[str],
@@ -415,8 +415,8 @@ def _apply_one(
 ) -> None:
     result = exiftool.write(
         file_path,
-        intent_for_file(ctx, file_path.name),
-        replace_managed=ctx.replace_managed_metadata,
+        intent_for_file(plan, file_path.name),
+        replace_managed=plan.replace_managed_metadata,
     )
     if not result.ok:
         errors.append(f"{file_path.name}: {result.error}")
@@ -425,30 +425,30 @@ def _apply_one(
     all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in result.changes]})
 
 
-def _write_apply_manifest(ctx: Pipeline, applied: list[str], all_diffs: list[dict]) -> Path:
-    existing_manifest = mf.read_manifest(ctx.folder)
+def _write_apply_manifest(plan: TaggingPlan, applied: list[str], all_diffs: list[dict]) -> Path:
+    existing_manifest = mf.read_manifest(plan.folder)
     fresh = mf.build_new_manifest(
-        folder=ctx.folder,
-        roll_id=ctx.roll_id,
-        source_kind=ctx.source_kind,
-        scan_tier=ctx.scan_tier,
-        camera=ctx.camera_snapshot,
-        lens=ctx.lens_snapshot,
-        film=ctx.film_snapshot,
-        development_provider=ctx.dev_provider_snapshot,
-        development_method=ctx.dev_method_snapshot,
-        scan_provider=ctx.scan_provider_snapshot,
-        scan_method=ctx.scan_method_snapshot,
-        capture_date_value=ctx.capture_date_value,
-        capture_date_precision=ctx.capture_date_precision,
-        capture_date_source=ctx.capture_date_source,
-        notes=ctx.roll_notes,
-        place=ctx.place,
+        folder=plan.folder,
+        roll_id=plan.roll_id,
+        source_kind=plan.source_kind,
+        scan_tier=plan.scan_tier,
+        camera=plan.camera_snapshot,
+        lens=plan.lens_snapshot,
+        film=plan.film_snapshot,
+        development_provider=plan.dev_provider_snapshot,
+        development_method=plan.dev_method_snapshot,
+        scan_provider=plan.scan_provider_snapshot,
+        scan_method=plan.scan_method_snapshot,
+        capture_date_value=plan.capture_date_value,
+        capture_date_precision=plan.capture_date_precision,
+        capture_date_source=plan.capture_date_source,
+        notes=plan.roll_notes,
+        place=plan.place,
     )
     merged = mf.merge_existing_manifest(existing_manifest, fresh) if existing_manifest else fresh
     mf.set_file_overrides(
         merged,
-        extra_keywords_by_file=ctx.file_keywords_by_name,
+        extra_keywords_by_file=plan.file_keywords_by_name,
         lens_by_file={
             name: mf.GearSnapshot(
                 id=lens.id,
@@ -458,8 +458,8 @@ def _write_apply_manifest(ctx: Pipeline, applied: list[str], all_diffs: list[dic
                 mount=lens.mount,
                 lens_model_write_value=lens.lens_model_write_value,
             )
-            for name, lens in ctx.file_lens_by_name.items()
+            for name, lens in plan.file_lens_by_name.items()
         },
     )
     mf.append_apply_history(merged, applied_files=applied, diffs=all_diffs, dry_run=False)
-    return mf.write_manifest(ctx.folder, merged)
+    return mf.write_manifest(plan.folder, merged)

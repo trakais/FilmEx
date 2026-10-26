@@ -44,19 +44,19 @@ def library(tmp_path: Path, client, make_jpeg):
     return root
 
 
-def _segments(listing: fr.FrameListing):
+def _rolls(listing: fr.FrameListing):
     raw = [f.key for f in listing.frames if f.has_raw]
     lab = [f.key for f in listing.frames if not f.has_raw]
     return [
-        fileops.Segment(name="2026-04-01-Fed2-Gold", frames=raw, tagging={"roll_date": "2026-04-01"}),
-        fileops.Segment(name="2026-04-09-Fed2-HP5", frames=lab, tagging={"roll_date": "2026-04-09"}),
+        fileops.RollDraft(name="2026-04-01-Fed2-Gold", frames=raw, tagging={"roll_date": "2026-04-01"}),
+        fileops.RollDraft(name="2026-04-09-Fed2-HP5", frames=lab, tagging={"roll_date": "2026-04-09"}),
     ]
 
 
 def test_plan_split_siblings_for_roll_folder_and_subfolders_for_year(library: Path):
     mixed = library / "2026" / "EUR-04"
     listing = fr.list_frames(mixed)
-    plan = fileops.plan_split(mixed, _segments(listing), root=str(library))
+    plan = fileops.plan_split(mixed, _rolls(listing), root=str(library))
     assert plan.ok, plan.to_dict()
     assert plan.layout == "siblings"
     assert plan.target_parent == str(library / "2026")
@@ -72,21 +72,21 @@ def test_plan_split_siblings_for_roll_folder_and_subfolders_for_year(library: Pa
     year = library / "2011"
     _touch(year, "a.jpg")
     _touch(year, "b.jpg")
-    plan_year = fileops.plan_split(year, [fileops.Segment(name="R1", frames=["a"]), fileops.Segment(name="R2", frames=["b"])], root=str(library))
+    plan_year = fileops.plan_split(year, [fileops.RollDraft(name="R1", frames=["a"]), fileops.RollDraft(name="R2", frames=["b"])], root=str(library))
     assert plan_year.layout == "subfolders"
     assert plan_year.target_parent == str(year)
     assert not plan_year.remove_source
 
 
-def test_plan_split_reports_conflicts_and_bad_segments(library: Path, monkeypatch):
+def test_plan_split_reports_conflicts_and_bad_rolls(library: Path, monkeypatch):
     mixed = library / "2026" / "EUR-04"
     listing = fr.list_frames(mixed)
-    segs = _segments(listing)
+    rolls = _rolls(listing)
     (library / "2026" / "2026-04-01-Fed2-Gold").mkdir()
-    segs[1].frames.append("DSC0001")  # also in the first segment
-    segs.append(fileops.Segment(name="EUR-04", frames=[]))
-    segs.append(fileops.Segment(name="bad/name", frames=["nope"]))
-    plan = fileops.plan_split(mixed, segs, root=str(library))
+    rolls[1].frames.append("DSC0001")  # also in the first roll
+    rolls.append(fileops.RollDraft(name="EUR-04", frames=[]))
+    rolls.append(fileops.RollDraft(name="bad/name", frames=["nope"]))
+    plan = fileops.plan_split(mixed, rolls, root=str(library))
     assert not plan.ok
     assert plan.items[0].errors == ["a folder with this name already exists"]
     assert any("also in" in e for e in plan.errors)
@@ -96,16 +96,16 @@ def test_plan_split_reports_conflicts_and_bad_segments(library: Path, monkeypatc
     assert any("not in the folder" in e for e in plan.errors)
 
     monkeypatch.setattr(fileops, "same_volume", lambda a, b: False)
-    plan2 = fileops.plan_split(mixed, _segments(listing), root=str(library))
+    plan2 = fileops.plan_split(mixed, _rolls(listing), root=str(library))
     assert any("different volume" in e for e in plan2.errors)
     with pytest.raises(fileops.PlanError):
-        fileops.apply_split(Session(get_engine()), mixed, _segments(listing), root=str(library))
+        fileops.apply_split(Session(get_engine()), mixed, _rolls(listing), root=str(library))
 
 
 def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path, fake_exiftool):
     mixed = library / "2026" / "EUR-04"
     listing = fr.list_frames(mixed)
-    segs = _segments(listing)
+    rolls = _rolls(listing)
     # A manifest on the source stands in for a previously tagged first roll.
     old_manifest = mf.build_new_manifest(
         folder=mixed, roll_id="EUR-04", source_kind="lab_scan_jpeg", scan_tier="standard",
@@ -117,7 +117,7 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     events: list = []
 
     with Session(get_engine()) as session:
-        result = fileops.apply_split(session, mixed, segs, root=str(library), progress=events.append)
+        result = fileops.apply_split(session, mixed, rolls, root=str(library), progress=events.append)
 
     gold = library / "2026" / "2026-04-01-Fed2-Gold"
     hp5 = library / "2026" / "2026-04-09-Fed2-HP5"
@@ -137,7 +137,7 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     assert mf.read_manifest(hp5)["capture_date_value"] == "2026-04-09"
     assert any(intent.hierarchical_keywords == ["Roll|2026-04-01-Fed2-Gold"] for path, intent in fake_exiftool.writes if path.parent.name == gold.name)
     steps = {e.get("step") for e in events}
-    assert {"move", "tag", "segment"} <= steps
+    assert {"move", "tag", "roll"} <= steps
 
     # Real ExifTool would have seeded a sidecar for the raw that had none.
     (gold / "DSC0004.xmp").write_text("<x/>")
@@ -164,7 +164,7 @@ def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Pa
     (mixed / "notes.txt").unlink()
     listing = fr.list_frames(mixed)
     with Session(get_engine()) as session:
-        result = fileops.apply_split(session, mixed, _segments(listing), root=str(library))
+        result = fileops.apply_split(session, mixed, _rolls(listing), root=str(library))
     assert result["removed_source"]
     assert not mixed.exists()
     with Session(get_engine()) as session:
@@ -187,7 +187,7 @@ def test_apply_split_stops_on_cross_volume_rename_and_keeps_partial_moves_undoab
 
     monkeypatch.setattr(fileops.os, "rename", flaky_rename)
     with Session(get_engine()) as session:
-        result = fileops.apply_split(session, mixed, _segments(listing), root=str(library))
+        result = fileops.apply_split(session, mixed, _rolls(listing), root=str(library))
     assert len(result["moves"]) == 2
     assert result["errors"] and "Cross-device" in result["errors"][0]
     assert not (library / "2026" / "2026-04-09-Fed2-HP5").exists()
@@ -219,18 +219,18 @@ def test_remove_folder_if_empty_deletes_only_litter(tmp_path: Path):
     _touch(folder, "keep.txt")
     assert not fileops.remove_folder_if_empty(folder)
     assert (folder / "keep.txt").is_file()
-    assert json.dumps(fileops.Segment(name="a", frames=["b"]).to_dict())
+    assert json.dumps(fileops.RollDraft(name="a", frames=["b"]).to_dict())
 
 
 def test_planning_leaves_the_callers_rolls_untouched(library: Path, fake_exiftool):
     mixed = library / "2026" / "EUR-04"
-    segs = _segments(fr.list_frames(mixed))
-    segs[0].name = "  2026-04-01-Fed2-Gold  "
-    plan = fileops.plan_split(mixed, segs, root=str(library))
+    rolls = _rolls(fr.list_frames(mixed))
+    rolls[0].name = "  2026-04-01-Fed2-Gold  "
+    plan = fileops.plan_split(mixed, rolls, root=str(library))
     assert plan.items[0].name == "2026-04-01-Fed2-Gold"
-    assert segs[0].name == "  2026-04-01-Fed2-Gold  "
+    assert rolls[0].name == "  2026-04-01-Fed2-Gold  "
     # Apply still tags each new folder with its own roll's fields.
     with Session(get_engine()) as session:
-        fileops.apply_split(session, mixed, segs, root=str(library))
+        fileops.apply_split(session, mixed, rolls, root=str(library))
     assert mf.read_manifest(library / "2026" / "2026-04-01-Fed2-Gold")["capture_date_value"] == "2026-04-01"
     assert mf.read_manifest(library / "2026" / "2026-04-09-Fed2-HP5")["capture_date_value"] == "2026-04-09"

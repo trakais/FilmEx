@@ -30,7 +30,7 @@ from sqlmodel import Session
 from filmex.services import fileops, operations
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
-from filmex.services.fileops import Cancelled, PlanError, Progress, Segment
+from filmex.services.fileops import Cancelled, PlanError, Progress, RollDraft
 
 CHUNK = 4 * 1024 * 1024
 HEADROOM = 64 * 1024 * 1024
@@ -134,19 +134,19 @@ class ImportPlan:
         return data
 
 
-def resolve_year(segment: Segment, source: Path, frames: list[fr.Frame]) -> str | None:
+def resolve_year(roll: RollDraft, source: Path, frames: list[fr.Frame]) -> str | None:
     """Year folder for a roll: explicit, else from the roll date, else from
     the oldest file in it."""
-    if segment.year and segment.year.isdigit() and len(segment.year) == 4:
-        return segment.year
-    date = (segment.tagging or {}).get("roll_date") or ""
+    if roll.year and roll.year.isdigit() and len(roll.year) == 4:
+        return roll.year
+    date = (roll.tagging or {}).get("roll_date") or ""
     if len(date) >= 4 and date[:4].isdigit():
         return date[:4]
     earliest = fr.earliest_file_date(source, frames)
     return earliest[:4] if earliest else None
 
 
-def plan_import(source: Path | str, segments: list[Segment], *, root: str | None, mode: str) -> ImportPlan:
+def plan_import(source: Path | str, rolls: list[RollDraft], *, root: str | None, mode: str) -> ImportPlan:
     source_path = Path(source).expanduser()
     errors: list[str] = []
     if not source_path.is_dir():
@@ -160,17 +160,17 @@ def plan_import(source: Path | str, segments: list[Segment], *, root: str | None
         raise PlanError([f"unknown import mode: {mode}"])
 
     listing = fr.list_frames(source_path)
-    resolved, unassigned, seg_errors = fileops.resolve_segments(listing, segments)
-    errors.extend(seg_errors)
+    resolved, unassigned, roll_errors = fileops.resolve_rolls(listing, rolls)
+    errors.extend(roll_errors)
 
     items: list[ImportItem] = []
     taken: list[str] = []
-    for seg, frames in resolved:
+    for roll, frames in resolved:
         item_errors: list[str] = []
-        year = resolve_year(seg, source_path, frames)
+        year = resolve_year(roll, source_path, frames)
         if year is None:
             item_errors.append("no roll date and no file dates; set a date to pick the year folder")
-        target = root_path / (year or "_") / seg.name
+        target = root_path / (year or "_") / roll.name
         if year is not None:
             if target.exists() or target.is_symlink():
                 item_errors.append("a folder with this name already exists in that year")
@@ -182,14 +182,14 @@ def plan_import(source: Path | str, segments: list[Segment], *, root: str | None
         files = [{"name": name, "bytes": _size(source_path / name)} for f in frames for name in f.files]
         items.append(
             ImportItem(
-                name=seg.name,
+                name=roll.name,
                 year=year,
                 target=str(target),
                 frames=[f.key for f in frames],
                 files=files,
                 image_count=sum(len(f.images) for f in frames),
                 bytes=sum(f["bytes"] for f in files),
-                tagging=dict(seg.tagging),
+                tagging=dict(roll.tagging),
                 errors=item_errors,
             )
         )
@@ -247,7 +247,7 @@ def _human(n: int) -> str:
 def apply_import(
     session: Session,
     source: Path | str,
-    segments: list[Segment],
+    rolls: list[RollDraft],
     *,
     root: str | None,
     mode: str,
@@ -255,7 +255,7 @@ def apply_import(
     cancelled: Cancelled = lambda: False,
 ) -> dict[str, Any]:
     emit = progress or (lambda e: None)
-    plan = plan_import(source, segments, root=root, mode=mode)
+    plan = plan_import(source, rolls, root=root, mode=mode)
     if not plan.ok:
         raise PlanError(plan.errors + [f"{i.name}: {e}" for i in plan.items for e in i.errors])
     source_path = Path(plan.source)
@@ -314,7 +314,7 @@ def apply_import(
                 _files_done: int = files_done,
             ) -> None:
                 emit({
-                    **e, "segment": _segment, "file": _name,
+                    **e, "roll": _segment, "file": _name,
                     "files_done": _files_done, "files_total": total_files,
                     "bytes_done": _base + e["bytes"], "bytes_total": total_bytes,
                 })
@@ -326,12 +326,12 @@ def apply_import(
                 msg = f"{name}: {exc}" if not isinstance(exc, VerifyError) else str(exc)
                 record["errors"].append(msg)
                 errors.append(f"{item.name}: {msg}")
-                emit({"type": "progress", "step": "verify", "segment": item.name, "file": name, "ok": False, "error": msg})
+                emit({"type": "progress", "step": "verify", "roll": item.name, "file": name, "ok": False, "error": msg})
                 break
             record["files"].append({"name": name, "from": str(src), "to": str(dst), **info})
             bytes_before += info["size"]
             files_done += 1
-            emit({"type": "progress", "step": "verify", "segment": item.name, "file": name, "ok": True,
+            emit({"type": "progress", "step": "verify", "roll": item.name, "file": name, "ok": True,
                   "files_done": files_done, "files_total": total_files, "bytes_done": bytes_before, "bytes_total": total_bytes})
         if was_cancelled or not roll_ok:
             break
@@ -349,12 +349,12 @@ def apply_import(
                 try:
                     os.remove(entry["from"])
                     removed_sources.append(entry["from"])
-                    emit({"type": "progress", "step": "remove", "segment": item.name, "file": entry["name"], "ok": True})
+                    emit({"type": "progress", "step": "remove", "roll": item.name, "file": entry["name"], "ok": True})
                 except OSError as exc:
                     msg = f"{entry['name']}: source could not be removed: {exc}"
                     record["errors"].append(msg)
                     errors.append(f"{item.name}: {msg}")
-        emit({"type": "progress", "step": "segment", "segment": item.name, "files": len(record["files"]),
+        emit({"type": "progress", "step": "roll", "roll": item.name, "files": len(record["files"]),
               "applied": len(record["applied"]), "verified": True})
 
     result = {

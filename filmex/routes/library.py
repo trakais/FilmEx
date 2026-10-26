@@ -80,7 +80,7 @@ def rescan_library(
     if not Path(root).expanduser().is_dir():
         raise HTTPException(status_code=404, detail=f"Library root not reachable: {root}")
 
-    job = jobs.get_manager().submit("library_scan", lambda ctx: _scan_job(ctx, root), start={"root": root})
+    job = jobs.get_manager().submit("library_scan", lambda job_ctx: _scan_job(job_ctx, root), start={"root": root})
     return job_routes.stream(job)
 
 

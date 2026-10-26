@@ -1892,7 +1892,7 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
   border: 1px solid transparent;
   border-radius: 2px;
   cursor: pointer;
-  --seg-color: transparent;
+  --roll-hue: transparent;
 }
 .sheet-cell:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, 0.025); }
 .sheet-thumb {
@@ -1924,7 +1924,7 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
   font-weight: 600;
   letter-spacing: 0.1em;
   color: #0a0a0a;
-  background: var(--seg-color);
+  background: var(--roll-hue);
   border-radius: 2px;
 }
 .sheet-cell-name {
@@ -1978,15 +1978,15 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
 .sheet-cell.unassigned .sheet-cell-name { color: var(--muted-2); text-decoration: line-through; }
 /* Roll colours: a stripe under the thumbnail plus the stamp. Eight hues,
    all desaturated so the yellow selection still reads as the accent. */
-.seg-0 { --seg-color: #d9a441; }
-.seg-1 { --seg-color: #6fb3c9; }
-.seg-2 { --seg-color: #9bc46a; }
-.seg-3 { --seg-color: #c98ab8; }
-.seg-4 { --seg-color: #e08a5a; }
-.seg-5 { --seg-color: #8f9ad9; }
-.seg-6 { --seg-color: #7fcfb0; }
-.seg-7 { --seg-color: #d6c56a; }
-.sheet-cell[class*="seg-"] .sheet-thumb { border-bottom: 3px solid var(--seg-color); }
+.roll-hue-0 { --roll-hue: #d9a441; }
+.roll-hue-1 { --roll-hue: #6fb3c9; }
+.roll-hue-2 { --roll-hue: #9bc46a; }
+.roll-hue-3 { --roll-hue: #c98ab8; }
+.roll-hue-4 { --roll-hue: #e08a5a; }
+.roll-hue-5 { --roll-hue: #8f9ad9; }
+.roll-hue-6 { --roll-hue: #7fcfb0; }
+.roll-hue-7 { --roll-hue: #d6c56a; }
+.sheet-cell[class*="roll-hue-"] .sheet-thumb { border-bottom: 3px solid var(--roll-hue); }
 
 .sheet-toolbar {
   display: flex;
@@ -2002,7 +2002,7 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
 .roll-cards { display: flex; flex-direction: column; gap: 14px; }
 .roll-card {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--seg-color, var(--border-strong));
+  border-left: 3px solid var(--roll-hue, var(--border-strong));
   border-radius: 2px;
   background: linear-gradient(180deg, #121212 0%, #0d0d0d 100%);
   padding: 14px 16px 16px;
@@ -2016,7 +2016,7 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
   font-weight: 600;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: var(--seg-color, var(--text));
+  color: var(--roll-hue, var(--text));
 }
 .roll-card-range { font-family: var(--font-mono); font-size: 11px; color: var(--muted); flex: 1; }
 .roll-card-actions { display: flex; gap: 14px; }

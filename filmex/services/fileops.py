@@ -49,7 +49,7 @@ class PlanError(ValueError):
 
 
 @dataclass
-class Segment:
+class RollDraft:
     """One roll draft from the contact sheet."""
 
     name: str
@@ -58,7 +58,7 @@ class Segment:
     year: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Segment:
+    def from_dict(cls, data: dict[str, Any]) -> RollDraft:
         return cls(
             name=str(data.get("name") or ""),
             frames=[str(k) for k in data.get("frames") or []],
@@ -145,34 +145,34 @@ def tagging_sidecars(folder: Path, image_names: list[str]) -> list[Path]:
     return found
 
 
-def resolve_segments(
-    listing: fr.FrameListing, segments: list[Segment]
-) -> tuple[list[tuple[Segment, list[fr.Frame]]], list[str], list[str]]:
-    """Match segment frame keys against the listing.
+def resolve_rolls(
+    listing: fr.FrameListing, rolls: list[RollDraft]
+) -> tuple[list[tuple[RollDraft, list[fr.Frame]]], list[str], list[str]]:
+    """Match roll frame keys against the listing.
 
-    Returns ``(resolved, unassigned_keys, errors)``. Each resolved segment is
-    a copy with its folder name cleaned; the caller's segments are left as
-    they are. A frame may belong to one segment only; unknown keys and empty
-    segments are errors.
+    Returns ``(resolved, unassigned_keys, errors)``. Each resolved roll is
+    a copy with its folder name cleaned; the caller's rolls are left as
+    they are. A frame may belong to one roll only; unknown keys and empty
+    rolls are errors.
     """
     by_key = fr.frames_by_key(listing)
     errors: list[str] = []
     seen_frames: dict[str, str] = {}
     seen_names: list[str] = []
-    resolved: list[tuple[Segment, list[fr.Frame]]] = []
-    for index, seg in enumerate(segments, start=1):
-        label = seg.name or f"roll {index}"
+    resolved: list[tuple[RollDraft, list[fr.Frame]]] = []
+    for index, roll in enumerate(rolls, start=1):
+        label = roll.name or f"roll {index}"
         try:
-            seg = replace(seg, name=clean_name(seg.name))
+            roll = replace(roll, name=clean_name(roll.name))
         except ValueError as exc:
             errors.append(f"{label}: {exc}")
-        if any(same_name(seg.name, other) for other in seen_names):
-            errors.append(f"{seg.name}: two rolls would get the same folder name")
-        seen_names.append(seg.name)
-        if not seg.frames:
+        if any(same_name(roll.name, other) for other in seen_names):
+            errors.append(f"{roll.name}: two rolls would get the same folder name")
+        seen_names.append(roll.name)
+        if not roll.frames:
             errors.append(f"{label}: no frames")
         frames: list[fr.Frame] = []
-        for key in seg.frames:
+        for key in roll.frames:
             frame = by_key.get(key)
             if frame is None:
                 errors.append(f"{label}: frame {key} is not in the folder any more")
@@ -183,7 +183,7 @@ def resolve_segments(
             seen_frames[key] = label
             frames.append(frame)
         frames.sort(key=lambda f: f.display_key.lower())
-        resolved.append((seg, frames))
+        resolved.append((roll, frames))
     unassigned = [f.key for f in listing.frames if f.key not in seen_frames]
     return resolved, unassigned, errors
 
@@ -206,12 +206,12 @@ def tag_folder(
         return {"applied": [], "errors": [], "skipped": "ExifTool not available: files were moved but not tagged"}
     req = DryRunRequest(folder=str(folder), **tagging)
     try:
-        ctx = tg.build_pipeline(req, session)
+        tagging_plan = tg.plan_tagging(req, session)
     except tg.TaggingError as exc:
         return {"applied": [], "errors": [f"tagging: {exc.detail}"], "skipped": None}
     final = tg.apply_all(
-        ctx,
-        progress=lambda event: emit({**event, "step": "tag", "segment": folder.name}),
+        tagging_plan,
+        progress=lambda event: emit({**event, "step": "tag", "roll": folder.name}),
         cancelled=cancelled,
     )
     return {
@@ -274,7 +274,7 @@ def target_parent_for(source: Path, root: str | None) -> tuple[Path, str]:
     return source, SUBFOLDERS
 
 
-def plan_split(source: Path | str, segments: list[Segment], *, root: str | None) -> SplitPlan:
+def plan_split(source: Path | str, rolls: list[RollDraft], *, root: str | None) -> SplitPlan:
     source_path = Path(source).expanduser()
     errors: list[str] = []
     if not source_path.is_dir():
@@ -284,11 +284,11 @@ def plan_split(source: Path | str, segments: list[Segment], *, root: str | None)
     if not same_volume(source_path, parent):
         errors.append("the target is on a different volume; a split only moves files within one volume")
 
-    resolved, unassigned, seg_errors = resolve_segments(listing, segments)
-    errors.extend(seg_errors)
+    resolved, unassigned, roll_errors = resolve_rolls(listing, rolls)
+    errors.extend(roll_errors)
     items: list[SplitItem] = []
-    for seg, frames in resolved:
-        target = parent / seg.name
+    for roll, frames in resolved:
+        target = parent / roll.name
         item_errors: list[str] = []
         if target.exists() or target.is_symlink():
             if layout == SUBFOLDERS or not _same_path(target, source_path):
@@ -298,13 +298,13 @@ def plan_split(source: Path | str, segments: list[Segment], *, root: str | None)
         files = [name for f in frames for name in f.files]
         items.append(
             SplitItem(
-                name=seg.name,
+                name=roll.name,
                 target=str(target),
                 frames=[f.key for f in frames],
                 files=files,
                 image_count=sum(len(f.images) for f in frames),
                 bytes=sum(f.bytes for f in frames),
-                tagging=dict(seg.tagging),
+                tagging=dict(roll.tagging),
                 errors=item_errors,
             )
         )
@@ -335,7 +335,7 @@ def _same_path(a: Path, b: Path) -> bool:
 def apply_split(
     session: Session,
     source: Path | str,
-    segments: list[Segment],
+    rolls: list[RollDraft],
     *,
     root: str | None,
     progress: Progress | None = None,
@@ -347,7 +347,7 @@ def apply_split(
     the preview stops the batch instead of moving the wrong files.
     """
     emit = progress or (lambda e: None)
-    plan = plan_split(source, segments, root=root)
+    plan = plan_split(source, rolls, root=root)
     if not plan.ok:
         raise PlanError(plan.errors + [e for i in plan.items for e in (f"{i.name}: {x}" for x in i.errors)])
     source_path = Path(plan.source)
@@ -385,7 +385,7 @@ def apply_split(
                 moves.append({"from": str(src), "to": str(dst)})
                 record["files"].append(name)
                 done += 1
-                emit({"type": "progress", "step": "move", "segment": item.name, "file": name, "done": done, "total": total})
+                emit({"type": "progress", "step": "move", "roll": item.name, "file": name, "done": done, "total": total})
             if was_cancelled:
                 break
             tagged = tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
@@ -393,7 +393,7 @@ def apply_split(
             record["errors"] = tagged["errors"]
             record["tag_skipped"] = tagged.get("skipped")
             errors.extend(f"{item.name}: {e}" for e in tagged["errors"])
-            emit({"type": "progress", "step": "segment", "segment": item.name, "files": len(record["files"]), "applied": len(record["applied"])})
+            emit({"type": "progress", "step": "roll", "roll": item.name, "files": len(record["files"]), "applied": len(record["applied"])})
     except OSError as exc:
         errors.append(f"stopped: {exc}")
 
