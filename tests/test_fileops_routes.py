@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,16 +16,6 @@ def _touch(folder: Path, name: str, data: bytes = b"x" * 4) -> Path:
     path = folder / name
     path.write_bytes(data)
     return path
-
-
-def _stub_exiftool(monkeypatch):
-    from filmex.services import fileops as fo
-    from filmex.services import tagging as tg
-
-    monkeypatch.setattr(fo, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "read_managed_tags", lambda path: {})
-    monkeypatch.setattr(tg, "apply_intent", lambda path, intent: subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b""))
 
 
 def _ndjson(res):
@@ -76,9 +65,8 @@ def test_render_name_from_ids(client, tree):
     assert custom["name"] == "2026_05"
 
 
-def test_split_plan_apply_and_undo_over_http(client, tree, monkeypatch):
+def test_split_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
     root, mixed, _, cam, film = tree
-    _stub_exiftool(monkeypatch)
     body = {
         "folder": str(mixed),
         "segments": [
@@ -112,9 +100,8 @@ def test_split_plan_apply_and_undo_over_http(client, tree, monkeypatch):
     assert client.post(f"/api/operations/{done['operation_id']}/undo").status_code == 409
 
 
-def test_import_plan_apply_and_undo_over_http(client, tree, monkeypatch):
+def test_import_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
     root, _, inbox, cam, film = tree
-    _stub_exiftool(monkeypatch)
     body = {
         "folder": str(inbox),
         "segments": [{"name": "2026-05-14-Fed2-Gold", "frames": ["scan_000", "scan_001", "scan_002"],

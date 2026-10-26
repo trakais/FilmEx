@@ -26,11 +26,11 @@ from typing import Any
 from sqlmodel import Session
 
 from filmex.schemas import DryRunRequest
+from filmex.services import exiftool_runner as exiftool
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
 from filmex.services import operations
 from filmex.services import tagging as tg
-from filmex.services.exiftool_runner import exiftool_available
 
 Progress = Callable[[dict[str, Any]], None]
 Cancelled = Callable[[], bool]
@@ -201,7 +201,7 @@ def tag_folder(
     Library then shows the folder as untagged, ready for the Tag view.
     """
     emit = progress or (lambda e: None)
-    if not exiftool_available():
+    if not exiftool.available():
         return {"applied": [], "errors": [], "skipped": "ExifTool not available: files were moved but not tagged"}
     req = DryRunRequest(folder=str(folder), **tagging)
     try:

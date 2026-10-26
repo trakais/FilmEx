@@ -27,14 +27,10 @@ from filmex.models import (
 )
 from filmex.schemas import DryRunRequest
 from filmex.services import exiftool as et
+from filmex.services import exiftool_runner as exiftool
 from filmex.services import folder_scan as fs
 from filmex.services import keywords as kw
 from filmex.services import manifest as mf
-from filmex.services.exiftool_runner import (
-    apply_intent,
-    exiftool_available,
-    read_managed_tags,
-)
 
 
 class TaggingError(ValueError):
@@ -44,13 +40,6 @@ class TaggingError(ValueError):
         super().__init__(detail)
         self.detail = detail
         self.status_code = status_code
-
-
-def read_existing_tags(file_path: Path) -> dict:
-    """Managed tags as currently on disk (sidecar for raw). See the runner."""
-    if not exiftool_available():
-        return {}
-    return read_managed_tags(file_path)
 
 
 class Pipeline:
@@ -364,6 +353,17 @@ def intent_for_file(ctx: Pipeline, file_name: str) -> et.WriteIntent:
     )
 
 
+def preview_all(ctx: Pipeline) -> list[tuple[str, list[et.TagChange]]]:
+    """Dry run: per file, what an apply would change."""
+    return [
+        (
+            file_path.name,
+            exiftool.preview(file_path, intent_for_file(ctx, file_path.name), replace_managed=ctx.replace_managed_metadata),
+        )
+        for file_path in ctx.files
+    ]
+
+
 def run_apply(ctx: Pipeline, *, cancelled: Callable[[], bool] = lambda: False):
     """Generator: yields a progress event per file, then a `done` event.
 
@@ -410,21 +410,16 @@ def _apply_one(
     errors: list[str],
     all_diffs: list[dict],
 ) -> None:
-    existing = read_existing_tags(file_path)
-    intent = intent_for_file(ctx, file_path.name)
-    resolved_intent = et.resolve_intent(
-        existing,
-        intent,
+    result = exiftool.write(
+        file_path,
+        intent_for_file(ctx, file_path.name),
         replace_managed=ctx.replace_managed_metadata,
     )
-    changes = et.diff(existing, intent, replace_managed=ctx.replace_managed_metadata)
-    result = apply_intent(file_path, resolved_intent)
-    if result.returncode != 0:
-        err = f"{file_path.name}: {result.stderr.decode('utf-8', 'replace').strip()}"
-        errors.append(err)
+    if not result.ok:
+        errors.append(f"{file_path.name}: {result.error}")
         return
     applied.append(file_path.name)
-    all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in changes]})
+    all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in result.changes]})
 
 
 def _write_apply_manifest(ctx: Pipeline, applied: list[str], all_diffs: list[dict]) -> Path:

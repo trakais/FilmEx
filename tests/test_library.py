@@ -244,26 +244,15 @@ def test_dry_run_subset_limits_diffs(client, roll_factory):
     assert res.status_code == 400
 
 
-def test_apply_subset_touches_only_selected_files(client, roll_factory, monkeypatch):
-    from filmex.services import tagging as wr
-
+def test_apply_subset_touches_only_selected_files(client, roll_factory, fake_exiftool):
     folder = roll_factory("2026-04-17_R202", jpegs=3)
-    monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
-    written: list[str] = []
-
-    def fake_apply(path, intent):
-        written.append(path.name)
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(wr, "apply_intent", fake_apply)
     cam = client.get("/api/cameras").json()[0]
     res = client.post(
         "/api/metadata/apply",
         json={"folder": str(folder), "camera_id": cam["id"], "files": ["scan_001.jpg"]},
     )
     assert res.status_code == 200, res.text
-    assert written == ["scan_001.jpg"]
+    assert fake_exiftool.written_names == ["scan_001.jpg"]
     assert res.json()["applied_files"] == ["scan_001.jpg"]
     row = lib.inspect_folder(folder, depth=2, parent=None)
     assert row.status == lib.PARTIAL

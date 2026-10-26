@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import time
 
@@ -151,27 +150,19 @@ def test_job_routes(client):
     assert client.post(f"/api/jobs/{job.id}/cancel").json()["cancel_requested"] is False
 
 
-def _fake_ok(path, intent):
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-
-def test_cancelled_apply_still_writes_manifest(client, roll_factory, monkeypatch):
-    from filmex.services import tagging as wr
+def test_cancelled_apply_still_writes_manifest(client, roll_factory, fake_exiftool):
     from filmex.services import manifest as mf
 
     folder = roll_factory("2026-04-17_R777", jpegs=4)
-    monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
     calls: list[str] = []
 
-    def fake_apply(path, intent):
+    def cancel_on_second_file(path, intent):
         calls.append(path.name)
         if len(calls) == 2:
             running = jobs.get_manager().recent(kind="apply")[0]
             jobs.get_manager().cancel(running.id)
-        return _fake_ok(path, intent)
 
-    monkeypatch.setattr(wr, "apply_intent", fake_apply)
+    fake_exiftool.on_write = cancel_on_second_file
     cam = client.get("/api/cameras").json()[0]
     payload = {"folder": str(folder), "camera_id": cam["id"]}
     with client.stream("POST", "/api/metadata/apply/stream", json=payload) as res:
@@ -191,22 +182,18 @@ def test_cancelled_apply_still_writes_manifest(client, roll_factory, monkeypatch
     assert last["dry_run"] is False
 
 
-def test_failed_apply_reports_error_and_keeps_partial_manifest(client, roll_factory, monkeypatch):
-    from filmex.services import tagging as wr
+def test_failed_apply_reports_error_and_keeps_partial_manifest(client, roll_factory, fake_exiftool):
     from filmex.services import manifest as mf
 
     folder = roll_factory("2026-04-17_R778", jpegs=3)
-    monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
     calls: list[str] = []
 
-    def fake_apply(path, intent):
+    def crash_on_second_file(path, intent):
         calls.append(path.name)
         if len(calls) == 2:
             raise OSError("exiftool exploded")
-        return _fake_ok(path, intent)
 
-    monkeypatch.setattr(wr, "apply_intent", fake_apply)
+    fake_exiftool.on_write = crash_on_second_file
     cam = client.get("/api/cameras").json()[0]
     payload = {"folder": str(folder), "camera_id": cam["id"]}
     with client.stream("POST", "/api/metadata/apply/stream", json=payload) as res:

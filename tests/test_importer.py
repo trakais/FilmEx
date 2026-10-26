@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -38,21 +37,6 @@ def inbox(tmp_path: Path, client, make_jpeg):
     _touch(source, "readme.txt")
     client.patch("/api/settings", json={"library_root": str(root)})
     return root, source
-
-
-def _stub_exiftool(monkeypatch, written=None):
-    from filmex.services import fileops as fo
-    from filmex.services import tagging as tg
-
-    def fake_apply(path, intent):
-        if written is not None:
-            written.append((Path(path).parent.name, Path(path).name))
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(fo, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "read_managed_tags", lambda path: {})
-    monkeypatch.setattr(tg, "apply_intent", fake_apply)
 
 
 def _segments(source: Path):
@@ -111,10 +95,8 @@ def test_plan_import_resolves_years_and_stops_on_collision(inbox, monkeypatch):
     assert any("free space" in e for e in low.errors)
 
 
-def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, monkeypatch):
+def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, fake_exiftool):
     root, source = inbox
-    written: list = []
-    _stub_exiftool(monkeypatch, written)
     events: list = []
     with Session(get_engine()) as session:
         result = importer.apply_import(session, source, _segments(source), root=str(root), mode="copy", progress=events.append)
@@ -151,9 +133,8 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, monkey
     assert (source / "DSC0001.xmp").is_file()
 
 
-def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, monkeypatch):
+def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, monkeypatch, fake_exiftool):
     root, source = inbox
-    _stub_exiftool(monkeypatch)
     real_copy = importer.copy_verify
     state = {"n": 0}
 
@@ -191,9 +172,8 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
     assert (source / "lab_001.jpg").is_file()
 
 
-def test_undo_keeps_a_copy_whose_source_vanished(inbox, monkeypatch):
+def test_undo_keeps_a_copy_whose_source_vanished(inbox, fake_exiftool):
     root, source = inbox
-    _stub_exiftool(monkeypatch)
     segs = [Segment(name="only-lab", frames=["lab_001", "lab_002"], tagging={"roll_date": "2025-01-01"})]
     with Session(get_engine()) as session:
         result = importer.apply_import(session, source, segs, root=str(root), mode="copy")

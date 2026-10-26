@@ -86,16 +86,10 @@ def test_short_name_round_trips_through_the_api(client):
     assert film["short_name"] == "Gold"
 
 
-def test_place_is_stored_in_the_manifest(client, roll_factory, monkeypatch):
-    import subprocess
-
-    from filmex.services import tagging as wr
+def test_place_is_stored_in_the_manifest(client, roll_factory, fake_exiftool):
     from filmex.services import manifest as mf
 
     folder = roll_factory("2026-06-20-Fujica-ColorPlus", jpegs=1)
-    monkeypatch.setattr(wr, "exiftool_available", lambda: True)
-    monkeypatch.setattr(wr, "read_managed_tags", lambda path: {})
-    monkeypatch.setattr(wr, "apply_intent", lambda path, intent: subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b""))
     cam = client.get("/api/cameras").json()[0]
     res = client.post("/api/metadata/apply", json={"folder": str(folder), "camera_id": cam["id"], "place": "  Jāņos "})
     assert res.status_code == 200, res.text

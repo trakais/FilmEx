@@ -26,10 +26,10 @@ from sqlmodel import Session
 
 from filmex.models import Camera, FilmStock, Lens
 from filmex.services import exiftool as et
+from filmex.services import exiftool_runner as exiftool
 from filmex.services import library as lib
 from filmex.services import manifest as mf
 from filmex.services import naming, operations
-from filmex.services.exiftool_runner import apply_intent, read_managed_tags
 
 RENAME = "rename"
 CONFORMS = "conforms"
@@ -335,17 +335,15 @@ def swap_roll_keyword(
         if not path.is_file():
             continue
         try:
-            existing = read_managed_tags(path)
             intent = et.WriteIntent(hierarchical_keywords=[f"Roll|{new_roll}"], flat_keywords=[new_roll])
-            resolved = et.resolve_intent(existing, intent)
-            result = apply_intent(path, resolved)
+            result = exiftool.write(path, intent)
         except Exception as exc:  # noqa: BLE001 - report per file, keep going
             msg = f"{name}: {exc}"
             errors.append(msg)
             emit({"type": "progress", "step": "keywords", "file": name, "ok": False, "error": msg})
             continue
-        if result.returncode != 0:
-            msg = f"{name}: {result.stderr.decode('utf-8', 'replace').strip()}"
+        if not result.ok:
+            msg = f"{name}: {result.error}"
             errors.append(msg)
             emit({"type": "progress", "step": "keywords", "file": name, "ok": False, "error": msg})
             continue

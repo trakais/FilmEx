@@ -13,7 +13,7 @@ import pytest
 
 from filmex.routes import workflow as workflow_routes
 from filmex.services import manifest as mf
-from filmex.services.exiftool_runner import exiftool_available, read_tags
+from filmex.services.exiftool_runner import read_tags
 
 requires_exiftool = pytest.mark.skipif(not shutil.which("exiftool"), reason="exiftool not on PATH")
 

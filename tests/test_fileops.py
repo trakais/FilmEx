@@ -5,7 +5,6 @@ from __future__ import annotations
 import errno
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -43,20 +42,6 @@ def library(tmp_path: Path, client, make_jpeg):
     _touch(mixed, ".DS_Store", 1)
     client.patch("/api/settings", json={"library_root": str(root)})
     return root
-
-
-def _stub_exiftool(monkeypatch, written):
-    from filmex.services import fileops as fo
-    from filmex.services import tagging as tg
-
-    def fake_apply(path, intent):
-        written.append((Path(path).parent.name, Path(path).name, list(intent.hierarchical_keywords)))
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(fo, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "exiftool_available", lambda: True)
-    monkeypatch.setattr(tg, "read_managed_tags", lambda path: {})
-    monkeypatch.setattr(tg, "apply_intent", fake_apply)
 
 
 def _segments(listing: fr.FrameListing):
@@ -117,9 +102,7 @@ def test_plan_split_reports_conflicts_and_bad_segments(library: Path, monkeypatc
         fileops.apply_split(Session(get_engine()), mixed, _segments(listing), root=str(library))
 
 
-def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path, monkeypatch):
-    written: list = []
-    _stub_exiftool(monkeypatch, written)
+def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path, fake_exiftool):
     mixed = library / "2026" / "EUR-04"
     listing = fr.list_frames(mixed)
     segs = _segments(listing)
@@ -152,7 +135,7 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     assert mf.read_manifest(gold)["roll_id"] == "2026-04-01-Fed2-Gold"
     assert mf.read_manifest(gold)["capture_date_value"] == "2026-04-01"
     assert mf.read_manifest(hp5)["capture_date_value"] == "2026-04-09"
-    assert any(kw == ["Roll|2026-04-01-Fed2-Gold"] for folder, name, kw in written if folder == gold.name)
+    assert any(intent.hierarchical_keywords == ["Roll|2026-04-01-Fed2-Gold"] for path, intent in fake_exiftool.writes if path.parent.name == gold.name)
     steps = {e.get("step") for e in events}
     assert {"move", "tag", "segment"} <= steps
 
@@ -176,8 +159,7 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
         fileops.undo_split(session, result["operation_id"])
 
 
-def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Path, monkeypatch):
-    _stub_exiftool(monkeypatch, [])
+def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Path, fake_exiftool):
     mixed = library / "2026" / "EUR-04"
     (mixed / "notes.txt").unlink()
     listing = fr.list_frames(mixed)
@@ -191,8 +173,7 @@ def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Pa
     assert mixed.is_dir() and (mixed / "DSC0004.ARW").is_file()
 
 
-def test_apply_split_stops_on_cross_volume_rename_and_keeps_partial_moves_undoable(library: Path, monkeypatch):
-    _stub_exiftool(monkeypatch, [])
+def test_apply_split_stops_on_cross_volume_rename_and_keeps_partial_moves_undoable(library: Path, monkeypatch, fake_exiftool):
     mixed = library / "2026" / "EUR-04"
     listing = fr.list_frames(mixed)
     real_rename = os.rename
@@ -217,10 +198,10 @@ def test_apply_split_stops_on_cross_volume_rename_and_keeps_partial_moves_undoab
     assert sorted(p.name for p in mixed.iterdir() if p.name.startswith("DSC0001")) == ["DSC0001.ARW", "DSC0001.JPG", "DSC0001.xmp"]
 
 
-def test_tag_folder_without_exiftool_reports_skip(tmp_path: Path, monkeypatch, make_jpeg):
+def test_tag_folder_without_exiftool_reports_skip(tmp_path: Path, fake_exiftool, make_jpeg):
     from filmex.services import fileops as fo
 
-    monkeypatch.setattr(fo, "exiftool_available", lambda: False)
+    fake_exiftool.installed = False
     folder = tmp_path / "roll"
     make_jpeg("a.jpg", long_edge=64, folder=folder)
     with Session(get_engine()) as session:

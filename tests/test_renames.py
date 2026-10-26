@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -98,24 +97,22 @@ def test_propose_with_custom_template_and_roll_numbers(client, rename_tree):
     assert client.post("/api/naming/propose", json={"template": "{nope}"}).status_code == 400
 
 
-def _fake_exiftool(monkeypatch, written):
-    from filmex.services import renames as r
+def _tagged_files(fake, written):
+    """Files read back as tagged with their folder's Roll keyword plus user
+    keywords; every write is recorded as (name, hierarchical, flat)."""
 
-    def fake_read(path):
-        return {"HierarchicalSubject": [f"Roll|{Path(path).parent.name}", "Film|Kodak Gold 200", "People|Anna"],
-                "Subject": [Path(path).parent.name, "Kodak Gold 200", "Anna"]}
-
-    def fake_apply(path, intent):
-        written.append((Path(path).name, list(intent.hierarchical_keywords), list(intent.flat_keywords)))
-        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(r, "read_managed_tags", fake_read)
-    monkeypatch.setattr(r, "apply_intent", fake_apply)
+    fake.tags = lambda path: {
+        "HierarchicalSubject": [f"Roll|{path.parent.name}", "Film|Kodak Gold 200", "People|Anna"],
+        "Subject": [path.parent.name, "Kodak Gold 200", "Anna"],
+    }
+    fake.on_write = lambda path, intent: written.append(
+        (path.name, list(intent.hierarchical_keywords), list(intent.flat_keywords))
+    )
 
 
-def test_apply_rename_updates_manifest_and_roll_keyword_then_undo(client, rename_tree, monkeypatch):
+def test_apply_rename_updates_manifest_and_roll_keyword_then_undo(client, rename_tree, fake_exiftool):
     written: list = []
-    _fake_exiftool(monkeypatch, written)
+    _tagged_files(fake_exiftool, written)
     source = rename_tree / "2026" / "jani-2026"
     target = rename_tree / "2026" / "2026-06-23-Fed2-Gold-Jāņos"
 
@@ -155,9 +152,9 @@ def test_apply_rename_updates_manifest_and_roll_keyword_then_undo(client, rename
     assert client.post(f"/api/operations/{done['operation_id']}/undo").status_code == 409
 
 
-def test_apply_refuses_conflicts_and_bad_targets(client, rename_tree, monkeypatch):
+def test_apply_refuses_conflicts_and_bad_targets(client, rename_tree, fake_exiftool):
     written: list = []
-    _fake_exiftool(monkeypatch, written)
+    _tagged_files(fake_exiftool, written)
     source = rename_tree / "2026" / "EUR-02-Gold"
     items = [
         {"path": str(source), "proposed": "2026-07-02-Fed2-Gold"},  # exists

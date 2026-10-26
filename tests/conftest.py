@@ -157,3 +157,49 @@ def roll_factory(tmp_path: Path, make_jpeg, make_dng, make_thm):
         return folder
 
     return _make
+
+
+class FakeExifTool:
+    """Stands in for ExifTool at the runner's seam (see exiftool_runner).
+
+    - ``installed``: what ``available()`` reports.
+    - ``tags(path)``: the managed tags a read returns (default: none).
+    - ``on_write(path, intent)``: optional hook run before each write; it may
+      raise to simulate a crash, or poke at the running job.
+    - ``writes``: every write as ``(path, resolved_intent)``, in order.
+    - ``fail[name] = "message"``: make ExifTool reject that file.
+    """
+
+    def __init__(self) -> None:
+        self.installed = True
+        self.tags = lambda path: {}
+        self.on_write = None
+        self.writes: list[tuple[Path, object]] = []
+        self.fail: dict[str, str] = {}
+
+    @property
+    def written_names(self) -> list[str]:
+        return [path.name for path, _ in self.writes]
+
+    def _apply(self, path, intent):
+        import subprocess
+
+        path = Path(path)
+        if self.on_write is not None:
+            self.on_write(path, intent)
+        if path.name in self.fail:
+            return subprocess.CompletedProcess(args=[], returncode=1, stdout=b"", stderr=self.fail[path.name].encode())
+        self.writes.append((path, intent))
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+
+@pytest.fixture
+def fake_exiftool(monkeypatch) -> FakeExifTool:
+    """Replace ExifTool for every caller: tagging, dry runs, renames, split, import."""
+    from filmex.services import exiftool_runner
+
+    fake = FakeExifTool()
+    monkeypatch.setattr(exiftool_runner, "available", lambda: fake.installed)
+    monkeypatch.setattr(exiftool_runner, "read_managed_tags", lambda path: fake.tags(Path(path)))
+    monkeypatch.setattr(exiftool_runner, "apply_intent", fake._apply)
+    return fake

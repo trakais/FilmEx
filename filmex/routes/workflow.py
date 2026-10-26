@@ -34,7 +34,7 @@ from filmex.schemas import (
     PreviewBuildResponse,
     TagChangeOut,
 )
-from filmex.services import exiftool as et
+from filmex.services import exiftool_runner as exiftool
 from filmex.services import folder_scan as fs
 from filmex.services import jobs
 from filmex.services import manifest as mf
@@ -147,23 +147,13 @@ def metadata_dry_run(
     session: Session = Depends(get_session),
 ) -> DryRunResponse:
     ctx = _pipeline(req, session)
-    diffs: list[FileDiff] = []
-    for file_path in ctx.files:
-        existing = tg.read_existing_tags(file_path)
-        changes = et.diff(
-            existing,
-            tg.intent_for_file(ctx, file_path.name),
-            replace_managed=ctx.replace_managed_metadata,
+    diffs = [
+        FileDiff(
+            name=name,
+            changes=[TagChangeOut(tag=c.tag, action=c.action, before=c.before, after=c.after) for c in changes],
         )
-        diffs.append(
-            FileDiff(
-                name=file_path.name,
-                changes=[
-                    TagChangeOut(tag=c.tag, action=c.action, before=c.before, after=c.after)
-                    for c in changes
-                ],
-            )
-        )
+        for name, changes in tg.preview_all(ctx)
+    ]
     return DryRunResponse(folder=str(ctx.folder), roll_id=ctx.roll_id, diffs=diffs)
 
 
@@ -200,7 +190,7 @@ def metadata_apply(
     req: ApplyRequest,
     session: Session = Depends(get_session),
 ) -> ApplyResponse:
-    if not tg.exiftool_available():
+    if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
     ctx = _pipeline(req, session)
@@ -227,7 +217,7 @@ def metadata_apply_stream(
     Used by the UI so the Apply button can show `3/12` as exiftool chews through
     the roll — important when files live on a slow NAS.
     """
-    if not tg.exiftool_available():
+    if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
     ctx = _pipeline(req, session)
