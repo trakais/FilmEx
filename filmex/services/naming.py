@@ -79,6 +79,11 @@ def validate_template(template: str) -> str:
     return cleaned
 
 
+def is_date(value: str | None) -> bool:
+    """True for a ``YYYY-MM-DD`` string, the only date form ``{date}`` takes."""
+    return bool(value) and bool(_DATE_RE.match(value))
+
+
 def render(
     template: str,
     ctx: NameContext,

@@ -339,12 +339,6 @@ async function runJob(url, { body, method = "POST", signal, onStart, onEvent } =
   return done;
 }
 
-// Pick a running job back up after a reload: replays what it already
-// emitted, then follows it like runJob.
-function followJob(jobId, { fromSeq = 0, signal, onStart, onEvent } = {}) {
-  return runJob(`/api/jobs/${encodeURIComponent(jobId)}/events?from_seq=${fromSeq}`, { method: "GET", signal, onStart, onEvent });
-}
-
 // Read an NDJSON response line by line, calling `onEvent` for each object as
 // it arrives so progress can render live. Exceptions thrown by `onEvent`
 // abort the read and propagate to the caller.

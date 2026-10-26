@@ -115,10 +115,6 @@ class JobContext:
     def cancelled(self) -> bool:
         return self._job.cancel_requested.is_set()
 
-    def check_cancelled(self) -> None:
-        if self.cancelled():
-            raise JobCancelled()
-
 
 JobBody = Callable[[JobContext], Any]
 

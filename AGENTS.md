@@ -230,8 +230,8 @@ film stock rows.
   never emits `start`, `done` or `error`. Every streaming endpoint returns
   `routes.jobs.stream(job)`; `GET /api/jobs/{id}/events?from_seq=` replays
   and follows; `POST /api/jobs/{id}/cancel` requests a stop that bodies
-  check between files. In the browser, `runJob()` / `followJob()` in
-  `app.js` are the only readers of the stream. Jobs that mutate the user's
+  check between files. In the browser, `runJob()` in `app.js` is the
+  only reader of the stream. Jobs that mutate the user's
   files are `exclusive` and serialize. An apply that is cancelled or fails
   still writes its manifest with the files actually applied.
 - **ExifTool** (`services/exiftool_runner.py`): callers import the module

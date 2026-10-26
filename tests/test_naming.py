@@ -96,3 +96,9 @@ def test_place_is_stored_in_the_manifest(client, roll_factory, fake_exiftool):
     manifest = mf.read_manifest(folder)
     assert manifest["place"] == "Jāņos"
     assert client.get("/api/manifest", params={"folder": str(folder)}).json()["manifest"]["place"] == "Jāņos"
+
+
+def test_is_date_accepts_only_full_iso_dates():
+    assert naming.is_date("2026-05-14")
+    for value in (None, "", "2026-05", "14.05.2026", "2026-5-14", "2026-05-14T12:00"):
+        assert not naming.is_date(value), value

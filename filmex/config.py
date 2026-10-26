@@ -79,11 +79,6 @@ def ensure_data_dir() -> Path:
     return path
 
 
-def static_dir() -> Path:
-    """Directory holding the bundled single-page UI."""
-    return PACKAGE_ROOT / "static"
-
-
 def bundle_resource_dir() -> Path | None:
     """Root of extra bundled resources (vendored ExifTool) when frozen.
 

@@ -53,7 +53,6 @@ class Pipeline:
         source_kind: str,
         scan_tier: str,
         files: list[Path],
-        intent: et.WriteIntent,
         camera_snapshot: mf.GearSnapshot,
         lens_snapshot: mf.GearSnapshot,
         film_snapshot: mf.FilmSnapshot,
@@ -79,7 +78,6 @@ class Pipeline:
         self.source_kind = source_kind
         self.scan_tier = scan_tier
         self.files = files
-        self.intent = intent
         self.camera_snapshot = camera_snapshot
         self.lens_snapshot = lens_snapshot
         self.film_snapshot = film_snapshot
@@ -174,7 +172,6 @@ def build_pipeline(req: DryRunRequest, session: Session) -> Pipeline:
         source_kind=scan.source_kind,
         scan_tier=scan.scan_tier,
         files=files,
-        intent=et.WriteIntent(),
         camera_snapshot=mf.GearSnapshot(
             id=camera.id if camera else None,
             make=camera.make if camera else None,
@@ -381,6 +378,7 @@ def apply_all(
     errors: list[str] = []
     all_diffs: list[dict] = []
     was_cancelled = False
+    finished = False
 
     try:
         for file_path in ctx.files:
@@ -392,12 +390,12 @@ def apply_all(
                 emit({"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]})
             else:
                 emit({"type": "progress", "file": file_path.name, "ok": True})
-    except BaseException:
-        if applied:
-            _write_apply_manifest(ctx, applied, all_diffs)
-        raise
+        finished = True
+    finally:
+        # Files already written must be on record even when the loop died.
+        if finished or applied:
+            manifest_path = _write_apply_manifest(ctx, applied, all_diffs)
 
-    manifest_path = _write_apply_manifest(ctx, applied, all_diffs)
     return {
         "folder": str(ctx.folder),
         "roll_id": ctx.roll_id,

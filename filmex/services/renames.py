@@ -78,10 +78,8 @@ def name_context(session: Session, manifest: dict[str, Any]) -> naming.NameConte
     camera = _short_from(session, Camera, cam_snap)
     film = _short_from(session, FilmStock, film_snap)
     lens = _short_from(session, Lens, lens_snap, has_short=False)
-    date = manifest.get("capture_date_value") or None
-    if date and len(date) == 10 and date[4] == "-" and date[7] == "-":
-        pass
-    else:
+    date = manifest.get("capture_date_value")
+    if not naming.is_date(date):
         date = None
     return naming.NameContext(
         date=date,
