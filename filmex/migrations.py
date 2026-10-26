@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 def migrate_db(engine: Engine) -> None:
@@ -62,6 +62,9 @@ def _apply_migration(engine: Engine, version: int) -> None:
         return
     if version == 6:
         _migrate_to_v6(engine)
+        return
+    if version == 7:
+        _migrate_to_v7(engine)
         return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
@@ -215,6 +218,12 @@ def _migrate_to_v6(engine: Engine) -> None:
             """
         )
         conn.exec_driver_sql("CREATE INDEX ix_library_folder_root ON library_folder(root)")
+
+
+def _migrate_to_v7(engine: Engine) -> None:
+    """Short names for cameras and film stocks, used by the folder naming system."""
+    _ensure_column(engine, "camera", "short_name", "VARCHAR")
+    _ensure_column(engine, "film_stock", "short_name", "VARCHAR")
 
 
 def _sync_film_brands(engine: Engine) -> None:

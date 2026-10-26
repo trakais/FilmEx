@@ -21,6 +21,7 @@ class Camera(SQLModel, table=True):
     fixed_lens_id: Optional[str] = Field(default=None, foreign_key="lens.id")
     camera_type: Optional[str] = None
     notes: Optional[str] = None
+    short_name: Optional[str] = None  # used in roll folder names
     favorite: bool = Field(default=False, index=True)
     archived: bool = Field(default=False, index=True)
     aliases: list[str] = Field(default_factory=list, sa_column=Column(JSON))

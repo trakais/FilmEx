@@ -21,6 +21,7 @@ class FilmStock(SQLModel, table=True):
     film_type: str  # color_negative, bw_negative, slide, other
     process_type: str  # c41, bw, e6, ecn2, other
     notes: Optional[str] = None
+    short_name: Optional[str] = None  # used in roll folder names
     favorite: bool = Field(default=False, index=True)
     archived: bool = Field(default=False, index=True)
     aliases: list[str] = Field(default_factory=list, sa_column=Column(JSON))

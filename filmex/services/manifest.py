@@ -84,6 +84,7 @@ def build_new_manifest(
     capture_date_precision: str = "unknown",
     capture_date_source: Optional[str] = None,
     notes: Optional[str] = None,
+    place: Optional[str] = None,
 ) -> dict:
     return {
         "manifest_version": MANIFEST_VERSION,
@@ -106,6 +107,7 @@ def build_new_manifest(
         "capture_date_precision": capture_date_precision,
         "capture_date_source": capture_date_source,
         "notes": notes,
+        "place": place,
         "file_overrides": {},
         "apply_history": [],
     }

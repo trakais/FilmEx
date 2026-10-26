@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -15,7 +15,7 @@ ProcessType = Literal["c41", "bw", "e6", "ecn2", "other"]
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 
-def _normalize_hex_color(value: Optional[str]) -> Optional[str]:
+def _normalize_hex_color(value: str | None) -> str | None:
     """Accept #rgb / #rrggbb / rrggbb; return canonical lowercase #rrggbb.
 
     Empty string is treated as None so PATCH-style clearing works cleanly.
@@ -44,10 +44,11 @@ class CameraOut(BaseModel):
     make: str
     model: str
     display_name: str
-    mount: Optional[str]
-    fixed_lens_id: Optional[str]
-    camera_type: Optional[str]
-    notes: Optional[str]
+    short_name: str | None = None
+    mount: str | None
+    fixed_lens_id: str | None
+    camera_type: str | None
+    notes: str | None
     aliases: list[str] = Field(default_factory=list)
     favorite: bool
     archived: bool
@@ -59,10 +60,10 @@ class LensOut(BaseModel):
     model: str
     display_name: str
     lens_model_write_value: str
-    focal_length_mm: Optional[int]
-    max_aperture: Optional[float]
-    mount: Optional[str]
-    notes: Optional[str]
+    focal_length_mm: int | None
+    max_aperture: float | None
+    mount: str | None
+    notes: str | None
     aliases: list[str] = Field(default_factory=list)
     favorite: bool
     archived: bool
@@ -73,10 +74,11 @@ class FilmStockOut(BaseModel):
     brand: str
     name: str
     display_name: str
+    short_name: str | None = None
     box_speed_iso: int
     film_type: FilmType
     process_type: ProcessType
-    notes: Optional[str]
+    notes: str | None
     aliases: list[str] = Field(default_factory=list)
     favorite: bool
     archived: bool
@@ -93,8 +95,8 @@ class ProviderOut(BaseModel):
 class FilmBrandOut(BaseModel):
     id: str
     name: str
-    color_primary: Optional[str] = None
-    color_secondary: Optional[str] = None
+    color_primary: str | None = None
+    color_secondary: str | None = None
 
 
 class MethodOut(BaseModel):
@@ -111,10 +113,11 @@ class CameraCreate(BaseModel):
     make: str
     model: str
     display_name: str
-    mount: Optional[str] = None
-    fixed_lens_id: Optional[str] = None
-    camera_type: Optional[str] = None
-    notes: Optional[str] = None
+    short_name: str | None = None
+    mount: str | None = None
+    fixed_lens_id: str | None = None
+    camera_type: str | None = None
+    notes: str | None = None
     favorite: bool = False
     aliases: list[str] = Field(default_factory=list)
 
@@ -124,10 +127,10 @@ class LensCreate(BaseModel):
     model: str
     display_name: str
     lens_model_write_value: str
-    focal_length_mm: Optional[int] = None
-    max_aperture: Optional[float] = Field(default=None, gt=0)
-    mount: Optional[str] = None
-    notes: Optional[str] = None
+    focal_length_mm: int | None = None
+    max_aperture: float | None = Field(default=None, gt=0)
+    mount: str | None = None
+    notes: str | None = None
     favorite: bool = False
     aliases: list[str] = Field(default_factory=list)
 
@@ -136,10 +139,11 @@ class FilmStockCreate(BaseModel):
     brand: str
     name: str
     display_name: str
+    short_name: str | None = None
     box_speed_iso: int
     film_type: FilmType
     process_type: ProcessType
-    notes: Optional[str] = None
+    notes: str | None = None
     favorite: bool = False
     aliases: list[str] = Field(default_factory=list)
 
@@ -152,8 +156,8 @@ class ProviderCreate(BaseModel):
 
 class FilmBrandCreate(BaseModel):
     name: str
-    color_primary: Optional[str] = None
-    color_secondary: Optional[str] = None
+    color_primary: str | None = None
+    color_secondary: str | None = None
 
     _normalize_colors = field_validator("color_primary", "color_secondary", mode="before")(
         lambda cls, v: _normalize_hex_color(v)
@@ -161,9 +165,9 @@ class FilmBrandCreate(BaseModel):
 
 
 class FilmBrandUpdate(BaseModel):
-    name: Optional[str] = None
-    color_primary: Optional[str] = None
-    color_secondary: Optional[str] = None
+    name: str | None = None
+    color_primary: str | None = None
+    color_secondary: str | None = None
 
     _normalize_colors = field_validator("color_primary", "color_secondary", mode="before")(
         lambda cls, v: _normalize_hex_color(v)
@@ -179,53 +183,55 @@ class MethodCreate(BaseModel):
 
 
 class CameraUpdate(BaseModel):
-    make: Optional[str] = None
-    model: Optional[str] = None
-    display_name: Optional[str] = None
-    mount: Optional[str] = None
-    fixed_lens_id: Optional[str] = None
-    camera_type: Optional[str] = None
-    notes: Optional[str] = None
-    favorite: Optional[bool] = None
-    archived: Optional[bool] = None
-    aliases: Optional[list[str]] = None
+    make: str | None = None
+    model: str | None = None
+    display_name: str | None = None
+    short_name: str | None = None
+    mount: str | None = None
+    fixed_lens_id: str | None = None
+    camera_type: str | None = None
+    notes: str | None = None
+    favorite: bool | None = None
+    archived: bool | None = None
+    aliases: list[str] | None = None
 
 
 class LensUpdate(BaseModel):
-    make: Optional[str] = None
-    model: Optional[str] = None
-    display_name: Optional[str] = None
-    lens_model_write_value: Optional[str] = None
-    focal_length_mm: Optional[int] = None
-    max_aperture: Optional[float] = Field(default=None, gt=0)
-    mount: Optional[str] = None
-    notes: Optional[str] = None
-    favorite: Optional[bool] = None
-    archived: Optional[bool] = None
-    aliases: Optional[list[str]] = None
+    make: str | None = None
+    model: str | None = None
+    display_name: str | None = None
+    lens_model_write_value: str | None = None
+    focal_length_mm: int | None = None
+    max_aperture: float | None = Field(default=None, gt=0)
+    mount: str | None = None
+    notes: str | None = None
+    favorite: bool | None = None
+    archived: bool | None = None
+    aliases: list[str] | None = None
 
 
 class FilmStockUpdate(BaseModel):
-    brand: Optional[str] = None
-    name: Optional[str] = None
-    display_name: Optional[str] = None
-    box_speed_iso: Optional[int] = None
-    film_type: Optional[FilmType] = None
-    process_type: Optional[ProcessType] = None
-    notes: Optional[str] = None
-    favorite: Optional[bool] = None
-    archived: Optional[bool] = None
-    aliases: Optional[list[str]] = None
+    brand: str | None = None
+    name: str | None = None
+    display_name: str | None = None
+    short_name: str | None = None
+    box_speed_iso: int | None = None
+    film_type: FilmType | None = None
+    process_type: ProcessType | None = None
+    notes: str | None = None
+    favorite: bool | None = None
+    archived: bool | None = None
+    aliases: list[str] | None = None
 
 
 class ProviderUpdate(BaseModel):
-    name: Optional[str] = None
-    kinds: Optional[list[str]] = None
-    favorite: Optional[bool] = None
-    archived: Optional[bool] = None
+    name: str | None = None
+    kinds: list[str] | None = None
+    favorite: bool | None = None
+    archived: bool | None = None
 
 
 class MethodUpdate(BaseModel):
-    name: Optional[str] = None
-    favorite: Optional[bool] = None
-    archived: Optional[bool] = None
+    name: str | None = None
+    favorite: bool | None = None
+    archived: bool | None = None

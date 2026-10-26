@@ -264,6 +264,7 @@ def _write_apply_manifest(ctx: _Pipeline, applied: list[str], all_diffs: list[di
         capture_date_precision=ctx.capture_date_precision,
         capture_date_source=ctx.capture_date_source,
         notes=ctx.roll_notes,
+        place=ctx.place,
     )
     merged = mf.merge_existing_manifest(existing_manifest, fresh) if existing_manifest else fresh
     mf.set_file_overrides(
@@ -556,6 +557,7 @@ class _Pipeline:
         camera_model: str | None,
         capture_date_exif: str | None,
         roll_notes: str | None,
+        place: str | None,
         replace_managed_metadata: bool,
     ) -> None:
         self.folder = folder
@@ -581,6 +583,7 @@ class _Pipeline:
         self.camera_model = camera_model
         self.capture_date_exif = capture_date_exif
         self.roll_notes = roll_notes
+        self.place = place
         self.replace_managed_metadata = replace_managed_metadata
 
 
@@ -647,6 +650,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
     capture_date_source = "user_override" if capture_date_value else None
     exif_date = _exif_date(capture_date_value)
     roll_notes = _normalize_roll_notes(req.roll_notes)
+    place = _normalize_roll_notes(req.place)
 
     files = _select_files(scan, req.files)
 
@@ -694,6 +698,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
         camera_model=camera.model if camera else None,
         capture_date_exif=exif_date,
         roll_notes=roll_notes,
+        place=place,
         replace_managed_metadata=req.replace_managed_metadata,
     )
 

@@ -34,6 +34,7 @@ const state = {
     scan_method_id: "",
     roll_notes: "",
     roll_date: "",
+    place: "",
     replace_managed_metadata: false,
     roll_date_source: "",  // "suggested" | "user" — controls the "from file creation" hint
   },
@@ -1023,6 +1024,7 @@ function populateAdvancedSelects() {
   fillSelect("adv-scan-provider", scanProviders, state.advanced.scan_provider_id);
   fillSelect("adv-scan-method", state.scanMethods, state.advanced.scan_method_id);
   document.getElementById("adv-roll-notes").value = state.advanced.roll_notes || "";
+  document.getElementById("adv-place").value = state.advanced.place || "";
   document.getElementById("adv-replace-managed").checked = !!state.advanced.replace_managed_metadata;
   renderRollDate();
 }
@@ -1087,6 +1089,7 @@ function applyManifestPrefill(manifest, scan) {
     state.advanced.roll_date_source = "manifest";
   }
   state.advanced.roll_notes = (manifest.notes || "").trim();
+  state.advanced.place = (manifest.place || "").trim();
 
   populateAdvancedSelects();
   renderTiles();
@@ -1212,6 +1215,7 @@ function readAdvanced() {
     scan_method_id: document.getElementById("adv-scan-method").value || null,
     roll_date: document.getElementById("adv-roll-date").value || null,
     roll_notes: document.getElementById("adv-roll-notes").value.trim() || null,
+    place: document.getElementById("adv-place").value.trim() || null,
     replace_managed_metadata: !!document.getElementById("adv-replace-managed").checked,
   };
 }
@@ -1631,6 +1635,7 @@ const SETTINGS_KINDS = {
       { name: "make", label: "Make", required: true },
       { name: "model", label: "Model", required: true },
       { name: "display_name", label: "Display name", required: true },
+      { name: "short_name", label: "Short name (folder names)", placeholder: "F3, Fed2, Canonet…", help: "Used by the roll folder name template as {camera}. Blank uses the display name." },
       { name: "mount", label: "Mount (blank if none)", type: "camera-mount-entry", placeholder: "K, M39, Fixed-Lens…", help: "Choose an existing mount when possible. You can still type a new one for the first camera on a new mount." },
       { name: "camera_type", label: "Type", type: "select", options: [
           { value: "", label: "(none)" },
@@ -1684,6 +1689,7 @@ const SETTINGS_KINDS = {
       { name: "brand", label: "Brand", type: "brand-ref", required: true, help: "Pick from existing brands. Create a new brand under Film brands first." },
       { name: "name", label: "Name", required: true },
       { name: "display_name", label: "Display name", required: true, help: "Brand Line [Variant] ISO — e.g. Kodak Portra 400" },
+      { name: "short_name", label: "Short name (folder names)", placeholder: "Gold, HP5, Portra400…", help: "Used by the roll folder name template as {film}. Blank uses the display name." },
       { name: "box_speed_iso", label: "Box speed ISO", type: "number", required: true },
       { name: "film_type", label: "Film type", type: "select", required: true, options: ["color_negative", "bw_negative", "slide", "other"] },
       { name: "process_type", label: "Process", type: "select", required: true, options: ["c41", "bw", "e6", "ecn2", "other"] },
@@ -2524,6 +2530,11 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   document.getElementById("adv-roll-notes").addEventListener("change", (e) => {
     state.advanced.roll_notes = e.target.value;
+    markPreviewStale();
+    saveStickyState();
+  });
+  document.getElementById("adv-place").addEventListener("change", (e) => {
+    state.advanced.place = e.target.value;
     markPreviewStale();
     saveStickyState();
   });

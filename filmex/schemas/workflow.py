@@ -57,6 +57,9 @@ class DryRunRequest(BaseModel):
     file_lens_ids: dict[str, str] = Field(default_factory=dict)
     roll_date: Optional[str] = None  # YYYY-MM-DD; when set, written as DateTimeOriginal@noon
     roll_notes: Optional[str] = None
+    # Place or title of the roll (e.g. "Jāņos"); stored in the manifest and
+    # available to the folder naming template as {place}.
+    place: Optional[str] = None
     replace_managed_metadata: bool = False
     # Restrict the dry-run / apply to these file names (as returned by the
     # folder scan). None means every supported file in the folder. Used by
