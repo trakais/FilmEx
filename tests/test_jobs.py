@@ -31,11 +31,27 @@ def test_job_runs_and_replays_events(manager):
     assert job.started_at and job.finished_at
 
     events = list(manager.follow(job.id, heartbeat=None))
-    assert [e["type"] for e in events] == ["progress", "progress", "progress", "status"]
-    assert [e["seq"] for e in events] == [0, 1, 2, 3]
-    assert events[-1]["status"] == jobs.DONE
+    assert [e["type"] for e in events] == ["start", "progress", "progress", "progress", "done"]
+    assert [e["seq"] for e in events] == [0, 1, 2, 3, 4]
+    assert events[0] == {"type": "start", "job_id": job.id, "kind": "demo", "seq": 0}
+    # The manager turns the body's return value into the terminal event.
+    assert events[-1] == {"type": "done", "total": 3, "job_status": jobs.DONE, "seq": 4}
     # Reconnecting replays only what was missed.
-    assert [e["seq"] for e in manager.follow(job.id, from_seq=2, heartbeat=None)] == [2, 3]
+    assert [e["seq"] for e in manager.follow(job.id, from_seq=3, heartbeat=None)] == [3, 4]
+
+
+def test_start_fields_and_reserved_events(manager):
+    def body(ctx):
+        ctx.emit({"type": "done", "sneaky": True})
+
+    job = manager.submit("demo", body, start={"total": 7, "type": "ignored"})
+    manager.wait(job.id, timeout=5)
+    events = list(manager.follow(job.id, heartbeat=None))
+    assert events[0]["type"] == "start" and events[0]["total"] == 7
+    # A body may not fake the protocol: emitting `done` itself fails the job.
+    assert job.status == jobs.FAILED
+    assert [e["type"] for e in events] == ["start", "error"]
+    assert "may not emit" in events[-1]["error"]
 
 
 def test_cancel_between_steps(manager):
@@ -59,6 +75,10 @@ def test_cancel_between_steps(manager):
     assert job.status == jobs.CANCELLED
     assert 0 < len(job.result) < 100
     assert manager.cancel(job.id) is False  # already finished
+    # A body that notices the cancel and returns still ends with `done`.
+    last = list(manager.follow(job.id, heartbeat=None))[-1]
+    assert last["type"] == "done" and last["job_status"] == jobs.CANCELLED
+    assert last["result"] == job.result
 
 
 def test_failure_is_captured(manager):
@@ -70,7 +90,7 @@ def test_failure_is_captured(manager):
     assert job.status == jobs.FAILED
     assert job.error == "ValueError: boom"
     last = list(manager.follow(job.id, heartbeat=None))[-1]
-    assert last == {"type": "status", "status": "failed", "error": "ValueError: boom", "seq": 0}
+    assert last == {"type": "error", "error": "ValueError: boom", "job_status": "failed", "seq": 1}
 
 
 def test_job_cancelled_exception_marks_cancelled(manager):
@@ -80,6 +100,8 @@ def test_job_cancelled_exception_marks_cancelled(manager):
     job = manager.submit("demo", body)
     manager.wait(job.id, timeout=5)
     assert job.status == jobs.CANCELLED
+    last = list(manager.follow(job.id, heartbeat=None))[-1]
+    assert last["type"] == "error" and last["job_status"] == jobs.CANCELLED
 
 
 def _handshake(mine: threading.Event, other: threading.Event):
@@ -135,11 +157,14 @@ def test_job_routes(client):
     snapshot = client.get(f"/api/jobs/{job.id}").json()
     assert snapshot["status"] == "done"
     assert snapshot["result"] == 42
-    assert snapshot["event_count"] == 2
+    assert snapshot["event_count"] == 3
 
     with client.stream("GET", f"/api/jobs/{job.id}/events") as res:
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
-    assert [e["type"] for e in events] == ["progress", "status"]
+    assert [e["type"] for e in events] == ["start", "progress", "done"]
+    assert events[-1]["result"] == 42
+    with client.stream("GET", f"/api/jobs/{job.id}/events?from_seq=2") as res:
+        assert [json.loads(line)["type"] for line in res.iter_lines() if line.strip()] == ["done"]
 
     listing = client.get("/api/jobs?kind=demo").json()
     assert any(j["id"] == job.id for j in listing)

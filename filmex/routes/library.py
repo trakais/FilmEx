@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +11,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
+from filmex.routes import jobs as job_routes
 from filmex.services import frames as fr
 from filmex.services import jobs
 from filmex.services import library as lib
@@ -61,15 +61,12 @@ def _scan_job(job_ctx: jobs.JobContext, root: str) -> dict[str, Any]:
     rows = lib.scan_library(root, progress=progress)
     with Session(get_engine()) as session:
         scanned_at = cache.replace(session, root, rows)
-    done = {
-        "type": "done",
+    return {
         "root": root,
         "folders": len(rows),
         "scanned_at": scanned_at,
         "summary": lib.summarize(rows),
     }
-    job_ctx.emit(done)
-    return done
 
 
 @router.post("/api/library/rescan")
@@ -83,18 +80,8 @@ def rescan_library(
     if not Path(root).expanduser().is_dir():
         raise HTTPException(status_code=404, detail=f"Library root not reachable: {root}")
 
-    job = jobs.get_manager().submit("library_scan", lambda ctx: _scan_job(ctx, root))
-
-    def gen():
-        yield json.dumps({"type": "start", "root": root, "job_id": job.id}) + "\n"
-        for event in jobs.get_manager().follow(job.id):
-            if event["type"] == jobs.STATUS_EVENT:
-                if event["status"] == jobs.FAILED:
-                    yield json.dumps({"type": "error", "error": event["error"]}) + "\n"
-                continue
-            yield json.dumps(event) + "\n"
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    job = jobs.get_manager().submit("library_scan", lambda ctx: _scan_job(ctx, root), start={"root": root})
+    return job_routes.stream(job)
 
 
 @router.get("/api/library/folder")

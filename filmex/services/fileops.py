@@ -208,14 +208,11 @@ def tag_folder(
         ctx = tg.build_pipeline(req, session)
     except tg.TaggingError as exc:
         return {"applied": [], "errors": [f"tagging: {exc.detail}"], "skipped": None}
-    def forward(event: dict[str, Any]) -> None:
-        # The pipeline's own `done` stays internal: the job emits one `done`
-        # for the whole batch and a `segment` event per roll.
-        if event.get("type") == "done":
-            return
-        emit({**event, "step": "tag", "segment": folder.name})
-
-    final = tg.apply_all(ctx, progress=forward, cancelled=cancelled)
+    final = tg.apply_all(
+        ctx,
+        progress=lambda event: emit({**event, "step": "tag", "segment": folder.name}),
+        cancelled=cancelled,
+    )
     return {
         "applied": final["applied_files"],
         "errors": final["errors"],

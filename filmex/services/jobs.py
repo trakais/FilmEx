@@ -1,13 +1,28 @@
 """In-process job runner for long operations.
 
-Applies, preview builds and (later) renames, splits and imports run here as
-threads inside the app process, never as separate processes. A job keeps an
-ordered event log so a client can follow it live, reconnect after a reload
-and replay what it missed, or poll a snapshot. Jobs flagged ``exclusive``
-are the ones that mutate the user's files; they are serialized so two never
-touch a folder at the same time.
+Applies, preview builds, library scans, renames, splits, imports and undos
+run here as threads inside the app process, never as separate processes. A
+job keeps an ordered event log so a client can follow it live, reconnect
+after a reload and replay what it missed, or poll a snapshot. Jobs flagged
+``exclusive`` are the ones that mutate the user's files; they are
+serialized so two never touch a folder at the same time.
 
-Nothing here knows about HTTP. ``routes/jobs.py`` exposes the manager.
+The event protocol is owned here, so every job speaks the same one:
+
+- ``start``: emitted on submission, ``{"type": "start", "job_id", "kind",
+  ...}`` plus whatever the caller passed as ``start`` (totals, mode).
+- any number of body events, usually ``progress``, via ``JobContext.emit``.
+- exactly one terminal event, emitted by the manager when the body ends:
+  ``done`` carries the body's return value (a dict is spread into the
+  event, anything else goes under ``result``); ``error`` carries the
+  message when the body raised. Both carry ``job_status`` (``done``,
+  ``cancelled`` or ``failed``). A body that notices a cancel and returns
+  normally still ends with ``done``.
+- ``heartbeat`` while following an idle job; readers ignore it.
+
+Bodies never emit ``start``, ``done`` or ``error`` themselves.
+
+Nothing here knows about HTTP. ``routes/jobs.py`` streams the log.
 """
 
 from __future__ import annotations
@@ -31,7 +46,11 @@ FAILED = "failed"
 CANCELLED = "cancelled"
 TERMINAL = frozenset({DONE, FAILED, CANCELLED})
 
-STATUS_EVENT = "status"
+START_EVENT = "start"
+DONE_EVENT = "done"
+ERROR_EVENT = "error"
+HEARTBEAT_EVENT = "heartbeat"
+_RESERVED_EVENTS = frozenset({START_EVENT, DONE_EVENT, ERROR_EVENT, HEARTBEAT_EVENT})
 
 
 class JobCancelled(Exception):
@@ -89,10 +108,9 @@ class JobContext:
         return self._job.id
 
     def emit(self, event: dict[str, Any]) -> None:
-        job = self._job
-        with job.cond:
-            job.events.append({**event, "seq": len(job.events)})
-            job.cond.notify_all()
+        if event.get("type") in _RESERVED_EVENTS:
+            raise ValueError(f"job bodies may not emit {event.get('type')!r} events; return a result instead")
+        _append(self._job, event)
 
     def cancelled(self) -> bool:
         return self._job.cancel_requested.is_set()
@@ -103,6 +121,12 @@ class JobContext:
 
 
 JobBody = Callable[[JobContext], Any]
+
+
+def _append(job: Job, event: dict[str, Any]) -> None:
+    with job.cond:
+        job.events.append({**event, "seq": len(job.events)})
+        job.cond.notify_all()
 
 
 class JobManager:
@@ -116,8 +140,18 @@ class JobManager:
 
     # ---------- submission ----------
 
-    def submit(self, kind: str, body: JobBody, *, exclusive: bool = False) -> Job:
+    def submit(
+        self,
+        kind: str,
+        body: JobBody,
+        *,
+        exclusive: bool = False,
+        start: dict[str, Any] | None = None,
+    ) -> Job:
+        """Queue ``body``. ``start`` adds fields (totals, mode) to the job's
+        ``start`` event so a reader knows what to expect."""
         job = Job(id=uuid.uuid4().hex, kind=kind, exclusive=exclusive)
+        _append(job, {**(start or {}), "type": START_EVENT, "job_id": job.id, "kind": kind})
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)
@@ -152,14 +186,19 @@ class JobManager:
             self._finish(job, status, result=result)
 
     def _finish(self, job: Job, status: str, *, result: Any = None, error: str | None = None) -> None:
+        if status == FAILED or (status == CANCELLED and result is None):
+            terminal = {"type": ERROR_EVENT, "error": error or "cancelled"}
+        elif isinstance(result, dict):
+            terminal = {**result, "type": DONE_EVENT}
+        else:
+            terminal = {"type": DONE_EVENT, "result": result}
+        terminal["job_status"] = status
         with job.cond:
             job.status = status
             job.result = result
             job.error = error
             job.finished_at = _now()
-            job.events.append(
-                {"type": STATUS_EVENT, "status": status, "error": error, "seq": len(job.events)}
-            )
+            job.events.append({**terminal, "seq": len(job.events)})
             job.cond.notify_all()
 
     # ---------- queries ----------
@@ -217,7 +256,7 @@ class JobManager:
                 index = len(job.events)
                 finished = job.finished
             if not batch and not finished and heartbeat is not None:
-                yield {"type": "heartbeat"}
+                yield {"type": HEARTBEAT_EVENT}
                 continue
             yield from batch
             if finished and index >= len(job.events):

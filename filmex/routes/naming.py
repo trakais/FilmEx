@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
+from filmex.routes import jobs as job_routes
 from filmex.services import fileops, importer, jobs, naming, operations, renames
 from filmex.services import settings as settings_service
 
@@ -64,19 +64,6 @@ def propose_renames(req: ProposeRequest, session: Session = Depends(get_session)
     }
 
 
-def _stream_job(job: jobs.Job, first: dict[str, Any]) -> StreamingResponse:
-    def gen():
-        yield json.dumps({**first, "job_id": job.id}) + "\n"
-        for event in jobs.get_manager().follow(job.id):
-            if event["type"] == jobs.STATUS_EVENT:
-                if event["status"] == jobs.FAILED:
-                    yield json.dumps({"type": "error", "error": event["error"]}) + "\n"
-                continue
-            yield json.dumps(event) + "\n"
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
-
-
 @router.post("/api/naming/apply")
 def apply_renames(req: ApplyRenamesRequest, session: Session = Depends(get_session)) -> StreamingResponse:
     if not req.items:
@@ -86,14 +73,11 @@ def apply_renames(req: ApplyRenamesRequest, session: Session = Depends(get_sessi
 
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
         with Session(get_engine()) as job_session:
-            result = renames.apply_renames(
+            return renames.apply_renames(
                 job_session, items, root=root, progress=job_ctx.emit, cancelled=job_ctx.cancelled
             )
-        job_ctx.emit({"type": "done", **result})
-        return result
 
-    job = jobs.get_manager().submit("rename", body, exclusive=True)
-    return _stream_job(job, {"type": "start", "total": len(items)})
+    return job_routes.stream(jobs.get_manager().submit("rename", body, exclusive=True, start={"total": len(items)}))
 
 
 _UNDO_BY_KIND = {
@@ -150,9 +134,6 @@ def undo_operation(op_id: str, session: Session = Depends(get_session)) -> Strea
 
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
         with Session(get_engine()) as job_session:
-            result = undo_fn(job_session, op_id, progress=job_ctx.emit, cancelled=job_ctx.cancelled)
-        job_ctx.emit({"type": "done", **result})
-        return result
+            return undo_fn(job_session, op_id, progress=job_ctx.emit, cancelled=job_ctx.cancelled)
 
-    job = jobs.get_manager().submit("undo", body, exclusive=True)
-    return _stream_job(job, {"type": "start", "operation_id": op_id})
+    return job_routes.stream(jobs.get_manager().submit("undo", body, exclusive=True, start={"operation_id": op_id}))

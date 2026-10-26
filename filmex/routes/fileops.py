@@ -7,7 +7,6 @@ running, so a change on disk since the preview stops the batch.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
+from filmex.routes import jobs as job_routes
 from filmex.services import fileops, importer, jobs
 from filmex.services import frames as fr
 from filmex.services import settings as settings_service
@@ -60,19 +60,6 @@ class ImportRequest(BaseModel):
     folder: str
     segments: list[SegmentIn] = Field(default_factory=list)
     mode: str | None = None  # defaults to the import_mode setting
-
-
-def _stream_job(job: jobs.Job, first: dict[str, Any]) -> StreamingResponse:
-    def gen():
-        yield json.dumps({**first, "job_id": job.id}) + "\n"
-        for event in jobs.get_manager().follow(job.id):
-            if event["type"] == jobs.STATUS_EVENT:
-                if event["status"] == jobs.FAILED:
-                    yield json.dumps({"type": "error", "error": event["error"]}) + "\n"
-                continue
-            yield json.dumps(event) + "\n"
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 def _plan_errors(exc: fileops.PlanError) -> HTTPException:
@@ -122,16 +109,14 @@ def split_apply(req: SplitRequest, session: Session = Depends(get_session)) -> S
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
         with Session(get_engine()) as job_session:
             try:
-                result = fileops.apply_split(
+                return fileops.apply_split(
                     job_session, folder, segments, root=root, progress=job_ctx.emit, cancelled=job_ctx.cancelled
                 )
             except fileops.PlanError as exc:
                 raise RuntimeError("; ".join(exc.errors)) from exc
-        job_ctx.emit({"type": "done", **result})
-        return result
 
-    job = jobs.get_manager().submit("split", body, exclusive=True)
-    return _stream_job(job, {"type": "start", "total": sum(len(i.files) for i in plan.items), "rolls": len(plan.items)})
+    start = {"total": sum(len(i.files) for i in plan.items), "rolls": len(plan.items)}
+    return job_routes.stream(jobs.get_manager().submit("split", body, exclusive=True, start=start))
 
 
 # ---------- import ----------
@@ -170,18 +155,13 @@ def import_apply(req: ImportRequest, session: Session = Depends(get_session)) ->
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
         with Session(get_engine()) as job_session:
             try:
-                result = importer.apply_import(
+                return importer.apply_import(
                     job_session, folder, segments, root=root, mode=mode,
                     progress=job_ctx.emit, cancelled=job_ctx.cancelled,
                 )
             except fileops.PlanError as exc:
                 raise RuntimeError("; ".join(exc.errors)) from exc
-        job_ctx.emit({"type": "done", **result})
-        return result
 
-    job = jobs.get_manager().submit("import", body, exclusive=True)
-    return _stream_job(
-        job,
-        {"type": "start", "total": sum(len(i.files) for i in plan.items), "rolls": len(plan.items),
-         "bytes_total": plan.total_bytes, "mode": mode},
-    )
+    start = {"total": sum(len(i.files) for i in plan.items), "rolls": len(plan.items),
+             "bytes_total": plan.total_bytes, "mode": mode}
+    return job_routes.stream(jobs.get_manager().submit("import", body, exclusive=True, start=start))

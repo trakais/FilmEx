@@ -364,13 +364,19 @@ def preview_all(ctx: Pipeline) -> list[tuple[str, list[et.TagChange]]]:
     ]
 
 
-def run_apply(ctx: Pipeline, *, cancelled: Callable[[], bool] = lambda: False):
-    """Generator: yields a progress event per file, then a `done` event.
+def apply_all(
+    ctx: Pipeline,
+    *,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> dict[str, Any]:
+    """Write every file, report each one to ``progress``, return the outcome.
 
-    Runs inside a job. `cancelled` is checked between files; a cancelled or
-    failed roll still gets its manifest written with the files that were
-    actually applied, so tagged files are never left unrecorded.
+    ``cancelled`` is checked between files. A cancelled or failed roll still
+    gets its manifest written with the files that were actually applied, so
+    tagged files are never left unrecorded.
     """
+    emit = progress or (lambda e: None)
     applied: list[str] = []
     errors: list[str] = []
     all_diffs: list[dict] = []
@@ -383,17 +389,16 @@ def run_apply(ctx: Pipeline, *, cancelled: Callable[[], bool] = lambda: False):
                 break
             _apply_one(ctx, file_path, applied, errors, all_diffs)
             if errors and errors[-1].startswith(f"{file_path.name}:"):
-                yield {"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]}
+                emit({"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]})
             else:
-                yield {"type": "progress", "file": file_path.name, "ok": True}
+                emit({"type": "progress", "file": file_path.name, "ok": True})
     except BaseException:
         if applied:
             _write_apply_manifest(ctx, applied, all_diffs)
         raise
 
     manifest_path = _write_apply_manifest(ctx, applied, all_diffs)
-    yield {
-        "type": "done",
+    return {
         "folder": str(ctx.folder),
         "roll_id": ctx.roll_id,
         "manifest_path": str(manifest_path),
@@ -460,21 +465,3 @@ def _write_apply_manifest(ctx: Pipeline, applied: list[str], all_diffs: list[dic
     )
     mf.append_apply_history(merged, applied_files=applied, diffs=all_diffs, dry_run=False)
     return mf.write_manifest(ctx.folder, merged)
-
-
-def apply_all(
-    ctx: Pipeline,
-    *,
-    progress: Callable[[dict[str, Any]], None] | None = None,
-    cancelled: Callable[[], bool] = lambda: False,
-) -> dict[str, Any]:
-    """Run the whole apply, forwarding events to ``progress``; return the done event."""
-    emit = progress or (lambda e: None)
-    final: dict[str, Any] | None = None
-    for event in run_apply(ctx, cancelled=cancelled):
-        emit(event)
-        if event["type"] == "done":
-            final = event
-    if final is None:
-        raise RuntimeError("apply pipeline did not produce a done event")
-    return final

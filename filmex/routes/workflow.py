@@ -7,7 +7,6 @@ service layer.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -20,6 +19,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from filmex.db import get_session
+from filmex.routes import jobs as job_routes
 from filmex.schemas import (
     ApplyRequest,
     ApplyResponse,
@@ -157,32 +157,13 @@ def metadata_dry_run(
     return DryRunResponse(folder=str(ctx.folder), roll_id=ctx.roll_id, diffs=diffs)
 
 
-def _apply_job(job_ctx: jobs.JobContext, pipeline: tg.Pipeline) -> dict:
-    final: dict | None = None
-    for event in tg.run_apply(pipeline, cancelled=job_ctx.cancelled):
-        job_ctx.emit(event)
-        if event["type"] == "done":
-            final = event
-    if final is None:
-        raise RuntimeError("apply pipeline did not produce a done event")
-    return final
-
-
 def _submit_apply(pipeline: tg.Pipeline) -> jobs.Job:
     return jobs.get_manager().submit(
-        "apply", lambda job_ctx: _apply_job(job_ctx, pipeline), exclusive=True
+        "apply",
+        lambda job_ctx: tg.apply_all(pipeline, progress=job_ctx.emit, cancelled=job_ctx.cancelled),
+        exclusive=True,
+        start={"total": len(pipeline.files)},
     )
-
-
-def _follow_job_events(job: jobs.Job, *, total: int):
-    """NDJSON lines: a `start` line, then the job's own events until it ends."""
-    yield json.dumps({"type": "start", "total": total, "job_id": job.id}) + "\n"
-    for event in jobs.get_manager().follow(job.id):
-        if event["type"] == jobs.STATUS_EVENT:
-            if event["status"] == jobs.FAILED:
-                yield json.dumps({"type": "error", "error": event["error"]}) + "\n"
-            continue
-        yield json.dumps(event) + "\n"
 
 
 @router.post("/api/metadata/apply", response_model=ApplyResponse)
@@ -220,11 +201,7 @@ def metadata_apply_stream(
     if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
-    ctx = _pipeline(req, session)
-    job = _submit_apply(ctx)
-    return StreamingResponse(
-        _follow_job_events(job, total=len(ctx.files)), media_type="application/x-ndjson"
-    )
+    return job_routes.stream(_submit_apply(_pipeline(req, session)))
 
 
 @router.get("/api/manifests/{roll_id}", response_model=ManifestResponse)
@@ -323,15 +300,12 @@ def _previews_job(job_ctx: jobs.JobContext, folder: str, targets: list[Path], in
             msg = f"{entry.name}: {e}"
             failed.append(msg)
             job_ctx.emit({"type": "progress", "file": entry.name, "status": "failed", "error": msg})
-    done = {
-        "type": "done",
+    return {
         "folder": folder,
         "created_files": created_files,
         "failed": failed,
         "cancelled": cancelled,
     }
-    job_ctx.emit(done)
-    return done
 
 
 @router.post("/api/previews/create/stream")
@@ -344,10 +318,9 @@ def create_previews_stream(req: PreviewBuildRequest) -> StreamingResponse:
     job = jobs.get_manager().submit(
         "previews",
         lambda job_ctx: _previews_job(job_ctx, req.folder, targets, req.invert),
+        start={"total": len(targets)},
     )
-    return StreamingResponse(
-        _follow_job_events(job, total=len(targets)), media_type="application/x-ndjson"
-    )
+    return job_routes.stream(job)
 
 
 def _resolve_folder_file(folder: str, name: str) -> Path:
