@@ -222,23 +222,38 @@ film stock rows.
   swaps it for a `SameSite=Strict` cookie that every API call must carry.
   Tests must use a loopback `base_url`.
 - **Jobs** (`services/jobs.py`): long operations (apply, preview build,
-  rename, split, import, undo) run as in-process jobs with an ordered
-  event log. `GET /api/jobs/{id}/events` replays and follows; `POST
-  /api/jobs/{id}/cancel` requests a stop that bodies check between files.
-  Jobs that mutate the user's files are `exclusive` and serialize. An apply
-  that is cancelled or fails still writes its manifest with the files
-  actually applied.
-- **ExifTool discovery** (`services/exiftool_locator.py`): setting →
-  `FILMEX_EXIFTOOL` → `PATH` → Homebrew/system candidates → bundled copy.
-  Never spawn a bare `"exiftool"`; take the argv prefix from the locator.
+  library scan, rename, split, import, undo) run as in-process jobs with an
+  ordered event log. The protocol is the job runner's, not each endpoint's:
+  `start` on submission (plus the `start=` fields the route passes), body
+  events (`progress`), then exactly one `done` (the body's return value)
+  or `error`, both emitted by the manager. A body returns its result and
+  never emits `start`, `done` or `error`. Every streaming endpoint returns
+  `routes.jobs.stream(job)`; `GET /api/jobs/{id}/events?from_seq=` replays
+  and follows; `POST /api/jobs/{id}/cancel` requests a stop that bodies
+  check between files. In the browser, `runJob()` / `followJob()` in
+  `app.js` are the only readers of the stream. Jobs that mutate the user's
+  files are `exclusive` and serialize. An apply that is cancelled or fails
+  still writes its manifest with the files actually applied.
+- **ExifTool** (`services/exiftool_runner.py`): callers import the module
+  and use `available()`, `managed_tags()`, `preview()` and `write()`;
+  `write()` reads, merges, writes and returns the changes or the error.
+  Nothing else builds argv, picks raw vs sidecar or decodes stderr. Discovery
+  (`services/exiftool_locator.py`): setting → `FILMEX_EXIFTOOL` → `PATH` →
+  Homebrew/system candidates → bundled copy. Never spawn a bare
+  `"exiftool"`.
 - **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
 - **Tagging pipeline** (`services/tagging.py`): `build_pipeline(request,
-  session)` resolves ids into snapshots and intents, `run_apply` /
-  `apply_all` write file by file and the manifest at the end. The workflow
-  routes wrap it for HTTP; the split and import jobs call it directly on
-  each new folder. Validation failures raise `TaggingError` with a status
-  code; tests stub `tagging.exiftool_available`, `read_managed_tags` and
-  `apply_intent`.
+  session)` resolves ids into snapshots and intents, `preview_all` is the
+  dry run, `apply_all` writes file by file and the manifest at the end. The
+  workflow routes wrap it for HTTP; the split and import jobs call it
+  directly on each new folder. Validation failures raise `TaggingError`
+  with a status code.
+- **Folder contents** (`services/frames.py`): the only code that lists a
+  roll folder. It owns image extensions, source kinds, the junk rules
+  (hidden files, `._*` AppleDouble, `smbdelete*`, `@eaDir`, `#recycle`,
+  `Thumbs.db`), the litter a cleanup may delete, frame grouping and the
+  `.thm` lookup. The Tag view scan, thumbnails, Library index, contact
+  sheet, split and import all read folders through it.
 
 ## Naming system
 
@@ -270,7 +285,8 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
 - Names are taken from the directory listing as-is (SMB shares store some
   NFD); `display_name` is NFC. Never retype a path from its display name.
 - Junk is skipped everywhere: hidden entries, `@eaDir`, `#recycle`, `._*`
-  AppleDouble files, `smbdelete*`, `Thumbs.db`.
+  AppleDouble files, `smbdelete*`, `Thumbs.db`. The rules live in
+  `services/frames.py`; never list a roll folder any other way.
 - Rows are cached in `library_folder` (per root) so the view opens
   instantly and survives an unmounted share; `POST /api/library/rescan`
   replaces the cache in one transaction as a job.
@@ -500,7 +516,9 @@ The CLI inserts in this order, so cross-references resolve in one pass:
 
 `tests/` runs against a throwaway SQLite DB per test via `FILMEX_DATA_DIR`.
 Fixtures in `conftest.py` seed a minimal camera + lens through the public API
-so route tests don't duplicate setup.
+so route tests don't duplicate setup. Tests that would write metadata take
+the `fake_exiftool` fixture, which replaces ExifTool at the runner's seam
+for every caller; never monkeypatch ExifTool functions in other modules.
 
 Must stay covered:
 - ExifTool argument builder (sidecar vs embed, merge semantics, command prefix)
@@ -514,7 +532,9 @@ Must stay covered:
 - Archive flag filtering
 - Manifest create / update / history
 - Folder scan source-kind detection and scan-tier derivation
-- Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag
+- Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag, and every
+  folder view (scan, thumbnails, Library, sheet) skipping the same junk
+- Job protocol: start, body events, one terminal event, reserved types
 - Split: layout (siblings vs subfolders), collisions, moves with
   companions, cross-volume stop with a partial undo, emptied-source
   cleanup, undo including tagging sidecars

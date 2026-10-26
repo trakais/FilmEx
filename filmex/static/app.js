@@ -302,17 +302,53 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
-  }
+  if (!res.ok) throw await responseError(res);
   return res.status === 204 ? null : res.json();
+}
+
+async function responseError(res) {
+  const detail = await res.text().catch(() => res.statusText);
+  return new Error(`${res.status} ${res.statusText}: ${detail}`);
+}
+
+// ---------- Jobs ----------
+//
+// Every long operation (apply, thumbnails, rescan, rename, split, import,
+// undo) is a server job streamed as NDJSON, with the protocol defined in
+// services/jobs.py: one `start`, any number of job events, then exactly one
+// `done` or `error`. runJob() is the only reader of that protocol: it sends
+// the request, hands `start` and the job events to the caller as they
+// arrive, and resolves with the `done` event or rejects with the job's
+// error. Callers never see heartbeats, terminal events or NDJSON.
+async function runJob(url, { body, method = "POST", signal, onStart, onEvent } = {}) {
+  const init = { method, signal };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
+  if (!res.ok) throw await responseError(res);
+  let done = null;
+  await readNdjson(res, (ev) => {
+    if (ev.type === "start") onStart?.(ev);
+    else if (ev.type === "done") done = ev;
+    else if (ev.type === "error") throw new Error(ev.error || "the job failed");
+    else if (ev.type !== "heartbeat") onEvent?.(ev);
+  });
+  if (!done) throw new Error("the connection closed before the job finished");
+  return done;
+}
+
+// Pick a running job back up after a reload: replays what it already
+// emitted, then follows it like runJob.
+function followJob(jobId, { fromSeq = 0, signal, onStart, onEvent } = {}) {
+  return runJob(`/api/jobs/${encodeURIComponent(jobId)}/events?from_seq=${fromSeq}`, { method: "GET", signal, onStart, onEvent });
 }
 
 // Read an NDJSON response line by line, calling `onEvent` for each object as
 // it arrives so progress can render live. Exceptions thrown by `onEvent`
 // abort the read and propagate to the caller.
-async function consumeNdjson(res, onEvent) {
+async function readNdjson(res, onEvent) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
@@ -330,18 +366,6 @@ async function consumeNdjson(res, onEvent) {
   }
   const tail = buf.trim();
   if (tail) onEvent(JSON.parse(tail));
-}
-
-// Follow a server job: replays the events already emitted, then streams live
-// ones until the job reaches a terminal status. Use after a reload to pick a
-// long apply or import back up.
-async function followJob(jobId, onEvent, { signal, fromSeq = 0 } = {}) {
-  const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/events?from_seq=${fromSeq}`, { signal });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-  await consumeNdjson(res, onEvent);
 }
 
 async function cancelJob(jobId) {
@@ -1341,24 +1365,17 @@ async function onCreatePreviews() {
   let created = 0;
   let failed = 0;
   try {
-    const res = await fetch("/api/previews/create/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder: state.folder, invert: state.previewInvert }),
+    const doneEvent = await runJob("/api/previews/create/stream", {
+      body: { folder: state.folder, invert: state.previewInvert },
       signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-    let doneEvent = null;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "start") {
+      onStart: (ev) => {
         state.previewBuildJobId = ev.job_id || null;
         total = ev.total;
         btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
         renderCreatePreviewsButton();
-      } else if (ev.type === "progress") {
+      },
+      onEvent: (ev) => {
+        if (ev.type !== "progress") return;
         processed += 1;
         if (ev.status === "created" || ev.status === "reused") {
           created += 1;
@@ -1369,11 +1386,7 @@ async function onCreatePreviews() {
         }
         btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
         renderCreatePreviewsButton();
-      } else if (ev.type === "done") {
-        doneEvent = ev;
-      } else if (ev.type === "error") {
-        throw new Error(ev.error || "preview job failed");
-      }
+      },
     });
     const cancelled = !!doneEvent?.cancelled;
     failed = doneEvent?.failed?.length ?? failed;
@@ -1518,37 +1531,22 @@ async function onApply() {
   dryBtn.disabled = true;
   btn.textContent = "Applying…";
   try {
-    const res = await fetch("/api/metadata/apply/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildRequestBody()),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-
-    // NDJSON: one JSON object per line, parsed as it streams in so the
-    // button can show `3/12` live — matters on a slow NAS.
+    // Progress per file, so the button can show `3/12` live on a slow NAS.
     let total = 0;
-    let done_event = null;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "start") {
+    const done_event = await runJob("/api/metadata/apply/stream", {
+      body: buildRequestBody(),
+      onStart: (ev) => {
         total = ev.total;
         btn.textContent = `Applying… 0/${total}`;
         setPageTitleProgress("Applying", 0, total);
-      } else if (ev.type === "progress") {
+      },
+      onEvent: () => {
         const n = Number(btn.dataset.n || 0) + 1;
         btn.dataset.n = String(n);
         btn.textContent = `Applying… ${n}/${total}`;
         setPageTitleProgress("Applying", n, total);
-      } else if (ev.type === "done") {
-        done_event = ev;
-      } else if (ev.type === "error") {
-        throw new Error(ev.error || "apply failed");
-      }
+      },
     });
-    if (!done_event) throw new Error("stream ended without completion event");
     state.fileSubset = null;
     renderScanSummary();
     renderApplyResult(done_event);
@@ -1889,15 +1887,9 @@ async function rescanLibrary() {
   btn.disabled = true;
   btn.textContent = "Rescanning…";
   try {
-    const res = await fetch("/api/library/rescan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "progress") btn.textContent = `Rescanning… ${ev.scanned}`;
-      else if (ev.type === "error") throw new Error(ev.error || "rescan failed");
+    await runJob("/api/library/rescan", {
+      body: {},
+      onEvent: (ev) => { btn.textContent = `Rescanning… ${ev.scanned}`; },
     });
     state.library = await api("/api/library");
     renderLibrary();
@@ -2184,27 +2176,18 @@ async function applySelectedRenames() {
   let renamed = 0;
   let keywordFiles = 0;
   try {
-    const res = await fetch("/api/naming/apply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items }),
+    const done = await runJob("/api/naming/apply", {
+      body: { items },
+      onEvent: (ev) => {
+        if (ev.step === "rename" && ev.ok) {
+          renamed += 1;
+          status.textContent = `Renamed ${renamed}/${items.length}…`;
+        } else if (ev.step === "keywords") {
+          keywordFiles += ev.ok ? 1 : 0;
+          status.textContent = `Renamed ${renamed}/${items.length} · keywords ${keywordFiles}…`;
+        }
+      },
     });
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-    let done = null;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "progress" && ev.step === "rename" && ev.ok) {
-        renamed += 1;
-        status.textContent = `Renamed ${renamed}/${items.length}…`;
-      } else if (ev.type === "progress" && ev.step === "keywords") {
-        keywordFiles += ev.ok ? 1 : 0;
-        status.textContent = `Renamed ${renamed}/${items.length} · keywords ${keywordFiles}…`;
-      } else if (ev.type === "done") {
-        done = ev;
-      } else if (ev.type === "error") {
-        throw new Error(ev.error || "rename failed");
-      }
-    });
-    if (!done) throw new Error("stream ended without completion");
     state.namingLastOperation = done.operation_id;
     const problems = done.errors && done.errors.length ? ` · ${done.errors.length} problem${done.errors.length === 1 ? "" : "s"}` : "";
     const summary = `Renamed ${done.renamed.length} folder${done.renamed.length === 1 ? "" : "s"}, rewrote keywords on ${done.keyword_files} file${done.keyword_files === 1 ? "" : "s"}${problems}.`;
@@ -2228,14 +2211,7 @@ async function undoLastRename() {
   const status = document.getElementById("naming-status");
   status.textContent = "Undoing…";
   try {
-    const res = await fetch(`/api/operations/${encodeURIComponent(opId)}/undo`, { method: "POST" });
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-    let done = null;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "done") done = ev;
-      else if (ev.type === "error") throw new Error(ev.error || "undo failed");
-    });
-    if (!done) throw new Error("stream ended without completion");
+    const done = await runJob(`/api/operations/${encodeURIComponent(opId)}/undo`);
     state.namingLastOperation = null;
     await loadLibrary({ rescan: true });
     state.naming = await api("/api/naming/propose", { method: "POST", body: JSON.stringify({}) });
@@ -2888,27 +2864,23 @@ async function buildInboxThumbnails() {
   inbox.thumbJob = true;
   const btn = document.getElementById("sheet-thumbs");
   try {
-    const res = await fetch("/api/previews/create/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folder, invert: false }),
-    });
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
     let done = 0;
     let total = needed.length;
-    await consumeNdjson(res, (ev) => {
-      if (inbox.folder !== folder) return;
-      if (ev.type === "start") {
+    await runJob("/api/previews/create/stream", {
+      body: { folder, invert: false },
+      onStart: (ev) => {
         total = ev.total || total;
         btn.textContent = `Thumbnails 0/${total}`;
-      } else if (ev.type === "progress") {
+      },
+      onEvent: (ev) => {
+        if (inbox.folder !== folder) return;
         done += 1;
         btn.textContent = `Thumbnails ${done}/${total}`;
         if (ev.status === "created" || ev.status === "reused") {
           inbox.thumbs.add(ev.file);
           updateSheetThumb(ev.file);
         }
-      }
+      },
     });
   } catch (e) {
     renderInboxBanner(`Thumbnails: ${e.message}`, "warn");
@@ -3521,18 +3493,15 @@ async function runInboxBatch() {
   updateInboxRunButton();
   renderInboxProgress("Starting…", 0);
   try {
-    const res = await fetch(applyUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!res.ok) throw new Error(planErrorsText(new Error(`${res.status} ${res.statusText}: ${await res.text()}`)));
-    let done = null;
     let total = 0;
-    let moved = 0;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "start") {
+    const done = await runJob(applyUrl, {
+      body,
+      onStart: (ev) => {
         total = ev.total || 0;
         setPageTitleProgress(okLabel, 0, total);
-      } else if (ev.type === "progress") {
+      },
+      onEvent: (ev) => {
         if (ev.step === "move") {
-          moved = ev.done;
           renderInboxProgress(`Moving ${ev.done}/${ev.total} · ${ev.segment}`, total ? ev.done / total : null);
           setPageTitleProgress("Moving", ev.done, ev.total);
         } else if (ev.step === "copy") {
@@ -3547,13 +3516,8 @@ async function runInboxBatch() {
         } else if (ev.step === "remove") {
           renderInboxProgress(`Removing sources · ${ev.segment} · ${ev.file}`, null);
         }
-      } else if (ev.type === "done") {
-        done = ev;
-      } else if (ev.type === "error") {
-        throw new Error(ev.error || "the batch failed");
-      }
+      },
     });
-    if (!done) throw new Error("stream ended without completion");
     state.inbox.lastOperation = done.operation_id;
     state.inbox.result = { done, dest };
     renderInboxProgress(null);
@@ -3562,7 +3526,7 @@ async function runInboxBatch() {
     await reloadInboxAfterBatch();
   } catch (e) {
     renderInboxProgress(null);
-    await notify(e.message, dest.kind === "split" ? "Split failed" : "Import failed");
+    await notify(planErrorsText(e), dest.kind === "split" ? "Split failed" : "Import failed");
   } finally {
     state.inbox.running = false;
     resetPageTitle();
@@ -3657,15 +3621,9 @@ async function undoInboxBatch() {
   updateInboxRunButton();
   renderInboxProgress("Undoing…", null);
   try {
-    const res = await fetch(`/api/operations/${encodeURIComponent(opId)}/undo`, { method: "POST" });
-    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
-    let done = null;
-    await consumeNdjson(res, (ev) => {
-      if (ev.type === "progress" && ev.file) renderInboxProgress(`Restoring ${ev.file}`, null);
-      else if (ev.type === "done") done = ev;
-      else if (ev.type === "error") throw new Error(ev.error || "undo failed");
+    const done = await runJob(`/api/operations/${encodeURIComponent(opId)}/undo`, {
+      onEvent: (ev) => { if (ev.file) renderInboxProgress(`Restoring ${ev.file}`, null); },
     });
-    if (!done) throw new Error("stream ended without completion");
     state.inbox.lastOperation = null;
     state.inbox.result = null;
     renderInboxProgress(null);
