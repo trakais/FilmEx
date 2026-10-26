@@ -411,13 +411,13 @@ section h2::after {
   text-transform: uppercase;
 }
 
-#scan-summary {
+.summary.readout {
   gap: 8px 0;
   text-transform: none;
   letter-spacing: 0.02em;
 }
 
-#scan-summary .summary-item {
+.summary.readout .summary-item {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
@@ -425,11 +425,11 @@ section h2::after {
   position: relative;
 }
 
-#scan-summary .summary-item + .summary-item {
+.summary.readout .summary-item + .summary-item {
   padding-left: 18px;
 }
 
-#scan-summary .summary-item + .summary-item::before {
+.summary.readout .summary-item + .summary-item::before {
   content: "·";
   position: absolute;
   left: 7px;
@@ -440,7 +440,7 @@ section h2::after {
   line-height: 1;
 }
 
-#scan-summary .summary-label {
+.summary.readout .summary-label {
   color: var(--muted);
   font-size: 10px;
   font-weight: 600;
@@ -448,18 +448,18 @@ section h2::after {
   letter-spacing: 0.16em;
 }
 
-#scan-summary .summary-value {
+.summary.readout .summary-value {
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.015em;
 }
 
-#scan-summary .summary-value--accent {
+.summary.readout .summary-value--accent {
   color: var(--yellow);
 }
 
-#scan-summary .summary-code {
+.summary.readout .summary-code {
   font-family: var(--font-mono);
   text-transform: none;
 }
@@ -498,16 +498,16 @@ section h2::after {
 .summary-refresh svg { display: block; }
 
 @media (max-width: 640px) {
-  #scan-summary {
+  .summary.readout {
     gap: 10px;
   }
 
-  #scan-summary .summary-item {
+  .summary.readout .summary-item {
     width: 100%;
     padding-left: 0;
   }
 
-  #scan-summary .summary-item + .summary-item::before {
+  .summary.readout .summary-item + .summary-item::before {
     content: none;
   }
 }
@@ -1260,8 +1260,6 @@ button:disabled {
   padding-left: 40px;
   border-radius: 2px;
 }
-/* Higher specificity wins over .picker-tile.favorite::before — that's why
-   favorite film tiles lose the dot. We re-instate it on ::after instead. */
 .picker-grid.film-grid .picker-tile.favorite::after {
   content: "";
   position: absolute;
@@ -1271,27 +1269,20 @@ button:disabled {
   border-radius: 50%;
   background: var(--yellow);
 }
-.picker-grid.film-grid .picker-tile::before {
-  content: "";
+
+/* Film canister glyph (inline SVG from canisterSvg()) sits where the brand
+   strip used to be. Label colours come from --brand-c1/--brand-c2 on the
+   tile; the metal and shading gradients are shared defs in index.html. */
+.picker-grid.film-grid .picker-tile .canister {
   position: absolute;
-  inset: 0 auto 0 0;
-  width: 26px;
-  /* Explicitly reset height and border-radius — the generic
-     .picker-tile.favorite::before rule also sets these, and specificity
-     only resolves per-property: anything film-grid doesn't redeclare leaks
-     through and collapses the strip into a squished oval on favorite rows. */
-  height: auto;
-  border-radius: 0;
-  background: linear-gradient(
-    to bottom,
-    var(--brand-c1, #2a2a2a) 0%,
-    var(--brand-c1, #2a2a2a) 50%,
-    var(--brand-c2, #1e1e1e) 50%,
-    var(--brand-c2, #1e1e1e) 100%
-  );
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
-  border-right: 1px solid rgba(0, 0, 0, 0.7);
+  left: 9px;
+  top: 50%;
+  width: 22px;
+  height: 33px;
+  transform: translateY(-50%);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
 }
+.picker-grid.film-grid .picker-tile:hover .canister { transform: translateY(-50%) scale(1.04); }
 
 /* ISO pills — sharp rectangles, tabular numerals. Background encodes film
    type (bw / color / slide); text stays white for legibility on all three. */
@@ -1843,3 +1834,38 @@ body[data-theme="paper"] .library-root-path { background: rgba(255, 251, 245, 0.
 .naming-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .naming-foot .lib-sub { margin-right: auto; }
 body[data-theme="paper"] .naming-panel { background: linear-gradient(180deg, rgba(255, 251, 245, 0.5) 0%, rgba(247, 239, 227, 0.2) 100%); }
+
+/* ---------- Film tile canister (Tag view) ---------- */
+.tile.film-tile { position: relative; }
+.tile.film-tile .tile-canister {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  width: 30px;
+  height: 45px;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.55));
+  pointer-events: none;
+}
+.tile.film-tile.selected .tile-content,
+.tile.film-tile.selected .tile-sub { padding-right: 44px; }
+
+/* ---------- Library quick filter ---------- */
+.library-filter {
+  padding: 6px 10px;
+  background: linear-gradient(180deg, #0c0c0c 0%, #080808 100%);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  width: 180px;
+}
+.library-filter:focus { outline: none; border-color: var(--text); box-shadow: 0 0 0 2px rgba(243, 190, 34, 0.22); }
+body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5); }
+
+/* ---------- Apply result actions ---------- */
+.apply-actions { display: flex; gap: 10px; margin-top: 14px; }
+
+/* ---------- Settings: template example ---------- */
+.template-example { font-family: var(--font-mono); color: var(--yellow); }
+.template-example.bad { color: var(--red); font-family: var(--font-ui); }

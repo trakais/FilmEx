@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 
 from filmex.models import AppSetting
 from filmex.services import exiftool_locator as locator
+from filmex.services import naming
 
 RECENT_FOLDERS_MAX = 20
 THEMES = ("dark", "paper")
@@ -78,6 +79,14 @@ def _str_list(max_len: int) -> Callable[[Any], list[str]]:
     return check
 
 
+def _template(value: Any) -> str:
+    text = _str(value)
+    try:
+        return naming.validate_template(text)
+    except naming.NamingError as exc:
+        raise SettingsError(str(exc)) from exc
+
+
 def _opt_dict(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -106,7 +115,7 @@ SPECS: dict[str, Spec] = {
     "exiftool_path": Spec(None, _opt_str),
     # Naming system (phase 3) and import (phase 4) — stored now so the
     # settings UI can expose them without another migration.
-    "naming_template": Spec("{date}-{camera}-{film}", _str),
+    "naming_template": Spec(naming.DEFAULT_TEMPLATE, _template),
     "naming_place_suffix": Spec(True, _bool),
     "import_mode": Spec("copy", _enum(IMPORT_MODES)),
 }

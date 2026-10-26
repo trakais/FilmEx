@@ -11,6 +11,7 @@ const state = {
   view: "workflow",
   viewInitialised: false,
   library: null,          // last `/api/library` payload
+  libraryFilter: "",
   naming: null,           // last `/api/naming/propose` payload
   namingLastOperation: null,
   libraryRescanning: false,
@@ -734,6 +735,13 @@ function renderTiles() {
     title: f.display_name,
     sub: `ISO ${f.box_speed_iso} · ${filmTypeLabel(f.film_type)}`,
   }));
+  tileFilm.querySelector(".tile-canister")?.remove();
+  if (state.film) {
+    const [c1, c2] = filmBrandColors(state.film.brand);
+    tileFilm.style.setProperty("--brand-c1", c1);
+    tileFilm.style.setProperty("--brand-c2", c2);
+    tileFilm.insertAdjacentHTML("beforeend", canisterSvg("tile-canister"));
+  }
 }
 
 function renderTile(el, entity, placeholder, toCopy) {
@@ -898,6 +906,23 @@ function filmBrandColors(brand) {
   return FILM_BRAND_FALLBACK;
 }
 
+// A 35 mm cassette, front view: metal cap, dark body, the brand's label
+// band and accent stripe (from --brand-c1/--brand-c2 on the parent), and a
+// shared shading gradient that rounds the body. Pure SVG, no dependencies.
+function canisterSvg(extraClass = "canister") {
+  return (
+    `<svg class="${extraClass}" viewBox="0 0 24 36" aria-hidden="true" focusable="false">` +
+      `<rect x="9.5" y="0" width="5" height="2.6" rx="0.5" fill="#8d8d8d"/>` +
+      `<rect x="3" y="2" width="18" height="4.2" rx="1" fill="url(#can-metal)"/>` +
+      `<rect x="4" y="6" width="16" height="29" rx="1.6" fill="#1a1a1a"/>` +
+      `<rect x="4" y="9" width="16" height="19" fill="var(--brand-c1, #3a4050)"/>` +
+      `<rect x="4" y="24" width="16" height="4" fill="var(--brand-c2, #2a3040)"/>` +
+      `<rect x="4" y="6" width="16" height="29" rx="1.6" fill="url(#can-shade)"/>` +
+      `<rect x="19" y="13" width="2.4" height="9" rx="0.5" fill="#070707" opacity="0.85"/>` +
+    `</svg>`
+  );
+}
+
 function groupPickerFilms(items) {
   // Returns [{ label, modifier, items }] — a "Favorites" group (if any
   // favorites exist) followed by one group per brand. Favorites are NOT
@@ -938,6 +963,7 @@ function renderPickerTile(item, kind) {
     const [c1, c2] = filmBrandColors(item.brand);
     tile.style.setProperty("--brand-c1", c1);
     tile.style.setProperty("--brand-c2", c2);
+    tile.insertAdjacentHTML("afterbegin", canisterSvg());
   }
 
   const title = document.createElement("div");
@@ -1491,7 +1517,10 @@ async function onApply() {
       }
     });
     if (!done_event) throw new Error("stream ended without completion event");
+    state.fileSubset = null;
+    renderScanSummary();
     renderApplyResult(done_event);
+    if (state.settings && state.settings.library_root) void loadLibrary({ rescan: true });
   } catch (e) {
     await notify(`Apply failed:\n${e.message}`);
   } finally {
@@ -1516,7 +1545,12 @@ function renderApplyResult(res) {
          <pre style="white-space: pre-wrap; color: var(--danger); font-size: 12px;">${escapeHtml(res.errors.join("\n"))}</pre>`
       : ""
     }
+    ${res.cancelled ? `<div class="pill warn" style="margin-top: 10px;">Stopped early</div>` : ""}
+    ${state.settings && state.settings.library_root
+      ? `<div class="apply-actions"><button type="button" class="secondary" id="apply-back-library">Back to Library</button></div>`
+      : ""}
   `;
+  document.getElementById("apply-back-library")?.addEventListener("click", () => void openLibrary());
 }
 
 // ---------- Helpers ----------
@@ -1893,8 +1927,11 @@ function renderLibrary() {
     lib.scanned_at ? renderScanSummaryItem("Scanned", formatStamp(lib.scanned_at)) : "",
   ].join("");
 
+  const needle = (state.libraryFilter || "").trim().toLowerCase();
+  const matches = (row) => !needle || [row.display_name, row.film_display, row.camera_display, row.status, row.parent]
+    .some((v) => (v || "").toLowerCase().includes(needle));
   const groups = new Map();
-  for (const row of lib.folders) {
+  for (const row of lib.folders.filter(matches)) {
     const key = row.parent || row.display_name;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
@@ -1916,7 +1953,9 @@ function renderLibrary() {
     groupsEl.appendChild(section);
   }
   if (!keys.length) {
-    groupsEl.innerHTML = `<div class="library-empty">No folders with images found under this root yet.</div>`;
+    groupsEl.innerHTML = needle
+      ? `<div class="library-empty">No rolls match “${escapeHtml(needle)}”.</div>`
+      : `<div class="library-empty">No folders with images found under this root yet.</div>`;
   }
 }
 
@@ -2193,6 +2232,30 @@ function formatStamp(iso, { dateOnly = false } = {}) {
 
 const DEFAULT_NAMING_TEMPLATE = "{date}-{camera}-{film}";
 
+const TEMPLATE_TOKENS = ["date", "year", "month", "camera", "film", "lens", "place", "roll"];
+const TEMPLATE_SAMPLE = { date: "2026-05-14", year: "2026", month: "05", camera: "Fed2", film: "Gold", lens: "Industar-50", place: "Jāņos", roll: "01" };
+
+// Client-side preview of the folder name template; the server's
+// services/naming.py is the real renderer, this only mirrors it for feedback.
+function renderTemplateExample() {
+  const form = document.getElementById("general-settings-form");
+  const out = document.getElementById("naming-template-example");
+  if (!form || !out) return;
+  const template = form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE;
+  const tokens = Array.from(template.matchAll(/\{([a-z_]+)\}/g)).map((m) => m[1]);
+  const unknown = tokens.filter((t) => !TEMPLATE_TOKENS.includes(t));
+  if (!tokens.length || unknown.length || /[/\\:*?"<>|]/.test(template)) {
+    out.textContent = unknown.length ? `unknown token {${unknown[0]}}` : "template needs at least one token and no / \\ : * ? \" < > |";
+    out.classList.add("bad");
+    return;
+  }
+  let example = template;
+  if (form.elements.naming_place_suffix.checked && !template.includes("{place}")) example += "-{place}";
+  example = example.replace(/\{([a-z_]+)\}/g, (_, t) => TEMPLATE_SAMPLE[t] || "");
+  out.textContent = example.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+  out.classList.remove("bad");
+}
+
 async function renderGeneralSettings() {
   const form = document.getElementById("general-settings-form");
   if (!form) return;
@@ -2203,6 +2266,7 @@ async function renderGeneralSettings() {
   form.elements.naming_place_suffix.checked = !!s.naming_place_suffix;
   form.elements.import_mode.value = s.import_mode || "copy";
   document.getElementById("general-settings-status").textContent = "";
+  renderTemplateExample();
   await renderExifToolDetection();
 }
 
@@ -2720,6 +2784,10 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   document.getElementById("library-rescan").addEventListener("click", () => void rescanLibrary());
   document.getElementById("library-normalize").addEventListener("click", () => void openNamingPanel());
+  document.getElementById("library-filter").addEventListener("input", (e) => {
+    state.libraryFilter = e.target.value;
+    if (state.library) renderLibrary();
+  });
   document.getElementById("naming-close").addEventListener("click", closeNamingPanel);
   document.getElementById("naming-apply").addEventListener("click", () => void applySelectedRenames());
   document.getElementById("naming-undo").addEventListener("click", () => void undoLastRename());
@@ -2742,6 +2810,9 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("settings-form-backdrop").addEventListener("click", closeSettingsForm);
   document.getElementById("settings-form-save").addEventListener("click", submitSettingsForm);
   document.getElementById("general-settings-form").addEventListener("submit", submitGeneralSettings);
+  for (const name of ["naming_template", "naming_place_suffix"]) {
+    document.getElementById("general-settings-form").elements[name].addEventListener("input", renderTemplateExample);
+  }
   document.getElementById("general-library-browse").addEventListener("click", onBrowseLibraryRoot);
 
   setupWindowDrop();

@@ -49,6 +49,14 @@ def test_wrong_types_are_rejected(client):
     assert client.get("/api/settings").json()["theme"] == "dark"
 
 
+def test_naming_template_is_validated(client):
+    assert client.patch("/api/settings", json={"naming_template": "{date}_{lab}"}).status_code == 400
+    assert client.patch("/api/settings", json={"naming_template": "no tokens"}).status_code == 400
+    res = client.patch("/api/settings", json={"naming_template": "  {year}-{month}_R{roll}_{camera}  "})
+    assert res.status_code == 200
+    assert res.json()["naming_template"] == "{year}-{month}_R{roll}_{camera}"
+
+
 def test_recent_folders_are_deduped_and_capped(client):
     folders = [f"/rolls/r{i:02d}" for i in range(30)] + ["/rolls/r00", " ", ""]
     res = client.patch("/api/settings", json={"recent_folders": folders})
