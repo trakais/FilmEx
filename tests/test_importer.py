@@ -140,11 +140,13 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, monkey
     last_verify = [e for e in events if e.get("step") == "verify"][-1]
     assert last_verify["bytes_done"] == last_verify["bytes_total"] and last_verify["files_done"] == 9
 
+    (gold / "DSC0002.xmp").write_text("<x/>")  # what tagging seeds for a raw without a sidecar
     with Session(get_engine()) as session:
         undo = importer.undo_import(session, result["operation_id"])
         assert operations.get(session, result["operation_id"]).status == "undone"
     assert not undo["errors"]
     assert sorted(undo["removed_folders"]) == sorted([str(gold), str(hp5), str(root / "2026"), str(root / "2024")])
+    assert not (source / "DSC0002.xmp").exists()  # copy mode: the copy's sidecar is discarded with it
     assert not (root / "2026").exists() and not (root / "2024").exists()
     assert (source / "DSC0001.xmp").is_file()
 
@@ -178,10 +180,12 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
     assert not mf.manifest_path_for(hp5).exists()
 
     monkeypatch.setattr(importer, "copy_verify", real_copy)
+    (gold / "DSC0003.xmp").write_text("<x/>")  # tagging sidecar; in move mode it goes back with the raw
     with Session(get_engine()) as session:
         undo = importer.undo_import(session, result["operation_id"])
     assert not undo["errors"], undo
     assert (source / "DSC0001.ARW").is_file() and (source / "DSC0001.xmp").is_file()
+    assert (source / "DSC0003.xmp").read_text() == "<x/>"
     assert len(undo["restored"]) == 7
     assert not gold.exists() and not hp5.exists()
     assert (source / "lab_001.jpg").is_file()

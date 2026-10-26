@@ -133,6 +133,26 @@ def remove_folder_if_empty(folder: Path) -> bool:
     return True
 
 
+def tagging_sidecars(folder: Path, image_names: list[str]) -> list[Path]:
+    """Sidecars in ``folder`` that belong to ``image_names`` but were not
+    among the files a batch put there: the tagging step wrote them for raw
+    files that had none. Undo must carry them along, or the folder stays."""
+    stems = {fr.stem_key(name) for name in image_names}
+    found: list[Path] = []
+    try:
+        with os.scandir(folder) as it:
+            for entry in it:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if os.path.splitext(entry.name)[1].lower() != ".xmp":
+                    continue
+                if fr.stem_key(entry.name) in stems:
+                    found.append(Path(entry.path))
+    except OSError:
+        return []
+    return found
+
+
 def resolve_segments(
     listing: fr.FrameListing, segments: list[Segment]
 ) -> tuple[list[tuple[Segment, list[fr.Frame]]], list[str], list[str]]:
@@ -487,6 +507,17 @@ def undo_split(
         folder = Path(record["path"])
         if not folder.is_dir():
             continue
+        # Sidecars the tagging step wrote go back with their raw files, so
+        # the metadata stays with the frame and the folder can be removed.
+        moved_names = {Path(m["to"]).name for m in result.get("moves", []) if Path(m["to"]).parent == folder}
+        for sidecar in tagging_sidecars(folder, sorted(moved_names)):
+            if sidecar.name in moved_names:
+                continue
+            try:
+                _move_file(sidecar, source / sidecar.name)
+                restored.append({"from": str(sidecar), "to": str(source / sidecar.name)})
+            except OSError as exc:
+                errors.append(f"{sidecar.name}: {exc}")
         manifest_path = mf.manifest_path_for(folder)
         if manifest_path.is_file():
             try:

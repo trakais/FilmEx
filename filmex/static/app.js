@@ -16,6 +16,22 @@ const state = {
   namingLastOperation: null,
   libraryRescanning: false,
   fileSubset: null,       // { folder, files } when tagging only part of a roll
+  tagFrames: null,        // /api/folder/frames payload for the Tag view's sheet
+  inbox: {                // Inbox view: contact sheet and roll drafts
+    folder: "",
+    listing: null,
+    frames: [],
+    indexByKey: null,
+    thumbs: new Set(),
+    thumbJob: false,
+    segments: [],
+    selection: new Set(),
+    anchor: null,
+    destination: null,    // "import-copy" | "import-move" | "split"
+    running: false,
+    lastOperation: null,
+    result: null,
+  },
   folder: "",
   theme: "dark",
   scan: null,
@@ -466,6 +482,8 @@ async function onScan() {
   clearScanOutput();
   clearPreviewStatus();
   clearManifestSummary();
+  state.tagFrames = null;
+  document.getElementById("tag-sheet-section").classList.add("hidden");
   if (state.fileSubset && state.fileSubset.folder !== folder) state.fileSubset = null;
   state.folder = folder;
   try {
@@ -481,6 +499,7 @@ async function onScan() {
     renderScanSummary();
     saveStickyState();
     updateActionButtons();
+    void loadTagSheet();
     void maybeLoadManifestPrefill(scan).then(() => {
       saveStickyState();
       updateActionButtons();
@@ -807,8 +826,42 @@ function clearTile(kind) {
 
 let activePickerKind = null;
 
-function openPicker(kind) {
+// The picker writes into a target: the Tag view's state by default, or a
+// roll draft on the Inbox view. `camera()` scopes the lens list.
+const tagPickerTarget = {
+  camera: () => state.camera,
+  set(kind, item) {
+    if (kind === "camera") {
+      state.camera = item;
+      state.fileLensOverrides = {};
+      // Auto-populate the fixed lens first — a Fixed-Lens camera always mounts
+      // its own lens, and the compat check below then confirms it.
+      if (item.fixed_lens_id) {
+        const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
+        if (lens) state.lens = lens;
+      }
+      // Drop the currently selected lens if its mount doesn't match the new
+      // camera. Saves the user from noticing the mismatch themselves; they
+      // can still bypass via "Show all (ignore mount)" in the lens picker.
+      if (state.lens && !lensMountMatchesCamera(state.lens, item)) {
+        state.lens = null;
+      }
+    } else if (kind === "lens") {
+      state.lens = item;
+    } else if (kind === "film") {
+      state.film = item;
+    }
+    markPreviewStale();
+    saveStickyState();
+    renderTiles();
+    updateActionButtons();
+  },
+};
+let pickerTarget = tagPickerTarget;
+
+function openPicker(kind, target = tagPickerTarget) {
   activePickerKind = kind;
+  pickerTarget = target;
   const panel = document.getElementById("picker-panel");
   const backdrop = document.getElementById("picker-backdrop");
   const title = document.getElementById("picker-title");
@@ -844,10 +897,11 @@ async function renderPickerGrid() {
     items = state.cameras;
   } else if (activePickerKind === "lens") {
     // Re-fetch on camera context if a camera is selected.
-    if (state.camera && !grid.dataset.showAll) {
-      items = await api(`/api/lenses?camera_id=${encodeURIComponent(state.camera.id)}`);
-    } else if (state.camera && grid.dataset.showAll === "true") {
-      items = await api(`/api/lenses?camera_id=${encodeURIComponent(state.camera.id)}&show_all=true`);
+    const camera = pickerTarget.camera();
+    if (camera && !grid.dataset.showAll) {
+      items = await api(`/api/lenses?camera_id=${encodeURIComponent(camera.id)}`);
+    } else if (camera && grid.dataset.showAll === "true") {
+      items = await api(`/api/lenses?camera_id=${encodeURIComponent(camera.id)}&show_all=true`);
     } else {
       items = state.lenses;
     }
@@ -1014,30 +1068,7 @@ function lensMountMatchesCamera(lens, camera) {
 }
 
 function selectFromPicker(item) {
-  if (activePickerKind === "camera") {
-    state.camera = item;
-    state.fileLensOverrides = {};
-    // Auto-populate the fixed lens first — a Fixed-Lens camera always mounts
-    // its own lens, and the compat check below then confirms it.
-    if (item.fixed_lens_id) {
-      const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
-      if (lens) state.lens = lens;
-    }
-    // Drop the currently selected lens if its mount doesn't match the new
-    // camera. Saves the user from noticing the mismatch themselves; they
-    // can still bypass via "Show all (ignore mount)" in the lens picker.
-    if (state.lens && !lensMountMatchesCamera(state.lens, item)) {
-      state.lens = null;
-    }
-  } else if (activePickerKind === "lens") {
-    state.lens = item;
-  } else if (activePickerKind === "film") {
-    state.film = item;
-  }
-  markPreviewStale();
-  saveStickyState();
-  renderTiles();
-  updateActionButtons();
+  pickerTarget.set(activePickerKind, item);
   closePicker();
 }
 
@@ -1391,6 +1422,7 @@ function markPreviewFilesAvailable(fileNames) {
       }
     }
   }
+  renderTagSheet();
 }
 
 function renderDiff(result) {
@@ -1583,8 +1615,8 @@ function formatValue(v) {
   return escapeHtml(v);
 }
 
-function buildThumbnailUrl(folder, name) {
-  const params = new URLSearchParams({ folder, name, invert: state.previewInvert ? "true" : "false" });
+function buildThumbnailUrl(folder, name, invert = state.previewInvert) {
+  const params = new URLSearchParams({ folder, name, invert: invert ? "true" : "false" });
   return `/api/files/thumbnail?${params.toString()}`;
 }
 
@@ -1806,7 +1838,7 @@ async function openSettings() {
 
 // ---------- Views ----------
 
-const VIEW_IDS = { library: "library-view", workflow: "workflow-view", settings: "settings-view" };
+const VIEW_IDS = { library: "library-view", inbox: "inbox-view", workflow: "workflow-view", settings: "settings-view" };
 
 function showView(name) {
   const next = VIEW_IDS[name] ? name : "workflow";
@@ -1990,6 +2022,9 @@ function renderLibraryRow(row) {
   if (row.status !== "untagged") {
     actions.push(`<button type="button" class="secondary" data-act="open">Open</button>`);
   }
+  if (row.image_count > 1) {
+    actions.push(`<button type="button" class="secondary" data-act="split" title="Cut this folder into per-roll folders">Split…</button>`);
+  }
   actions.push(`<button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button>`);
   el.innerHTML = `
     ${libraryStatusPill(row)}
@@ -2007,6 +2042,10 @@ function renderLibraryRow(row) {
 async function onLibraryAction(action, row) {
   if (action === "reveal") {
     await revealFolder(row.path);
+    return;
+  }
+  if (action === "split") {
+    await openInbox({ folder: row.path, destination: "split" });
     return;
   }
   if (action === "remaining") {
@@ -2701,6 +2740,998 @@ function similarMountSuggestion(value) {
   return settingsState.cameraMounts.find(m => mountLooseKey(m) === needle) || null;
 }
 
+// ---------- Contact sheet, roll drafts, Inbox view ----------
+//
+// A frame is every file sharing one basename (raw + JPEG + sidecar + .thm);
+// the server lists them in sheet order. The user cuts the sequence into
+// segments, one per roll, each with its own gear, film, date and folder
+// name. The same sheet renders read-only in the Tag view.
+
+const SEGMENT_COLOR_COUNT = 8;
+const INBOX_NAME_DEBOUNCE_MS = 250;
+
+function inboxFrames() { return state.inbox.frames || []; }
+
+function sheetIndexOf(key) {
+  if (!state.inbox.indexByKey) {
+    state.inbox.indexByKey = new Map(inboxFrames().map((f, i) => [f.key, i]));
+  }
+  const i = state.inbox.indexByKey.get(key);
+  return i === undefined ? -1 : i;
+}
+
+function frameByKey(key) {
+  const i = sheetIndexOf(key);
+  return i < 0 ? null : inboxFrames()[i];
+}
+
+function sortedKeys(keys) {
+  return Array.from(new Set(keys)).filter(k => sheetIndexOf(k) >= 0).sort((a, b) => sheetIndexOf(a) - sheetIndexOf(b));
+}
+
+function segmentOf(key) {
+  return state.inbox.segments.find(s => s.frames.includes(key)) || null;
+}
+
+let segmentSeq = 0;
+
+function defaultTagging() {
+  // Start from the Tag view's sticky gear so the common case (same camera,
+  // next roll) needs no clicks. The date comes from the files.
+  return {
+    camera: state.camera || null,
+    lens: state.lens || null,
+    film: state.film || null,
+    roll_date: state.inbox.listing?.suggested_roll_date || "",
+    place: "",
+    development_provider_id: state.advanced.development_provider_id || "",
+    development_method_id: state.advanced.development_method_id || "",
+    scan_provider_id: state.advanced.scan_provider_id || "",
+    scan_method_id: state.advanced.scan_method_id || "",
+    roll_notes: "",
+  };
+}
+
+function newSegment(frames, tagging = null) {
+  segmentSeq += 1;
+  return {
+    id: `seg${segmentSeq}`,
+    name: "",
+    nameAuto: true,
+    nameError: null,
+    frames: sortedKeys(frames),
+    tagging: tagging ? { ...tagging } : defaultTagging(),
+  };
+}
+
+function normalizeSegments() {
+  const segs = state.inbox.segments.filter(s => s.frames.length);
+  for (const s of segs) s.frames = sortedKeys(s.frames);
+  segs.sort((a, b) => sheetIndexOf(a.frames[0]) - sheetIndexOf(b.frames[0]));
+  state.inbox.segments = segs;
+}
+
+function unassignedKeys() {
+  const assigned = new Set(state.inbox.segments.flatMap(s => s.frames));
+  return inboxFrames().map(f => f.key).filter(k => !assigned.has(k));
+}
+
+// ----- opening and loading -----
+
+async function openInbox({ folder = null, destination = null } = {}) {
+  showView("inbox");
+  if (destination) state.inbox.destination = destination;
+  else if (!state.inbox.destination) state.inbox.destination = `import-${state.settings?.import_mode || "copy"}`;
+  renderInboxDestination();
+  if (folder) {
+    document.getElementById("inbox-folder").value = folder;
+    await loadInboxFolder(folder);
+  } else if (!state.inbox.listing) {
+    renderInbox();
+  }
+}
+
+async function onInboxBrowse() {
+  try {
+    const folder = await pickFolder();
+    if (!folder) return;
+    document.getElementById("inbox-folder").value = folder;
+    await loadInboxFolder(folder);
+  } catch (e) {
+    await notify(`Could not open folder picker: ${e.message || e}`);
+  }
+}
+
+async function loadInboxFolder(folder) {
+  folder = (folder || "").trim();
+  if (!folder) return;
+  const inbox = state.inbox;
+  inbox.folder = folder;
+  inbox.listing = null;
+  inbox.frames = [];
+  inbox.indexByKey = null;
+  inbox.segments = [];
+  inbox.selection = new Set();
+  inbox.anchor = null;
+  inbox.thumbs = new Set();
+  inbox.result = null;
+  renderInboxBanner("");
+  renderInboxProgress(null);
+  renderInboxResult(null);
+  try {
+    const [listing, scan] = await Promise.all([
+      api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`),
+      api("/api/folder/scan", { method: "POST", body: JSON.stringify({ folder }) }),
+    ]);
+    inbox.listing = listing;
+    inbox.frames = listing.frames;
+    inbox.indexByKey = null;
+    for (const file of scan.files || []) if (file.has_thumbnail) inbox.thumbs.add(file.name);
+    inbox.segments = listing.frames.length ? [newSegment(listing.frames.map(f => f.key))] : [];
+    pushRecentFolder(folder);
+    renderRecentFolders();
+    renderInbox();
+    for (const seg of inbox.segments) scheduleRollName(seg);
+    void buildInboxThumbnails();
+  } catch (e) {
+    renderInboxBanner(`Could not read the folder: ${e.message}`, "bad");
+    renderInbox();
+  }
+}
+
+async function buildInboxThumbnails() {
+  const inbox = state.inbox;
+  const folder = inbox.folder;
+  if (!folder || inbox.thumbJob) return;
+  const needed = inboxFrames().filter(f => f.preview && !inbox.thumbs.has(f.preview));
+  if (!needed.length) return;
+  inbox.thumbJob = true;
+  const btn = document.getElementById("sheet-thumbs");
+  try {
+    const res = await fetch("/api/previews/create/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder, invert: false }),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    let done = 0;
+    let total = needed.length;
+    await consumeNdjson(res, (ev) => {
+      if (inbox.folder !== folder) return;
+      if (ev.type === "start") {
+        total = ev.total || total;
+        btn.textContent = `Thumbnails 0/${total}`;
+      } else if (ev.type === "progress") {
+        done += 1;
+        btn.textContent = `Thumbnails ${done}/${total}`;
+        if (ev.status === "created" || ev.status === "reused") {
+          inbox.thumbs.add(ev.file);
+          updateSheetThumb(ev.file);
+        }
+      }
+    });
+  } catch (e) {
+    renderInboxBanner(`Thumbnails: ${e.message}`, "warn");
+  } finally {
+    inbox.thumbJob = false;
+    btn.textContent = "Thumbnails";
+    btn.disabled = true;
+  }
+}
+
+function updateSheetThumb(file) {
+  const container = document.getElementById("contact-sheet");
+  const frame = inboxFrames().find(f => f.preview === file);
+  if (!frame) return;
+  const cell = container.querySelector(`.sheet-cell[data-key="${cssEscape(frame.key)}"] .sheet-thumb`);
+  if (!cell) return;
+  cell.innerHTML = `<img src="${escapeHtml(buildThumbnailUrl(state.inbox.folder, file, false))}" alt="" loading="lazy" />` + cell.querySelector(".sheet-roll-tag")?.outerHTML || "";
+}
+
+function cssEscape(value) {
+  return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&");
+}
+
+// ----- rendering -----
+
+function renderInboxBanner(message, level = "warn") {
+  const el = document.getElementById("inbox-banner");
+  if (!message) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="pill ${level}">${level === "bad" ? "Problem" : "Note"}</span> <span>${escapeHtml(message)}</span>`;
+}
+
+function renderInbox() {
+  const inbox = state.inbox;
+  const has = !!inbox.listing;
+  document.getElementById("inbox-sheet-section").classList.toggle("hidden", !has);
+  document.getElementById("inbox-rolls-section").classList.toggle("hidden", !has);
+  document.getElementById("inbox-actions").classList.toggle("hidden", !has);
+  renderInboxSummary();
+  if (!has) return;
+  renderInboxSheet();
+  renderRollCards();
+  renderInboxDestination();
+  updateSheetToolbar();
+  updateInboxRunButton();
+}
+
+function renderInboxSummary() {
+  const el = document.getElementById("inbox-summary");
+  const listing = state.inbox.listing;
+  if (!listing) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  const frames = inboxFrames();
+  const images = frames.reduce((n, f) => n + f.images.length, 0);
+  const bytes = frames.reduce((n, f) => n + f.bytes, 0);
+  const unmatched = frames.filter(f => f.unmatched_jpeg).length;
+  const parts = [
+    renderScanSummaryItem("Frames", `${frames.length}`),
+    renderScanSummaryItem("Files", `${images} image${images === 1 ? "" : "s"} · ${humanBytes(bytes)}`),
+    renderScanSummaryItem("Folder", listing.folder.split("/").filter(Boolean).pop() || listing.folder, "summary-code"),
+  ];
+  if (listing.has_raw) parts.push(renderScanSummaryItem("Pairs", unmatched ? `${unmatched} JPEG${unmatched === 1 ? "" : "s"} without raw` : "raw + JPEG"));
+  if (listing.other_files.length) parts.push(renderScanSummaryItem("Stays behind", `${listing.other_files.length} other file${listing.other_files.length === 1 ? "" : "s"}`));
+  el.innerHTML = parts.join("");
+}
+
+function renderInboxSheet() {
+  const inbox = state.inbox;
+  const segIndex = new Map();
+  inbox.segments.forEach((s, i) => s.frames.forEach(k => segIndex.set(k, i)));
+  renderContactSheet(document.getElementById("contact-sheet"), {
+    folder: inbox.folder,
+    frames: inboxFrames(),
+    hasThumb: (file) => inbox.thumbs.has(file),
+    invert: false,
+    segmentIndex: (key) => (segIndex.has(key) ? segIndex.get(key) : null),
+    selection: inbox.selection,
+    onClick: onSheetCellClick,
+  });
+}
+
+// Generic grid. `segmentIndex(key)` → number | null (null = left out, no
+// stamp when every frame is in one roll). `selection` is a Set or null.
+function renderContactSheet(container, { folder, frames, hasThumb, invert, segmentIndex, selection, onClick, compact = false }) {
+  container.innerHTML = "";
+  container.classList.toggle("compact", compact);
+  const multi = new Set(frames.map(f => segmentIndex ? segmentIndex(f.key) : 0).filter(v => v !== null)).size > 1;
+  const frag = document.createDocumentFragment();
+  for (const frame of frames) {
+    const seg = segmentIndex ? segmentIndex(frame.key) : 0;
+    const cell = document.createElement("div");
+    cell.className = "sheet-cell";
+    cell.dataset.key = frame.key;
+    if (seg === null) cell.classList.add("unassigned");
+    else if (multi) cell.classList.add(`seg-${seg % SEGMENT_COLOR_COUNT}`);
+    if (selection && selection.has(frame.key)) cell.classList.add("selected");
+    const thumb = frame.preview && hasThumb(frame.preview)
+      ? `<img src="${escapeHtml(buildThumbnailUrl(folder, frame.preview, invert))}" alt="" loading="lazy" />`
+      : `<span class="sheet-thumb-placeholder">${escapeHtml(frame.display_key)}</span>`;
+    const stamp = seg !== null && multi ? `<span class="sheet-roll-tag">R${seg + 1}</span>` : "";
+    const badge = frame.unmatched_jpeg ? `<span class="sheet-badge warn">jpg only</span>`
+      : frame.has_raw && frame.images.length > 1 ? `<span class="sheet-badge">pair</span>` : "";
+    cell.innerHTML = `
+      <div class="sheet-thumb">${thumb}${stamp}</div>
+      <div class="sheet-cell-name"><span>${escapeHtml(frame.display_key)}</span>${badge}</div>
+    `;
+    cell.title = frame.files.join("\n");
+    if (onClick) cell.addEventListener("click", (ev) => onClick(frame.key, ev));
+    frag.appendChild(cell);
+  }
+  container.appendChild(frag);
+}
+
+function onSheetCellClick(key, ev) {
+  const inbox = state.inbox;
+  if (ev.shiftKey && inbox.anchor && sheetIndexOf(inbox.anchor) >= 0) {
+    const [a, b] = [sheetIndexOf(inbox.anchor), sheetIndexOf(key)].sort((x, y) => x - y);
+    for (let i = a; i <= b; i++) inbox.selection.add(inboxFrames()[i].key);
+  } else if (ev.metaKey || ev.ctrlKey) {
+    if (inbox.selection.has(key)) inbox.selection.delete(key); else inbox.selection.add(key);
+    inbox.anchor = key;
+  } else {
+    if (inbox.selection.size === 1 && inbox.selection.has(key)) inbox.selection.clear();
+    else { inbox.selection = new Set([key]); }
+    inbox.anchor = key;
+  }
+  renderInboxSheet();
+  updateSheetToolbar();
+}
+
+function updateSheetToolbar() {
+  const inbox = state.inbox;
+  const n = inbox.selection.size;
+  const label = document.getElementById("sheet-selection");
+  label.textContent = n
+    ? `${n} frame${n === 1 ? "" : "s"} selected`
+    : "Click a frame, shift-click for a range, ⌘-click to add.";
+  document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
+  document.getElementById("sheet-new-roll").disabled = n === 0;
+  document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(inbox.selection).some(k => segmentOf(k));
+  document.getElementById("sheet-clear").classList.toggle("hidden", n === 0);
+  const thumbs = document.getElementById("sheet-thumbs");
+  const missing = inboxFrames().some(f => f.preview && !inbox.thumbs.has(f.preview));
+  thumbs.disabled = !missing || !!inbox.thumbJob;
+  const unmatched = inboxFrames().filter(f => f.unmatched_jpeg);
+  const toggle = document.getElementById("sheet-unmatched");
+  toggle.classList.toggle("hidden", !unmatched.length);
+  if (unmatched.length) {
+    const allOut = unmatched.every(f => !segmentOf(f.key));
+    toggle.textContent = allOut ? `Include ${unmatched.length} JPEG-only frame${unmatched.length === 1 ? "" : "s"}` : `Leave out ${unmatched.length} JPEG-only frame${unmatched.length === 1 ? "" : "s"}`;
+    toggle.dataset.mode = allOut ? "include" : "exclude";
+  }
+}
+
+function firstSelectedKey() {
+  const keys = sortedKeys(Array.from(state.inbox.selection));
+  return keys[0] || null;
+}
+
+function canCutBefore(key) {
+  if (!key) return false;
+  const seg = segmentOf(key);
+  return !!seg && seg.frames[0] !== key;
+}
+
+// ----- segment operations -----
+
+function cutBeforeSelected() {
+  const key = firstSelectedKey();
+  const seg = segmentOf(key);
+  if (!seg || !canCutBefore(key)) return;
+  const at = seg.frames.indexOf(key);
+  const tail = seg.frames.slice(at);
+  seg.frames = seg.frames.slice(0, at);
+  const next = newSegment(tail, seg.tagging);
+  next.tagging.roll_date = seg.tagging.roll_date;
+  const pos = state.inbox.segments.indexOf(seg);
+  state.inbox.segments.splice(pos + 1, 0, next);
+  state.inbox.selection.clear();
+  afterSegmentsChanged([seg, next]);
+}
+
+function newRollFromSelection() {
+  const keys = sortedKeys(Array.from(state.inbox.selection));
+  if (!keys.length) return;
+  const touched = new Set();
+  for (const seg of state.inbox.segments) {
+    const before = seg.frames.length;
+    seg.frames = seg.frames.filter(k => !keys.includes(k));
+    if (seg.frames.length !== before) touched.add(seg);
+  }
+  const template = segmentOf(keys[0]) || state.inbox.segments[0];
+  const next = newSegment(keys, template ? template.tagging : null);
+  state.inbox.segments.push(next);
+  state.inbox.selection.clear();
+  afterSegmentsChanged([...touched, next]);
+}
+
+function leaveOutSelection() {
+  const keys = new Set(state.inbox.selection);
+  const touched = [];
+  for (const seg of state.inbox.segments) {
+    const before = seg.frames.length;
+    seg.frames = seg.frames.filter(k => !keys.has(k));
+    if (seg.frames.length !== before) touched.push(seg);
+  }
+  state.inbox.selection.clear();
+  afterSegmentsChanged(touched);
+}
+
+function addSelectionToSegment(id) {
+  const target = state.inbox.segments.find(s => s.id === id);
+  const keys = Array.from(state.inbox.selection);
+  if (!target || !keys.length) return;
+  const touched = new Set([target]);
+  for (const seg of state.inbox.segments) {
+    if (seg === target) continue;
+    const before = seg.frames.length;
+    seg.frames = seg.frames.filter(k => !keys.includes(k));
+    if (seg.frames.length !== before) touched.add(seg);
+  }
+  target.frames = sortedKeys([...target.frames, ...keys]);
+  state.inbox.selection.clear();
+  afterSegmentsChanged([...touched]);
+}
+
+function mergeSegmentIntoPrevious(id) {
+  const segs = state.inbox.segments;
+  const pos = segs.findIndex(s => s.id === id);
+  if (pos <= 0) return;
+  segs[pos - 1].frames = sortedKeys([...segs[pos - 1].frames, ...segs[pos].frames]);
+  segs.splice(pos, 1);
+  afterSegmentsChanged([segs[pos - 1]]);
+}
+
+function removeSegment(id) {
+  state.inbox.segments = state.inbox.segments.filter(s => s.id !== id);
+  afterSegmentsChanged([]);
+}
+
+function toggleUnmatchedFrames(mode) {
+  const unmatched = inboxFrames().filter(f => f.unmatched_jpeg).map(f => f.key);
+  if (mode === "exclude") {
+    state.inbox.selection = new Set(unmatched);
+    leaveOutSelection();
+    return;
+  }
+  // Include: each JPEG-only frame joins the roll of the nearest earlier
+  // assigned frame, else the first roll.
+  const touched = new Set();
+  for (const key of unmatched) {
+    if (segmentOf(key)) continue;
+    let target = null;
+    for (let i = sheetIndexOf(key) - 1; i >= 0 && !target; i--) target = segmentOf(inboxFrames()[i].key);
+    target = target || state.inbox.segments[0];
+    if (!target) { state.inbox.segments.push(newSegment([key])); target = state.inbox.segments[0]; }
+    else target.frames = sortedKeys([...target.frames, key]);
+    touched.add(target);
+  }
+  afterSegmentsChanged([...touched]);
+}
+
+function clearSheetSelection() {
+  state.inbox.selection.clear();
+  renderInboxSheet();
+  updateSheetToolbar();
+}
+
+function afterSegmentsChanged(touched) {
+  normalizeSegments();
+  renderInboxSheet();
+  renderRollCards();
+  updateSheetToolbar();
+  updateInboxRunButton();
+  for (const seg of touched) if (state.inbox.segments.includes(seg)) scheduleRollName(seg);
+}
+
+// ----- roll cards -----
+
+function segmentRangeText(seg) {
+  const first = frameByKey(seg.frames[0]);
+  const last = frameByKey(seg.frames[seg.frames.length - 1]);
+  const n = seg.frames.length;
+  const files = seg.frames.reduce((acc, k) => acc + (frameByKey(k)?.files.length || 0), 0);
+  const bytes = seg.frames.reduce((acc, k) => acc + (frameByKey(k)?.bytes || 0), 0);
+  const range = first && last ? (first === last ? first.display_key : `${first.display_key} – ${last.display_key}`) : "";
+  return `${n} frame${n === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"} · ${humanBytes(bytes)}${range ? ` · ${range}` : ""}`;
+}
+
+function renderRollCards() {
+  const host = document.getElementById("inbox-rolls");
+  host.innerHTML = "";
+  const segs = state.inbox.segments;
+  if (!segs.length) {
+    host.innerHTML = `<div class="library-empty">No rolls yet. Select frames on the sheet and press “New roll from selection”.</div>`;
+    return;
+  }
+  segs.forEach((seg, i) => host.appendChild(renderRollCard(seg, i)));
+  const left = unassignedKeys().length;
+  if (left) {
+    const note = document.createElement("div");
+    note.className = "lib-sub roll-left-note";
+    note.textContent = `${left} frame${left === 1 ? "" : "s"} left out: they stay in the source folder.`;
+    host.appendChild(note);
+  }
+}
+
+function compactTile(kind, entity, seg) {
+  const label = { camera: "Camera", lens: "Lens", film: "Film" }[kind];
+  const copy = !entity ? null
+    : kind === "camera" ? { title: entity.display_name, sub: cameraTypeLabel(entity.camera_type) || entity.mount || "" }
+    : kind === "lens" ? { title: entity.display_name, sub: [entity.focal_length_mm && `${entity.focal_length_mm}mm`, entity.max_aperture && `f/${entity.max_aperture}`].filter(Boolean).join(" · ") }
+    : { title: entity.display_name, sub: `ISO ${entity.box_speed_iso} · ${filmTypeLabel(entity.film_type)}` };
+  const colors = kind === "film" && entity ? filmBrandColors(entity.brand) : null;
+  const style = colors ? ` style="--brand-c1:${escapeHtml(colors[0])};--brand-c2:${escapeHtml(colors[1])}"` : "";
+  return `
+    <div class="tile compact ${kind}-tile${entity ? " selected" : ""}" data-kind="${kind}" data-seg="${seg.id}"${style}>
+      <div class="tile-label">${label}</div>
+      <div class="tile-content${entity ? "" : " empty"}">${entity ? escapeHtml(copy.title) : `Pick a ${kind}`}</div>
+      ${entity ? `<div class="tile-sub">${escapeHtml(copy.sub)}</div>` : ""}
+      ${entity ? `<button type="button" class="tile-clear" aria-label="Clear ${kind}" title="Clear">✕</button>` : ""}
+      ${colors ? canisterSvg("tile-canister") : ""}
+    </div>`;
+}
+
+function optionsHtml(items, selectedId, labelOf = (i) => i.display_name || i.name) {
+  return ['<option value="">(none)</option>', ...items.map(i =>
+    `<option value="${escapeHtml(i.id)}"${i.id === selectedId ? " selected" : ""}>${escapeHtml(labelOf(i))}</option>`)].join("");
+}
+
+function renderRollCard(seg, index) {
+  const el = document.createElement("div");
+  el.className = `roll-card seg-${index % SEGMENT_COLOR_COUNT}`;
+  el.dataset.id = seg.id;
+  const t = seg.tagging;
+  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
+  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
+  const canMerge = index > 0;
+  const selected = state.inbox.selection.size;
+  el.innerHTML = `
+    <div class="roll-card-head">
+      <span class="roll-card-index">Roll ${index + 1}</span>
+      <span class="roll-card-range">${escapeHtml(segmentRangeText(seg))}</span>
+      <span class="roll-card-actions">
+        <button type="button" class="action-link" data-act="add" ${selected ? "" : "disabled"}>Add ${selected ? `${selected} selected` : "selection"}</button>
+        ${canMerge ? `<button type="button" class="action-link" data-act="merge">Merge into roll ${index}</button>` : ""}
+        <button type="button" class="action-link" data-act="remove">Leave out</button>
+      </span>
+    </div>
+    <div class="roll-card-name">
+      <span class="tile-label">Folder name</span>
+      <input type="text" class="roll-name-input" value="${escapeHtml(seg.name)}" placeholder="from the template…" spellcheck="false" />
+      <button type="button" class="action-link roll-name-auto${seg.nameAuto ? " hidden" : ""}">use template</button>
+      <span class="roll-name-error${seg.nameError ? "" : " hidden"}">${escapeHtml(seg.nameError || "")}</span>
+    </div>
+    <div class="tile-row compact">
+      ${compactTile("camera", t.camera, seg)}
+      ${compactTile("lens", t.lens, seg)}
+      ${compactTile("film", t.film, seg)}
+    </div>
+    <div class="field-grid compact">
+      <label><span>Roll date</span><input type="date" data-field="roll_date" value="${escapeHtml(t.roll_date || "")}" /></label>
+      <label><span>Place / title</span><input type="text" data-field="place" value="${escapeHtml(t.place || "")}" placeholder="Jāņos, Mexico…" /></label>
+      <label><span>Development provider</span><select data-field="development_provider_id">${optionsHtml(devProviders, t.development_provider_id)}</select></label>
+      <label><span>Development method</span><select data-field="development_method_id">${optionsHtml(state.devMethods, t.development_method_id)}</select></label>
+      <label><span>Scan provider</span><select data-field="scan_provider_id">${optionsHtml(scanProviders, t.scan_provider_id)}</select></label>
+      <label><span>Scan method</span><select data-field="scan_method_id">${optionsHtml(state.scanMethods, t.scan_method_id)}</select></label>
+      <label class="full"><span>Roll notes</span><input type="text" data-field="roll_notes" value="${escapeHtml(t.roll_notes || "")}" /></label>
+    </div>
+  `;
+  el.querySelector("[data-act=add]").addEventListener("click", () => addSelectionToSegment(seg.id));
+  el.querySelector("[data-act=merge]")?.addEventListener("click", () => mergeSegmentIntoPrevious(seg.id));
+  el.querySelector("[data-act=remove]").addEventListener("click", () => removeSegment(seg.id));
+  const nameInput = el.querySelector(".roll-name-input");
+  nameInput.addEventListener("input", (e) => {
+    seg.name = e.target.value;
+    seg.nameAuto = false;
+    seg.nameError = null;
+    el.querySelector(".roll-name-auto").classList.remove("hidden");
+    el.querySelector(".roll-name-error").classList.add("hidden");
+    updateInboxRunButton();
+  });
+  el.querySelector(".roll-name-auto").addEventListener("click", () => {
+    seg.nameAuto = true;
+    void refreshRollName(seg);
+  });
+  for (const tile of el.querySelectorAll(".tile")) {
+    tile.addEventListener("click", () => openPicker(tile.dataset.kind, rollPickerTarget(seg)));
+    tile.querySelector(".tile-clear")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const kind = tile.dataset.kind;
+      if (kind === "camera") {
+        if (seg.tagging.lens && state.cameras.some(c => c.fixed_lens_id === seg.tagging.lens.id)) seg.tagging.lens = null;
+        seg.tagging.camera = null;
+      } else if (kind === "lens") seg.tagging.lens = null;
+      else seg.tagging.film = null;
+      renderRollCards();
+      scheduleRollName(seg);
+    });
+  }
+  for (const field of el.querySelectorAll("[data-field]")) {
+    field.addEventListener("change", (e) => {
+      seg.tagging[e.target.dataset.field] = e.target.value;
+      if (["roll_date", "place"].includes(e.target.dataset.field)) scheduleRollName(seg);
+    });
+  }
+  return el;
+}
+
+function rollPickerTarget(seg) {
+  return {
+    camera: () => seg.tagging.camera,
+    set(kind, item) {
+      const t = seg.tagging;
+      if (kind === "camera") {
+        t.camera = item;
+        if (item.fixed_lens_id) {
+          const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
+          if (lens) t.lens = lens;
+        }
+        if (t.lens && !lensMountMatchesCamera(t.lens, item)) t.lens = null;
+      } else if (kind === "lens") t.lens = item;
+      else if (kind === "film") t.film = item;
+      renderRollCards();
+      scheduleRollName(seg);
+    },
+  };
+}
+
+const rollNameTimers = new Map();
+
+function scheduleRollName(seg) {
+  if (!seg.nameAuto) return;
+  clearTimeout(rollNameTimers.get(seg.id));
+  rollNameTimers.set(seg.id, setTimeout(() => void refreshRollName(seg), INBOX_NAME_DEBOUNCE_MS));
+}
+
+async function refreshRollName(seg) {
+  if (!seg.nameAuto) return;
+  const t = seg.tagging;
+  try {
+    const res = await api("/api/naming/render", {
+      method: "POST",
+      body: JSON.stringify({
+        roll_date: t.roll_date || null,
+        camera_id: t.camera?.id || null,
+        film_stock_id: t.film?.id || null,
+        lens_id: t.lens?.id || null,
+        place: t.place || null,
+      }),
+    });
+    if (!seg.nameAuto) return;
+    seg.name = res.name || "";
+    seg.nameError = res.error ? `Template: ${res.error}` : null;
+  } catch (e) {
+    seg.nameError = `Could not render the name: ${e.message}`;
+  }
+  const card = document.querySelector(`.roll-card[data-id="${cssEscape(seg.id)}"]`);
+  if (card) {
+    card.querySelector(".roll-name-input").value = seg.name;
+    const err = card.querySelector(".roll-name-error");
+    err.textContent = seg.nameError || "";
+    err.classList.toggle("hidden", !seg.nameError);
+    card.querySelector(".roll-name-auto").classList.toggle("hidden", seg.nameAuto);
+  }
+  updateInboxRunButton();
+}
+
+// ----- destination and run -----
+
+function inboxDestination() {
+  const value = state.inbox.destination || "import-copy";
+  if (value === "split") return { kind: "split", mode: null };
+  return { kind: "import", mode: value.slice("import-".length) };
+}
+
+function renderInboxDestination() {
+  const select = document.getElementById("inbox-destination");
+  const hint = document.getElementById("inbox-dest-hint");
+  const root = state.settings?.library_root || "";
+  const current = state.inbox.destination || `import-${state.settings?.import_mode || "copy"}`;
+  state.inbox.destination = root || current === "split" ? current : "split";
+  for (const opt of select.options) opt.disabled = !root && opt.value !== "split";
+  select.value = state.inbox.destination;
+  const dest = inboxDestination();
+  const folder = (state.inbox.folder || "").replace(/\/+$/, "");
+  if (dest.kind === "import") {
+    hint.textContent = `${dest.mode === "move" ? "Move" : "Copy"} each roll to ${root}/<year>/<name>, verify every file, then tag it there.`;
+  } else {
+    const rootClean = root.replace(/\/+$/, "");
+    const parent = folder.slice(0, folder.lastIndexOf("/"));
+    const grand = parent.slice(0, parent.lastIndexOf("/"));
+    const where = rootClean && grand === rootClean ? `next to this folder, under ${parent.split("/").pop()}` : "as subfolders inside this folder";
+    hint.textContent = `Move the frames into new roll folders ${where}, then tag each one.${!root ? " Set a library root in Settings to import instead." : ""}`;
+  }
+}
+
+function inboxBlockers() {
+  const segs = state.inbox.segments;
+  const problems = [];
+  if (!segs.length) problems.push("no rolls");
+  const names = new Set();
+  for (const seg of segs) {
+    const name = (seg.name || "").trim();
+    if (!name) problems.push("a roll has no folder name");
+    else if (names.has(name.toLowerCase())) problems.push(`two rolls are named ${name}`);
+    names.add(name.toLowerCase());
+  }
+  if (inboxDestination().kind === "import" && !state.settings?.library_root) problems.push("no library root");
+  return problems;
+}
+
+function updateInboxRunButton() {
+  const btn = document.getElementById("inbox-run");
+  const dest = inboxDestination();
+  const n = state.inbox.segments.length;
+  const verb = dest.kind === "split" ? "Split into" : dest.mode === "move" ? "Move" : "Import";
+  btn.textContent = n ? `${verb} ${n} roll${n === 1 ? "" : "s"}` : verb;
+  const blockers = inboxBlockers();
+  btn.disabled = !!state.inbox.running || blockers.length > 0;
+  btn.title = blockers.join("; ");
+  document.getElementById("inbox-undo").classList.toggle("hidden", !state.inbox.lastOperation);
+}
+
+function rollTagging(seg) {
+  const t = seg.tagging;
+  return {
+    camera_id: t.camera?.id || null,
+    lens_id: t.lens?.id || null,
+    film_stock_id: t.film?.id || null,
+    development_provider_id: t.development_provider_id || null,
+    development_method_id: t.development_method_id || null,
+    scan_provider_id: t.scan_provider_id || null,
+    scan_method_id: t.scan_method_id || null,
+    roll_date: t.roll_date || null,
+    roll_notes: (t.roll_notes || "").trim() || null,
+    place: (t.place || "").trim() || null,
+  };
+}
+
+function inboxRequestBody() {
+  const dest = inboxDestination();
+  const body = {
+    folder: state.inbox.folder,
+    segments: state.inbox.segments.map(seg => ({ name: seg.name.trim(), frames: seg.frames, tagging: rollTagging(seg) })),
+  };
+  if (dest.kind === "import") body.mode = dest.mode;
+  return body;
+}
+
+function planErrorsText(e) {
+  // The server answers 400 with {"detail": {"errors": [...]}} for plan problems.
+  const m = /^\d{3} [^:]*: (.*)$/s.exec(e.message || "");
+  try {
+    const parsed = JSON.parse(m ? m[1] : e.message);
+    const errors = parsed?.detail?.errors || parsed?.errors;
+    if (Array.isArray(errors)) return errors.join("\n");
+    if (typeof parsed?.detail === "string") return parsed.detail;
+  } catch { /* not JSON */ }
+  return e.message;
+}
+
+function describePlan(plan, dest) {
+  const lines = [];
+  if (dest.kind === "split") {
+    lines.push(plan.layout === "siblings" ? `New roll folders next to the source, under ${plan.target_parent}:` : `New roll folders inside ${plan.target_parent}:`);
+  } else {
+    lines.push(`${dest.mode === "move" ? "Move" : "Copy"} ${humanBytes(plan.total_bytes)} into ${plan.root}:`);
+  }
+  for (const item of plan.items) {
+    const where = dest.kind === "split" ? item.name : `${item.year}/${item.name}`;
+    lines.push(`  ${where}  —  ${item.frames.length} frames, ${item.files.length} files, ${humanBytes(item.bytes)}`);
+  }
+  if (plan.unassigned.length) lines.push(`${plan.unassigned.length} frame${plan.unassigned.length === 1 ? "" : "s"} stay in the source folder.`);
+  if (plan.other_files.length) lines.push(`${plan.other_files.length} other file${plan.other_files.length === 1 ? "" : "s"} (${plan.other_files.slice(0, 3).join(", ")}${plan.other_files.length > 3 ? ", …" : ""}) stay behind.`);
+  if (dest.kind === "split" && plan.remove_source) lines.push("The source folder will be empty afterwards and is removed.");
+  if (dest.kind === "import") {
+    lines.push(dest.mode === "move"
+      ? "Sources are deleted only after every file of a roll has been read back and verified."
+      : "Every copy is read back and verified; the source folder is left as it is.");
+  }
+  lines.push("Each new folder is tagged with its roll's gear and film. The batch can be undone.");
+  return lines.join("\n");
+}
+
+async function runInboxBatch() {
+  const dest = inboxDestination();
+  if (inboxBlockers().length || state.inbox.running) return;
+  const body = inboxRequestBody();
+  const planUrl = dest.kind === "split" ? "/api/folder/split" : "/api/import/plan";
+  const applyUrl = dest.kind === "split" ? "/api/folder/split/apply" : "/api/import/apply";
+  let plan;
+  try {
+    plan = await api(planUrl, { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    await notify(planErrorsText(e), "The batch cannot run as planned");
+    return;
+  }
+  if (!plan.ok) {
+    const errors = [...plan.errors, ...plan.items.flatMap(i => i.errors.map(e => `${i.name}: ${e}`))];
+    await notify(errors.join("\n"), "The batch cannot run as planned");
+    return;
+  }
+  const okLabel = dest.kind === "split" ? "Split" : dest.mode === "move" ? "Move" : "Import";
+  if (!(await ask(describePlan(plan, dest), { title: `${okLabel} ${plan.items.length} roll${plan.items.length === 1 ? "" : "s"}?`, okLabel }))) return;
+
+  state.inbox.running = true;
+  state.inbox.result = null;
+  renderInboxResult(null);
+  updateInboxRunButton();
+  renderInboxProgress("Starting…", 0);
+  try {
+    const res = await fetch(applyUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(planErrorsText(new Error(`${res.status} ${res.statusText}: ${await res.text()}`)));
+    let done = null;
+    let total = 0;
+    let moved = 0;
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "start") {
+        total = ev.total || 0;
+        setPageTitleProgress(okLabel, 0, total);
+      } else if (ev.type === "progress") {
+        if (ev.step === "move") {
+          moved = ev.done;
+          renderInboxProgress(`Moving ${ev.done}/${ev.total} · ${ev.segment}`, total ? ev.done / total : null);
+          setPageTitleProgress("Moving", ev.done, ev.total);
+        } else if (ev.step === "copy") {
+          const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
+          renderInboxProgress(`${dest.mode === "move" ? "Moving" : "Copying"} ${ev.segment} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`, frac);
+          setPageTitleProgress("Copying", ev.files_done, ev.files_total);
+        } else if (ev.step === "verify" && ev.ok) {
+          const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
+          renderInboxProgress(`Verified ${ev.files_done}/${ev.files_total} · ${ev.segment}`, frac);
+        } else if (ev.step === "tag") {
+          renderInboxProgress(`Tagging ${ev.segment} · ${ev.file || ""}`, null);
+        } else if (ev.step === "remove") {
+          renderInboxProgress(`Removing sources · ${ev.segment} · ${ev.file}`, null);
+        }
+      } else if (ev.type === "done") {
+        done = ev;
+      } else if (ev.type === "error") {
+        throw new Error(ev.error || "the batch failed");
+      }
+    });
+    if (!done) throw new Error("stream ended without completion");
+    state.inbox.lastOperation = done.operation_id;
+    state.inbox.result = { done, dest };
+    renderInboxProgress(null);
+    renderInboxResult(state.inbox.result);
+    if (state.settings?.library_root) void loadLibrary({ rescan: true });
+    await reloadInboxAfterBatch();
+  } catch (e) {
+    renderInboxProgress(null);
+    await notify(e.message, dest.kind === "split" ? "Split failed" : "Import failed");
+  } finally {
+    state.inbox.running = false;
+    resetPageTitle();
+    updateInboxRunButton();
+  }
+}
+
+async function reloadInboxAfterBatch() {
+  const folder = state.inbox.folder;
+  const keepResult = state.inbox.result;
+  const keepOp = state.inbox.lastOperation;
+  try {
+    await api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`);
+  } catch {
+    // The source folder is gone (every frame moved out): keep the result on screen.
+    state.inbox.listing = null;
+    state.inbox.frames = [];
+    state.inbox.indexByKey = null;
+    state.inbox.segments = [];
+    state.inbox.selection = new Set();
+    renderInbox();
+    renderInboxResult(keepResult);
+    renderInboxBanner("The source folder is empty now and was removed.", "ok");
+    state.inbox.lastOperation = keepOp;
+    updateInboxRunButton();
+    return;
+  }
+  await loadInboxFolder(folder);
+  state.inbox.result = keepResult;
+  state.inbox.lastOperation = keepOp;
+  renderInboxResult(keepResult);
+  updateInboxRunButton();
+}
+
+function renderInboxProgress(text, fraction) {
+  const el = document.getElementById("inbox-progress");
+  if (!text) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  const pct = fraction === null || fraction === undefined ? null : Math.max(0, Math.min(100, Math.round(fraction * 100)));
+  el.innerHTML = `
+    <div class="progress-row">
+      <span class="progress-text">${escapeHtml(text)}</span>
+      <span class="progress-pct">${pct === null ? "" : `${pct}%`}</span>
+    </div>
+    <div class="progress-bar${pct === null ? " indeterminate" : ""}"><div class="progress-fill" style="width:${pct === null ? 30 : pct}%"></div></div>
+  `;
+}
+
+function renderInboxResult(result) {
+  const section = document.getElementById("inbox-result");
+  const body = document.getElementById("inbox-result-body");
+  if (!result) { section.classList.add("hidden"); body.innerHTML = ""; return; }
+  const { done, dest } = result;
+  section.classList.remove("hidden");
+  const rows = (done.created || []).map((c) => {
+    const files = c.files.length;
+    const problems = c.errors.length ? `<span class="pill bad">${c.errors.length} problem${c.errors.length === 1 ? "" : "s"}</span>` : "";
+    const skipped = c.tag_skipped ? `<span class="pill warn" title="${escapeHtml(c.tag_skipped)}">not tagged</span>` : "";
+    const verified = dest.kind === "import" ? (c.verified ? `<span class="pill ok">verified</span>` : `<span class="pill bad">incomplete</span>`) : "";
+    return `
+      <div class="result-row">
+        <code title="${escapeHtml(c.path)}">${escapeHtml(c.name)}</code>
+        <span class="lib-sub">${files} file${files === 1 ? "" : "s"} · ${c.applied.length} tagged</span>
+        <span class="result-pills">${verified}${skipped}${problems}</span>
+        <span class="lib-actions">
+          <button type="button" class="secondary" data-open="${escapeHtml(c.path)}">Open</button>
+          <button type="button" class="secondary" data-reveal="${escapeHtml(c.path)}">Reveal</button>
+        </span>
+      </div>`;
+  }).join("");
+  const errors = (done.errors || []);
+  body.innerHTML = `
+    <div class="result-list">${rows || `<div class="lib-sub">Nothing was created.</div>`}</div>
+    ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
+    ${dest.kind === "split" && done.removed_source ? `<div class="lib-sub" style="margin-top:10px">The emptied source folder was removed; its old manifest is kept in the undo journal.</div>` : ""}
+    ${dest.kind === "import" && done.removed_sources?.length ? `<div class="lib-sub" style="margin-top:10px">${done.removed_sources.length} source file${done.removed_sources.length === 1 ? "" : "s"} removed after verification.</div>` : ""}
+    ${errors.length ? `<pre class="result-errors">${escapeHtml(errors.join("\n"))}</pre>` : ""}
+  `;
+  for (const btn of body.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openFolderInTagView(btn.dataset.open, null));
+  for (const btn of body.querySelectorAll("[data-reveal]")) btn.addEventListener("click", () => void revealFolder(btn.dataset.reveal));
+}
+
+async function undoInboxBatch() {
+  const opId = state.inbox.lastOperation;
+  if (!opId || state.inbox.running) return;
+  const ok = await ask(
+    "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.",
+    { okLabel: "Undo batch" }
+  );
+  if (!ok) return;
+  state.inbox.running = true;
+  updateInboxRunButton();
+  renderInboxProgress("Undoing…", null);
+  try {
+    const res = await fetch(`/api/operations/${encodeURIComponent(opId)}/undo`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    let done = null;
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "progress" && ev.file) renderInboxProgress(`Restoring ${ev.file}`, null);
+      else if (ev.type === "done") done = ev;
+      else if (ev.type === "error") throw new Error(ev.error || "undo failed");
+    });
+    if (!done) throw new Error("stream ended without completion");
+    state.inbox.lastOperation = null;
+    state.inbox.result = null;
+    renderInboxProgress(null);
+    renderInboxResult(null);
+    const n = (done.restored || []).length + (done.removed || []).length;
+    const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
+    await notify(`${n} file${n === 1 ? "" : "s"} put back, ${(done.removed_folders || []).length} folder${(done.removed_folders || []).length === 1 ? "" : "s"} removed.${problems}`, "Batch undone");
+    if (state.settings?.library_root) void loadLibrary({ rescan: true });
+    if (state.inbox.folder) await loadInboxFolder(state.inbox.folder);
+  } catch (e) {
+    renderInboxProgress(null);
+    await notify(e.message, "Undo failed");
+  } finally {
+    state.inbox.running = false;
+    updateInboxRunButton();
+  }
+}
+
+function humanBytes(n) {
+  if (!n && n !== 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(n);
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
+  return i === 0 ? `${value} B` : `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+// ----- Tag view: read-only sheet -----
+
+async function loadTagSheet() {
+  const section = document.getElementById("tag-sheet-section");
+  const folder = state.folder;
+  if (!folder || !state.scan) { section.classList.add("hidden"); state.tagFrames = null; return; }
+  try {
+    const listing = await api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`);
+    if (state.folder !== folder) return;
+    state.tagFrames = listing;
+  } catch {
+    state.tagFrames = null;
+  }
+  renderTagSheet();
+}
+
+function renderTagSheet() {
+  const section = document.getElementById("tag-sheet-section");
+  const listing = state.tagFrames;
+  if (!listing || !listing.frames.length || !state.scan) { section.classList.add("hidden"); return; }
+  section.classList.remove("hidden");
+  const scanFiles = new Map((state.scan.files || []).map(f => [f.name, f]));
+  const n = listing.frames.length;
+  document.getElementById("tag-sheet-count").textContent = `${n} frame${n === 1 ? "" : "s"}`;
+  renderContactSheet(document.getElementById("tag-sheet"), {
+    folder: state.folder,
+    frames: listing.frames,
+    hasThumb: (file) => fileHasPreview(scanFiles.get(file)),
+    invert: state.previewInvert,
+    segmentIndex: null,
+    selection: null,
+    onClick: (key) => {
+      const frame = listing.frames.find(f => f.key === key);
+      if (frame?.preview) void openSourceFile(frame.preview);
+    },
+    compact: true,
+  });
+}
+
 // ---------- Wiring ----------
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -2769,6 +3800,7 @@ window.addEventListener("DOMContentLoaded", () => {
     saveStickyState();
     clearPreviewStatus();
     if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
+    renderTagSheet();
   });
   document.getElementById("create-previews-btn").addEventListener("click", onCreatePreviews);
   document.getElementById("dry-run-btn").addEventListener("click", onDryRun);
@@ -2779,6 +3811,7 @@ window.addEventListener("DOMContentLoaded", () => {
   for (const tab of document.querySelectorAll(".view-tab")) {
     tab.addEventListener("click", () => {
       if (tab.dataset.view === "library") void openLibrary();
+      else if (tab.dataset.view === "inbox") void openInbox();
       else showView(tab.dataset.view);
     });
   }
@@ -2814,6 +3847,32 @@ window.addEventListener("DOMContentLoaded", () => {
     document.getElementById("general-settings-form").elements[name].addEventListener("input", renderTemplateExample);
   }
   document.getElementById("general-library-browse").addEventListener("click", onBrowseLibraryRoot);
+
+  // Inbox view
+  document.getElementById("inbox-browse").addEventListener("click", () => void onInboxBrowse());
+  document.getElementById("inbox-load").addEventListener("click", () => void loadInboxFolder(document.getElementById("inbox-folder").value));
+  document.getElementById("inbox-folder").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); void loadInboxFolder(e.target.value); }
+  });
+  document.getElementById("sheet-cut").addEventListener("click", cutBeforeSelected);
+  document.getElementById("sheet-new-roll").addEventListener("click", newRollFromSelection);
+  document.getElementById("sheet-leave-out").addEventListener("click", leaveOutSelection);
+  document.getElementById("sheet-clear").addEventListener("click", clearSheetSelection);
+  document.getElementById("sheet-thumbs").addEventListener("click", () => void buildInboxThumbnails());
+  document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
+  document.getElementById("inbox-destination").addEventListener("change", (e) => {
+    state.inbox.destination = e.target.value;
+    if (e.target.value.startsWith("import-")) {
+      const mode = e.target.value.slice("import-".length);
+      if (state.settings) state.settings.import_mode = mode;
+      queueSettingsPatch({ import_mode: mode });
+    }
+    renderInboxDestination();
+    updateInboxRunButton();
+  });
+  document.getElementById("inbox-run").addEventListener("click", () => void runInboxBatch());
+  document.getElementById("inbox-undo").addEventListener("click", () => void undoInboxBatch());
+  document.getElementById("tag-sheet-split").addEventListener("click", () => void openInbox({ folder: state.folder, destination: "split" }));
 
   setupWindowDrop();
 });

@@ -156,13 +156,17 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     steps = {e.get("step") for e in events}
     assert {"move", "tag", "segment"} <= steps
 
+    # Real ExifTool would have seeded a sidecar for the raw that had none.
+    (gold / "DSC0004.xmp").write_text("<x/>")
+
     with Session(get_engine()) as session:
         op = operations.get(session, result["operation_id"])
         assert op.kind == "split" and op.status == "done"
         undo = fileops.undo_split(session, result["operation_id"])
         assert operations.get(session, result["operation_id"]).status == "undone"
 
-    assert len(undo["restored"]) == 17
+    assert len(undo["restored"]) == 18  # 17 moves back plus the tagging sidecar
+    assert (mixed / "DSC0004.xmp").is_file()
     assert sorted(undo["removed_folders"]) == sorted([str(gold), str(hp5)])
     assert not gold.exists() and not hp5.exists()
     names = sorted(p.name for p in mixed.iterdir())

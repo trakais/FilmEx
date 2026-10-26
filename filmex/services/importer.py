@@ -443,6 +443,21 @@ def undo_import(
                 errors.append(f"{name}: {exc}")
                 emit({"type": "progress", "step": "restore", "file": name, "ok": False, "error": str(exc)})
         if folder.is_dir():
+            copied_names = {entry["name"] for entry in record.get("files", [])}
+            for sidecar in fileops.tagging_sidecars(folder, sorted(copied_names)):
+                if sidecar.name in copied_names:
+                    continue
+                try:
+                    if mode == "move":
+                        # The raw went back to the source; its metadata goes with it.
+                        back = Path(record["files"][0]["from"]).parent / sidecar.name
+                        if back.exists():
+                            raise OSError("a sidecar with that name is back in the source already")
+                        copy_verify(sidecar, back)
+                    os.remove(sidecar)
+                    removed.append(str(sidecar))
+                except (OSError, VerifyError) as exc:
+                    errors.append(f"{sidecar.name}: {exc}")
             manifest_path = mf.manifest_path_for(folder)
             if manifest_path.is_file():
                 try:

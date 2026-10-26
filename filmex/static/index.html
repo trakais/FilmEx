@@ -41,6 +41,7 @@
     <div class="brand">FilmEx</div>
     <nav class="view-nav" aria-label="Views">
       <button type="button" class="view-tab" data-view="library">Library</button>
+      <button type="button" class="view-tab" data-view="inbox">Inbox</button>
       <button type="button" class="view-tab active" data-view="workflow">Tag</button>
     </nav>
     <div class="status" id="status">
@@ -89,6 +90,63 @@
     <div id="library-groups" class="library-groups"></div>
   </main>
 
+  <!-- Inbox view: a folder of fresh scans (or a mixed library folder) cut
+       into rolls on a contact sheet, then imported into the library or
+       split in place. -->
+  <main id="inbox-view" class="hidden">
+    <section class="inbox-head">
+      <h2>Inbox</h2>
+      <div class="folder-row">
+        <input id="inbox-folder" type="text" placeholder="/Users/you/Scans/inbox — a folder with one or more rolls" autocomplete="off" list="folder-history" />
+        <button id="inbox-browse" class="secondary" type="button">Browse…</button>
+        <button id="inbox-load" class="secondary" type="button">Load</button>
+      </div>
+      <div id="inbox-summary" class="summary readout hidden"></div>
+      <div id="inbox-banner" class="summary hidden"></div>
+    </section>
+
+    <section id="inbox-sheet-section" class="hidden">
+      <h2>Contact sheet</h2>
+      <div class="sheet-toolbar">
+        <span id="sheet-selection" class="lib-sub"></span>
+        <button id="sheet-unmatched" class="secondary hidden" type="button" data-mode="exclude"></button>
+        <button id="sheet-thumbs" class="secondary" type="button">Thumbnails</button>
+        <button id="sheet-cut" class="secondary" type="button" disabled title="Start a new roll at the selected frame">Cut here</button>
+        <button id="sheet-new-roll" class="secondary" type="button" disabled>New roll from selection</button>
+        <button id="sheet-leave-out" class="secondary" type="button" disabled title="Keep the selected frames in the source folder">Leave out</button>
+        <button id="sheet-clear" class="action-link hidden" type="button">Clear selection</button>
+      </div>
+      <div id="contact-sheet" class="contact-sheet"></div>
+    </section>
+
+    <section id="inbox-rolls-section" class="hidden">
+      <h2>Rolls</h2>
+      <div id="inbox-rolls" class="roll-cards"></div>
+    </section>
+
+    <section id="inbox-actions" class="actions-section hidden">
+      <div class="actions-left">
+        <label class="inbox-dest">Destination
+          <select id="inbox-destination">
+            <option value="import-copy">Library · copy</option>
+            <option value="import-move">Library · move</option>
+            <option value="split">Split in place</option>
+          </select>
+        </label>
+        <span id="inbox-dest-hint" class="lib-sub"></span>
+      </div>
+      <div class="actions-right">
+        <button id="inbox-undo" class="secondary hidden" type="button">Undo last batch</button>
+        <button id="inbox-run" class="danger" type="button" disabled>Import</button>
+      </div>
+    </section>
+    <section id="inbox-progress" class="summary hidden"></section>
+    <section id="inbox-result" class="apply-section hidden">
+      <h2>Done</h2>
+      <div id="inbox-result-body"></div>
+    </section>
+  </main>
+
   <main id="workflow-view">
     <!-- Step 1: Folder -->
     <section class="folder-section">
@@ -106,6 +164,13 @@
       </div>
       <div id="scan-summary" class="summary readout hidden"></div>
       <div id="manifest-summary" class="summary hidden"></div>
+    </section>
+
+    <!-- Contact sheet of the folder: a look at the roll before tagging, and
+         the way into a split when two rolls landed in one scan. -->
+    <section id="tag-sheet-section" class="hidden">
+      <h2>Frames <span id="tag-sheet-count" class="lib-sub"></span><button id="tag-sheet-split" class="action-link" type="button">Split into rolls…</button></h2>
+      <div id="tag-sheet" class="contact-sheet compact"></div>
     </section>
 
     <!-- Step 2: Three tiles -->
