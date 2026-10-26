@@ -7,8 +7,6 @@ service layer.
 
 from __future__ import annotations
 
-from typing import Optional
-
 import json
 import os
 import re
@@ -703,7 +701,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _select_files(scan: fs.ScanResult, requested: Optional[list[str]]) -> list[Path]:
+def _select_files(scan: fs.ScanResult, requested: list[str] | None) -> list[Path]:
     """All scanned files, or only the requested subset (validated by name)."""
     if requested is None:
         return [scan.folder / f.name for f in scan.files]
