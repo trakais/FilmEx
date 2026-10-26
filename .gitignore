@@ -37,3 +37,9 @@ Thumbs.db
 *.sqlite-shm
 *.sqlite-wal
 *.sqlite-journal
+
+# Packaging outputs
+build/
+dist/
+packaging/vendor/
+packaging/FilmEx.icns

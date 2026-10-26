@@ -26,12 +26,20 @@ subprocess on the same machine as the files. Python 3.11+. Managed with `uv`.
 
 ```bash
 uv sync                  # first time only
-./filmex-run             # macOS/Linux (Windows: filmex-run.cmd)
+uv run filmex            # desktop window (pywebview), no Terminal needed
+./filmex-run             # browser mode: macOS/Linux (Windows: filmex-run.cmd)
 uv run pytest            # run the test suite
 uv run ruff check .      # lint
+packaging/build-macos.sh # FilmEx.app + DMG (see packaging/)
 ```
 
-The server binds `127.0.0.1:8765` by default. Override with `FILMEX_PORT`.
+Browser mode binds `127.0.0.1:8765` by default (override with `FILMEX_PORT`).
+The desktop shell picks a random loopback port and a per-launch token.
+`FILMEX_SMOKE_SECONDS=8 uv run filmex` opens the window, checks the page
+initialised, and closes it: use it to verify a build without a human.
+
+The phased plan for the desktop upgrade lives in `docs/upgrade-plan.md`.
+Tick tasks there as they land.
 
 ---
 
@@ -40,18 +48,23 @@ The server binds `127.0.0.1:8765` by default. Override with `FILMEX_PORT`.
 ```
 filmex/
 ├── filmex/
-│   ├── main.py               # FastAPI app factory
+│   ├── main.py               # FastAPI app factory (+ loopback guard, token exchange)
+│   ├── desktop.py            # `filmex` entry point: server thread + pywebview window
+│   ├── security.py           # LoopbackGuard middleware (Host/Origin/token)
 │   ├── db.py                 # engine, session, bootstrap from default_data.sqlite
-│   ├── config.py             # DATA_DIR resolution
+│   ├── config.py             # data dir resolution (env / checkout / per-user)
 │   ├── migrations.py         # PRAGMA user_version app-managed migrations
-│   ├── models/               # SQLModel tables
+│   ├── models/               # SQLModel tables (+ app_setting)
 │   ├── schemas/              # Pydantic request/response DTOs
-│   ├── routes/               # FastAPI routers (entities, workflow, health)
-│   ├── services/             # exiftool, keywords, folder scan, manifest
+│   ├── routes/               # entities, workflow, health, settings, jobs
+│   ├── services/             # exiftool (+locator), keywords, folder scan,
+│   │                         # manifest, previews, settings, jobs
 │   ├── static/               # vanilla-JS single-page UI
 │   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
-│   └── default_data.sqlite   # bundled starter DB; copied to data/ on first run
-├── data/                     # gitignored — user's live DB + runtime state
+│   └── default_data.sqlite   # bundled starter DB; copied to the data dir on first run
+├── packaging/                # PyInstaller spec, icon generator, build + vendoring scripts
+├── docs/upgrade-plan.md      # phased plan with status checkboxes
+├── data/                     # gitignored — checkout's live DB + runtime state
 ├── examples/
 │   └── entities-batch.json   # sample batch for the CLI
 ├── scripts/
@@ -59,8 +72,13 @@ filmex/
 └── tests/
 ```
 
-`data/filmex.sqlite` is the single source of truth at runtime. Edits to
-`filmex/default_data.sqlite` only affect fresh installs.
+The SQLite file in the data directory is the single source of truth at
+runtime. Edits to `filmex/default_data.sqlite` only affect fresh installs.
+
+Data directory resolution (`filmex/config.py`): `FILMEX_DATA_DIR` if set;
+otherwise `<checkout>/data` when running from a source checkout; otherwise
+the platform per-user directory (`~/Library/Application Support/FilmEx` on
+macOS) for the packaged app and `uv tool install`ed copies.
 
 ---
 
@@ -115,6 +133,15 @@ Foma, Fomapan, Agfa, Harman, CineStill, Rollei, Lomography. The migration path b
 brand backfills on already-upgraded DBs. Known brands get pre-populated
 palettes; unknown brands land with null colors (edit in Settings → Film
 brands).
+
+### AppSetting
+Key/value table (`app_setting`) holding every persisted setting and the UI's
+sticky state: library root, recent folders, last folder and selection, theme,
+preview inversion, ExifTool path, naming template, import mode, window
+geometry. Typed defaults and validation live in `services/settings.py`
+(`SPECS`); unknown keys are rejected. Add a key there, never ad hoc. Nothing
+user-facing is stored in browser `localStorage` any more (only a theme hint
+for the first paint).
 
 ### Provider
 Single table for labs and self-service providers. `kinds` is a set-ish JSON
@@ -176,6 +203,30 @@ the roll, not on the film stock. Don't create separate `Portra 400 @ 1600`
 film stock rows.
 
 ---
+
+## Runtime: shell, jobs, guard, ExifTool
+
+- **Desktop shell** (`filmex/desktop.py`): one process. uvicorn runs in a
+  daemon thread on a random loopback port; pywebview shows the page; closing
+  the window stops the server. The server never imports pywebview; desktop
+  behaviour lives in `desktop.py` and behind `window.pywebview` checks in
+  `app.js` (`pickFolder()`, `window.filmexDesktop.onDrop`).
+- **Loopback guard** (`filmex/security.py`): `/api/*` rejects non-loopback
+  `Host` headers (DNS rebinding) and foreign `Origin` headers (cross-site
+  posts). In desktop mode the window opens `/?token=…` once; the server
+  swaps it for a `SameSite=Strict` cookie that every API call must carry.
+  Tests must use a loopback `base_url`.
+- **Jobs** (`services/jobs.py`): long operations (apply, preview build, and
+  later rename / split / import) run as in-process jobs with an ordered
+  event log. `GET /api/jobs/{id}/events` replays and follows; `POST
+  /api/jobs/{id}/cancel` requests a stop that bodies check between files.
+  Jobs that mutate the user's files are `exclusive` and serialize. An apply
+  that is cancelled or fails still writes its manifest with the files
+  actually applied.
+- **ExifTool discovery** (`services/exiftool_locator.py`): setting →
+  `FILMEX_EXIFTOOL` → `PATH` → Homebrew/system candidates → bundled copy.
+  Never spawn a bare `"exiftool"`; take the argv prefix from the locator.
+- **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
 
 ## Metadata write policy
 
@@ -349,7 +400,12 @@ Fixtures in `conftest.py` seed a minimal camera + lens through the public API
 so route tests don't duplicate setup.
 
 Must stay covered:
-- ExifTool argument builder (sidecar vs embed, merge semantics)
+- ExifTool argument builder (sidecar vs embed, merge semantics, command prefix)
+- ExifTool locator resolution order
+- Settings defaults, validation, persistence across engine reset
+- Loopback guard (foreign Host / Origin rejected, token cookie exchange)
+- Job runner (replay, cancel, exclusivity) and manifest written on a
+  cancelled or failed apply
 - Idempotent re-apply (no duplicate keywords)
 - Existing XMP sidecar merge
 - Archive flag filtering

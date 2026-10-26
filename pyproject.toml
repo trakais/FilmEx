@@ -18,6 +18,9 @@ dependencies = [
 filmex = "filmex.desktop:main"
 
 [dependency-groups]
+build = [
+    "pyinstaller>=6.22.3",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",

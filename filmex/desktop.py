@@ -289,6 +289,16 @@ class Shell:
             title = self.window.evaluate_js("document.title")
             bridge = self.window.evaluate_js("typeof window.filmexDesktop")
             _log.info("smoke: title=%r ready=%r bridge=%r", title, ready, bridge)
+            from filmex.config import data_dir
+            from filmex.services import exiftool_locator
+
+            location = exiftool_locator.locate()
+            _log.info(
+                "smoke: data_dir=%s exiftool=%s (%s)",
+                data_dir(),
+                location.path if location else None,
+                location.source if location else "not found",
+            )
             # Exercise the geometry path, which `destroy()` would otherwise skip.
             self.window.resize(DEFAULT_SIZE[0] - 40, DEFAULT_SIZE[1] - 40)
         except Exception as exc:  # noqa: BLE001

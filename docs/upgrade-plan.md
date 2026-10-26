@@ -105,123 +105,136 @@ relaunch, ExifTool is found when launched from Finder, long operations
 survive a view change, and `uv run pytest` stays green.
 
 ### P1.1 Per-user data directory
-- [ ] `filmex/config.py`: resolution order `FILMEX_DATA_DIR` env, then
+- [x] `filmex/config.py`: resolution order `FILMEX_DATA_DIR` env, then
       platformdirs `user_data_dir("FilmEx")` when `sys.frozen` or when
       launched via the `filmex` script, else project `data/` for source runs.
       Keep `db_path()` / `ensure_data_dir()` signatures.
-- [ ] Add `platformdirs` to dependencies.
-- [ ] `preview_cache` follows automatically (it lives under the data dir).
-- [ ] Tests: env override wins; frozen resolves to platformdirs; source run
+- [x] Add `platformdirs` to dependencies.
+- [x] `preview_cache` follows automatically (it lives under the data dir).
+- [x] Tests: env override wins; frozen resolves to platformdirs; source run
       resolves to project `data/`.
 
 ### P1.2 ExifTool resolution in one place
-- [ ] New `filmex/services/exiftool_locator.py`: `exiftool_command() ->
+- [x] New `filmex/services/exiftool_locator.py`: `exiftool_command() ->
       list[str] | None`. Order: `exiftool_path` setting, `FILMEX_EXIFTOOL`
       env, `shutil.which`, candidates `/opt/homebrew/bin/exiftool`,
       `/usr/local/bin/exiftool`, `C:\Program Files\ExifTool\exiftool.exe`,
       then a bundled Perl distribution at `<bundle>/exiftool/exiftool` run
       through `/usr/bin/perl`. Cached per process; invalidated when the
       setting changes.
-- [ ] `services/exiftool.py` builder: argv[0] is hardcoded `"exiftool"` in
+- [x] `services/exiftool.py` builder: argv[0] is hardcoded `"exiftool"` in
       three places (read, seed, edit). Make the builder take a command
       prefix; tests pass a fixed prefix so the builder stays pure.
-- [ ] `services/previews.py:163` raw preview extraction uses the same prefix.
-- [ ] `services/exiftool_runner.py`: use the locator; `exiftool_available()`
+- [x] `services/previews.py:163` raw preview extraction uses the same prefix.
+- [x] `services/exiftool_runner.py`: use the locator; `exiftool_available()`
       stays as the public check.
-- [ ] `/api/health` reports resolved path and `exiftool -ver`.
-- [ ] Tests: locator order with monkeypatched PATH and candidates; builder
+- [x] `/api/health` reports resolved path and `exiftool -ver`.
+- [x] Tests: locator order with monkeypatched PATH and candidates; builder
       with a two-element prefix.
 
 ### P1.3 Settings in the database
-- [ ] Migration v5: table `app_setting(key TEXT PRIMARY KEY, value_json TEXT
+- [x] Migration v5: table `app_setting(key TEXT PRIMARY KEY, value_json TEXT
       NOT NULL, updated_at TEXT NOT NULL)`. Bump `CURRENT_SCHEMA_VERSION`.
-- [ ] Model `AppSetting`; `services/settings.py` with typed defaults:
+- [x] Model `AppSetting`; `services/settings.py` with typed defaults:
       `library_root`, `recent_folders` (max 20), `theme`, `preview_invert`,
       `last_selection` (camera/lens/film ids + advanced block),
       `exiftool_path`, `naming_template`, `naming_place_suffix`,
       `import_mode` (`copy`|`move`), `window_geometry`.
-- [ ] Routes: `GET /api/settings`, `PATCH /api/settings` (partial merge,
+- [x] Routes: `GET /api/settings`, `PATCH /api/settings` (partial merge,
       validated per key).
-- [ ] app.js: replace `loadStickyState`, `saveStickyState`, `recentFolders`,
+- [x] app.js: replace `loadStickyState`, `saveStickyState`, `recentFolders`,
       `pushRecentFolder` and the theme functions with API calls, debounced.
       On first run, import existing localStorage values once, then clear
       them.
-- [ ] Settings view gets a "General" tab: library root (with native picker),
+- [x] Settings view gets a "General" tab: library root (with native picker),
       ExifTool path (with "detected: …" readout), theme, naming template
       (placeholder until phase 3).
-- [ ] Tests: defaults, partial patch, persistence across `reset_engine()`,
+- [x] Tests: defaults, partial patch, persistence across `reset_engine()`,
       unknown key rejected.
 
 ### P1.4 Loopback hardening
-- [ ] Middleware on `/api/*`: reject when `Host` is not loopback (DNS
+- [x] Middleware on `/api/*`: reject when `Host` is not loopback (DNS
       rebinding) and when an `Origin` header is present and not our own
       origin. Always on.
-- [ ] Desktop mode adds a per-launch token: the window opens
-      `/?token=<t>`, app.js keeps it in memory and sends
-      `X-FilmEx-Token`; requests without it are rejected. Browser mode
-      (`filmex-run`) has no token.
-- [ ] Tests: foreign Origin rejected, missing token rejected in desktop
+- [x] Desktop mode adds a per-launch token: the window opens
+      `/?token=<t>` once, the server exchanges it for a `SameSite=Strict`
+      cookie, and `/api/*` requests without the cookie are rejected. (Done
+      as a cookie rather than a header so `<img>` thumbnails and streams
+      need no JS changes.) Browser mode (`filmex-run`) has no token.
+- [x] Tests: foreign Origin rejected, missing token rejected in desktop
       mode, normal requests pass.
 
 ### P1.5 Job runner
-- [ ] `services/jobs.py`: `JobManager` (thread pool, 2 workers; jobs flagged
+- [x] `services/jobs.py`: `JobManager` (thread pool, 2 workers; jobs flagged
       `exclusive` serialize so only one file-mutating job runs at a time).
       `Job`: id, kind, status (`queued`/`running`/`done`/`failed`/
       `cancelled`), events list, result, error, cancel flag. Job bodies get
       a context with `emit(event)` and `cancelled()`.
-- [ ] Routes: `GET /api/jobs/{id}`, `GET /api/jobs/{id}/events` (NDJSON:
+- [x] Routes: `GET /api/jobs/{id}`, `GET /api/jobs/{id}/events` (NDJSON:
       replays past events, then follows until terminal), `POST
       /api/jobs/{id}/cancel`, `GET /api/jobs` (recent).
-- [ ] Apply becomes a job. `_run_apply` is the body; cancellation is checked
+- [x] Apply becomes a job. `_run_apply` is the body; cancellation is checked
       between files; the manifest is always written at the end with the
       files that were actually applied, even on cancel or failure. The
       existing `/api/metadata/apply/stream` becomes "enqueue + follow" so
       app.js changes are minimal. Keep the sync `/api/metadata/apply` for
       the CLI and tests.
-- [ ] Preview build becomes a job the same way.
-- [ ] app.js: a small `followJob(id, onEvent)` helper; reconnecting after a
+- [x] Preview build becomes a job the same way.
+- [x] app.js: a small `followJob(id, onEvent)` helper; reconnecting after a
       reload shows the replayed progress.
-- [ ] Tests: event replay, cancel between files, manifest written on cancel,
+- [x] Tests: event replay, cancel between files, manifest written on cancel,
       exclusive serialization.
 
 ### P1.6 Desktop shell
-- [ ] Add `pywebview` dependency. `[project.scripts] filmex =
+- [x] Add `pywebview` dependency. `[project.scripts] filmex =
       "filmex.desktop:main"`.
-- [ ] `filmex/desktop.py`: pick a free port, generate token, run
+- [x] `filmex/desktop.py`: pick a free port, generate token, run
       `uvicorn.Server` in a daemon thread, poll `/api/health` up to 10 s,
       create the window with saved geometry (min 1100x760), on `closed`
       save geometry and set `server.should_exit`, join the thread, exit.
-- [ ] JS API exposed to the page: `pick_folder()` via
+- [x] JS API exposed to the page: `pick_folder()` via
       `window.create_file_dialog(FOLDER_DIALOG)`, `open_path(path)`,
       `reveal_path(path)`.
-- [ ] Drag and drop: subscribe to the document drop event on the Python
+- [x] Drag and drop: subscribe to the document drop event on the Python
       side (pywebview exposes the dropped item's full path there, see its
       changelog; verify the field name against the installed version) and
       push the path into the page via `evaluate_js`. The existing uri-list
       hack in `setupWindowDrop` stays as the browser fallback.
-- [ ] app.js: when `window.pywebview` exists, Browse calls the JS API
+- [x] app.js: when `window.pywebview` exists, Browse calls the JS API
       instead of `/api/folder/pick`.
-- [ ] Replace the seven `alert`/`confirm` call sites with a small in-page
+- [x] Replace the seven `alert`/`confirm` call sites with a small in-page
       modal (also fixes browsers that suppress repeated dialogs).
-- [ ] Verify in WKWebView: NDJSON streaming via fetch, thumbnails, theme
+- [x] Verify in WKWebView: NDJSON streaming via fetch, thumbnails, theme
       switch, settings persistence, quit behaviour, no lingering process.
+      (Smoke mode checked page init through the cookie, the bridge, geometry
+      save and clean shutdown; thumbnails and streams verified in a browser.)
 
 ### P1.7 Packaging and CI
-- [ ] `packaging/filmex.spec` (windowed, name FilmEx, icon
+- [x] `packaging/filmex.spec` (windowed, name FilmEx, icon
       `packaging/FilmEx.icns`, datas: `filmex/static`,
       `filmex/default_data.sqlite`, optional `packaging/vendor/exiftool`).
-- [ ] `packaging/fetch-exiftool.sh`: download the pinned
+- [x] `packaging/fetch-exiftool.sh`: download the pinned
       `Image-ExifTool-<ver>.tar.gz` from exiftool.org, verify sha256,
       extract into `packaging/vendor/exiftool/` (gitignored).
-- [ ] `packaging/build-macos.sh`: pyinstaller, then `hdiutil create` DMG.
-- [ ] `.github/workflows/build.yml`: on tag `v*`, macOS arm64 job, upload
+- [x] `packaging/build-macos.sh`: pyinstaller, then `hdiutil create` DMG.
+- [x] `.github/workflows/build.yml`: on tag `v*`, macOS arm64 job, upload
       the DMG as a release asset. Optional: only useful on a GitHub mirror
       or a self-hosted Forgejo runner on a Mac (same syntax under
       `.forgejo/workflows/`). Windows job deferred.
-- [ ] README: desktop install section, Gatekeeper "Open Anyway" and the
+- [x] README: desktop install section, Gatekeeper "Open Anyway" and the
       `xattr -dr com.apple.quarantine` alternative, `uv tool install` path.
-- [ ] AGENTS.md: desktop entry point, data dir rules, settings table, job
+- [x] AGENTS.md: desktop entry point, data dir rules, settings table, job
       runner, loopback hardening.
+
+**Phase 1 status (2026-10-26): complete.** Verified on the developer Mac:
+`uv run filmex` and the frozen `dist/FilmEx.app` both pass smoke mode (page
+initialised through the token cookie, bridge present, geometry saved, clean
+shutdown, no leftover process); the frozen app found Homebrew's ExifTool
+with a Finder-like empty PATH; settings, theme and recent folders survived
+reloads in a browser; a preview build ran as a job and was cancelled from
+the UI; 175 tests pass. Not yet exercised by a human: real drag-and-drop
+onto the window and the native folder dialog (covered by unit tests only).
+ExifTool is not bundled until `packaging/exiftool.lock` gets a checksum.
 
 Acceptance for phase 1: window opens from `uv run filmex` with no Terminal;
 Activity Monitor shows one FilmEx process that ends on quit; settings and
@@ -404,8 +417,10 @@ Code conventions:
 
 ## Open items
 
-- Verify the pywebview drop-event field name against the installed version.
-- Verify `alert`/`confirm` are not needed anywhere after the modal swap.
+- Drop-event field name verified as `pywebviewFullPath` (pywebview 6.2.1); the
+  shell forwards the folder (or a dropped file's parent) into the page.
+- Pin the ExifTool tarball checksum in `packaging/exiftool.lock` so the
+  bundle can carry its own ExifTool.
 - Windows build: only after macOS is stable, and only if WebView2 plus
   the official ExifTool Windows build work unattended on a free runner.
 - Mixed raw+JPEG overlap in the Jāņos folders: check once the NFD path

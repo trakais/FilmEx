@@ -1,0 +1,27 @@
+# Optional: builds FilmEx.app on a GitHub macOS runner when a v* tag is pushed.
+# The primary repo is on Forgejo (no hosted macOS runners), where releases are
+# built locally with packaging/build-macos.sh. The same file works under
+# .forgejo/workflows/ with a self-hosted macOS runner.
+name: Build macOS app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: packaging/build-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FilmEx-macOS
+          path: dist/*.dmg
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*.dmg

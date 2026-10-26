@@ -38,6 +38,53 @@ _Film roll and stock selection_
 7. Add optional roll notes.
 8. Apply the changes.
 
+## Desktop app
+
+FilmEx also runs as a native window with no Terminal and no background
+process: the server lives inside the app and stops when you quit.
+
+Pick one:
+
+- **App bundle (macOS).** Download `FilmEx-<version>-arm64.dmg` from the
+  releases page, drag `FilmEx.app` to Applications. The app is not notarized
+  (no paid Apple developer account), so the first launch is blocked. Open it
+  once, then go to System Settings ▸ Privacy & Security and click
+  **Open Anyway**. Or remove the quarantine flag instead:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/FilmEx.app
+  ```
+
+  This is needed once per downloaded version.
+- **Installed tool (no Gatekeeper prompt).** Needs `uv`; it installs Python
+  itself. Replace the URL with this repository's clone URL:
+
+  ```bash
+  uv tool install "filmex @ git+https://git.dodies.lv/<user>/FilmEx"
+  filmex
+  ```
+- **From a checkout.**
+
+  ```bash
+  uv run filmex
+  ```
+
+The desktop app keeps its database in the per-user data directory
+(`~/Library/Application Support/FilmEx` on macOS). A source checkout keeps
+using `data/`. `FILMEX_DATA_DIR` overrides both. ExifTool is found on `PATH`,
+in the usual Homebrew locations, or at the path set in Settings ▸ General.
+
+### Building the app
+
+```bash
+packaging/build-macos.sh
+```
+
+Produces `dist/FilmEx.app` and a DMG. To bundle ExifTool inside the app, run
+`packaging/fetch-exiftool.sh` first (pin the tarball checksum in
+`packaging/exiftool.lock` when prompted). Releases are built locally; the
+GitHub workflow in `.github/workflows/build.yml` is optional.
+
 ## Requirements
 
 - Python 3.11+
@@ -75,7 +122,10 @@ uv run uvicorn filmex.main:app --port 8765
 
 ## Notes
 
-- The app stores runtime data in `data/`.
+- A source checkout stores runtime data in `data/`; the desktop app uses the
+  per-user data directory.
+- Settings, recent folders and the last selection are stored in the database,
+  not in the browser.
 - A starter SQLite database is bundled with sample cameras, lenses, films, film brands, providers, and methods.
 - Your own working database lives in `data/filmex.sqlite`.
 - Temporary and private local files should stay in `tmp/`, which is ignored by git.
