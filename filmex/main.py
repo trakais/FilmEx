@@ -6,16 +6,19 @@ Run locally:
 
 from __future__ import annotations
 
+import hmac
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
 from filmex.db import get_engine, init_db
 from filmex.routes import entities, health, settings, workflow
+from filmex.security import TOKEN_COOKIE, TOKEN_QUERY_PARAM, LoopbackGuard
 from filmex.services import settings as settings_service
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -29,8 +32,18 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-def create_app() -> FastAPI:
+def create_app(token: str | None = None) -> FastAPI:
+    """Build the app.
+
+    `token` enables the per-launch session token used by the desktop shell.
+    It defaults to the `FILMEX_TOKEN` environment variable so the launcher can
+    set it before this module is imported.
+    """
+    if token is None:
+        token = os.environ.get("FILMEX_TOKEN") or None
+
     app = FastAPI(title="FilmEx", version="0.1.0", lifespan=_lifespan)
+    app.add_middleware(LoopbackGuard, token=token)
     app.include_router(health.router)
     app.include_router(settings.router)
     app.include_router(entities.router)
@@ -40,7 +53,20 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
         @app.get("/", include_in_schema=False)
-        async def _index() -> FileResponse:
+        async def _index(request: Request):
+            # Desktop shell: the window opens `/?token=...` once. Exchange it
+            # for a SameSite=Strict cookie and strip it from the URL.
+            offered = request.query_params.get(TOKEN_QUERY_PARAM)
+            if token is not None and offered is not None and hmac.compare_digest(offered, token):
+                response = RedirectResponse(url="/", status_code=303)
+                response.set_cookie(
+                    TOKEN_COOKIE,
+                    token,
+                    httponly=True,
+                    samesite="strict",
+                    path="/",
+                )
+                return response
             return FileResponse(_STATIC_DIR / "index.html")
 
     return app

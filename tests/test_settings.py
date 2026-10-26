@@ -28,7 +28,7 @@ def test_patch_merges_and_persists_across_restart(client, data_dir):
     from filmex.main import app
 
     db_module.reset_engine()
-    with TestClient(app) as fresh:
+    with TestClient(app, base_url="http://127.0.0.1") as fresh:
         again = fresh.get("/api/settings").json()
     assert again["theme"] == "paper"
     assert again["last_folder"] == "/tmp/roll"
@@ -76,7 +76,7 @@ def test_startup_applies_persisted_exiftool_path(client, data_dir, monkeypatch):
     from filmex.main import app
 
     db_module.reset_engine()
-    with TestClient(app):
+    with TestClient(app, base_url="http://127.0.0.1"):
         pass
     assert "/opt/tools/exiftool" in seen
 

@@ -43,7 +43,9 @@ def client(data_dir: Path) -> Iterator[TestClient]:
     """Booted FastAPI client using a throwaway data directory."""
     from filmex.main import app
 
-    with TestClient(app) as c:
+    # The loopback guard rejects non-loopback Host headers; TestClient
+    # defaults to "testserver", so pin a loopback base URL.
+    with TestClient(app, base_url="http://127.0.0.1") as c:
         _seed_test_gear(c)
         yield c
 
