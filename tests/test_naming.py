@@ -89,7 +89,7 @@ def test_short_name_round_trips_through_the_api(client):
 def test_place_is_stored_in_the_manifest(client, roll_factory, monkeypatch):
     import subprocess
 
-    from filmex.routes import workflow as wr
+    from filmex.services import tagging as wr
     from filmex.services import manifest as mf
 
     folder = roll_factory("2026-06-20-Fujica-ColorPlus", jpegs=1)

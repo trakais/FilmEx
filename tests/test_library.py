@@ -245,7 +245,7 @@ def test_dry_run_subset_limits_diffs(client, roll_factory):
 
 
 def test_apply_subset_touches_only_selected_files(client, roll_factory, monkeypatch):
-    from filmex.routes import workflow as wr
+    from filmex.services import tagging as wr
 
     folder = roll_factory("2026-04-17_R202", jpegs=3)
     monkeypatch.setattr(wr, "exiftool_available", lambda: True)
