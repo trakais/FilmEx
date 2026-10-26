@@ -1610,3 +1610,19 @@ button:disabled {
 
 /* ---------- Utility ---------- */
 .hidden { display: none !important; }
+
+/* ---------- Settings: General tab ---------- */
+.general-settings {
+  max-width: 820px;
+  padding: 18px 0 8px;
+}
+.general-settings .folder-row { width: 100%; }
+.general-settings .folder-row input[type=text] { font-family: var(--font-mono); }
+.general-settings .field-help.bad { color: var(--red, #e05a4f); }
+.general-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding-top: 6px;
+}

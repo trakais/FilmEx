@@ -166,6 +166,7 @@
       <button class="settings-tab" role="tab" data-tab="provider" aria-selected="false">Providers</button>
       <button class="settings-tab" role="tab" data-tab="dev-method" aria-selected="false">Development</button>
       <button class="settings-tab" role="tab" data-tab="scan-method" aria-selected="false">Scanning</button>
+      <button class="settings-tab" role="tab" data-tab="general" aria-selected="false">General</button>
     </nav>
 
     <section class="settings-section" data-kind="camera">
@@ -222,6 +223,50 @@
         <button class="primary" data-add="scan-method">+ Add method</button>
       </div>
       <div class="settings-list"></div>
+    </section>
+
+    <section class="settings-section" data-kind="general">
+      <div class="settings-section-head">
+        <h3>General</h3>
+      </div>
+      <form id="general-settings-form" class="field-grid general-settings" autocomplete="off">
+        <label class="full">
+          <span>Library root</span>
+          <span class="folder-row">
+            <input type="text" name="library_root" placeholder="/Volumes/homes/you/Photos/Film" />
+            <button type="button" class="secondary" id="general-library-browse">Browse…</button>
+          </span>
+          <span class="field-help">Top folder of your film library, with year folders inside. Used by the Library view.</span>
+        </label>
+        <label class="full">
+          <span>ExifTool</span>
+          <input type="text" name="exiftool_path" placeholder="Leave empty to auto-detect" />
+          <span class="field-help" id="general-exiftool-status">Checking…</span>
+        </label>
+        <label>
+          <span>Roll folder name template</span>
+          <input type="text" name="naming_template" />
+          <span class="field-help">Tokens: {date} {year} {month} {camera} {film} {lens} {place} {roll}</span>
+        </label>
+        <label class="checkbox-field">
+          <span>Place suffix</span>
+          <span class="checkbox-row">
+            <input type="checkbox" name="naming_place_suffix" />
+            <span>Append -{place} when a place is set</span>
+          </span>
+        </label>
+        <label>
+          <span>Import into library</span>
+          <select name="import_mode">
+            <option value="copy">Copy files, keep the source</option>
+            <option value="move">Move files</option>
+          </select>
+        </label>
+        <div class="full general-settings-actions">
+          <span id="general-settings-status" class="field-help"></span>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
     </section>
 
   </main>

@@ -4,12 +4,10 @@
 // side does not need to be clever — it's a thin veneer over the FastAPI
 // endpoints, which own the real logic.
 
-const STORAGE_KEY = "filmex.state.v1";
-const RECENT_FOLDERS_KEY = "filmex.recentFolders.v1";
-const THEME_KEY = "filmex.theme.v1";
 const DEFAULT_PAGE_TITLE = document.title;
 
 const state = {
+  settings: null,  // server-side settings cache (`/api/settings`)
   folder: "",
   theme: "dark",
   scan: null,
@@ -44,51 +42,126 @@ const state = {
 };
 
 // ---------- Persistence ----------
+//
+// Sticky state lives on the server (`/api/settings`) so it survives browser
+// changes, reinstalls, and the move to the desktop shell. localStorage keeps
+// only a theme hint for the first paint. Writes are coalesced into one PATCH.
 
-function loadStickyState() {
+const THEME_HINT_KEY = "filmex.themeHint.v1";
+const LEGACY_KEYS = {
+  state: "filmex.state.v1",
+  recent: "filmex.recentFolders.v1",
+  theme: "filmex.theme.v1",
+};
+const RECENT_FOLDERS_LIMIT = 20;
+
+let pendingSettingsPatch = null;
+let settingsFlushTimer = null;
+
+function queueSettingsPatch(partial) {
+  pendingSettingsPatch = { ...(pendingSettingsPatch || {}), ...partial };
+  if (state.settings) Object.assign(state.settings, partial);  // optimistic
+  clearTimeout(settingsFlushTimer);
+  settingsFlushTimer = setTimeout(flushSettingsPatch, 250);
+}
+
+async function flushSettingsPatch() {
+  const patch = pendingSettingsPatch;
+  pendingSettingsPatch = null;
+  if (!patch) return;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    Object.assign(state.advanced, saved.advanced || {});
-    state.camera = saved.camera || null;
-    state.lens = saved.lens || null;
-    state.film = saved.film || null;
-    state.folder = saved.folder || "";
-    state.previewInvert = !!saved.previewInvert;
+    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
   } catch (e) {
-    console.warn("Sticky state load failed", e);
+    console.warn("Settings save failed", e);
+  }
+}
+
+async function loadSettings() {
+  state.settings = await api("/api/settings");
+  await migrateLegacyLocalStorage();
+  const s = state.settings;
+  const sel = s.last_selection || {};
+  Object.assign(state.advanced, sel.advanced || {});
+  state.camera = sel.camera || null;
+  state.lens = sel.lens || null;
+  state.film = sel.film || null;
+  state.folder = s.last_folder || "";
+  state.previewInvert = !!s.preview_invert;
+  applyTheme(s.theme, { persist: false });
+}
+
+// One-time import of state written by builds that used localStorage, then
+// clean those keys up so this never runs twice.
+async function migrateLegacyLocalStorage() {
+  let patch = {};
+  try {
+    const raw = localStorage.getItem(LEGACY_KEYS.state);
+    const hasSelection = Object.keys(state.settings.last_selection || {}).length > 0;
+    if (raw && !hasSelection) {
+      const saved = JSON.parse(raw);
+      patch.last_selection = {
+        camera: saved.camera || null,
+        lens: saved.lens || null,
+        film: saved.film || null,
+        advanced: saved.advanced || {},
+      };
+      if (saved.folder) patch.last_folder = saved.folder;
+      patch.preview_invert = !!saved.previewInvert;
+    }
+    const recent = JSON.parse(localStorage.getItem(LEGACY_KEYS.recent) || "[]");
+    if (Array.isArray(recent) && recent.length && !state.settings.recent_folders.length) {
+      patch.recent_folders = recent;
+    }
+    const theme = localStorage.getItem(LEGACY_KEYS.theme);
+    if (theme === "paper" && state.settings.theme === "dark") patch.theme = theme;
+  } catch (e) {
+    console.warn("Legacy state migration skipped", e);
+    patch = {};
+  }
+  if (Object.keys(patch).length) {
+    try {
+      state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+    } catch (e) {
+      console.warn("Legacy state migration failed", e);
+      return;
+    }
+  }
+  try {
+    for (const key of Object.values(LEGACY_KEYS)) localStorage.removeItem(key);
+  } catch {
+    // storage may be unavailable — nothing to clean up then
   }
 }
 
 function saveStickyState() {
-  const payload = {
-    folder: state.folder,
-    camera: state.camera,
-    lens: state.lens,
-    film: state.film,
-    previewInvert: state.previewInvert,
-    advanced: state.advanced,
-  };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  queueSettingsPatch({
+    last_folder: state.folder || "",
+    preview_invert: !!state.previewInvert,
+    last_selection: {
+      camera: state.camera,
+      lens: state.lens,
+      film: state.film,
+      advanced: state.advanced,
+    },
+  });
 }
 
 function recentFolders() {
-  try { return JSON.parse(localStorage.getItem(RECENT_FOLDERS_KEY) || "[]"); }
-  catch { return []; }
+  return (state.settings && state.settings.recent_folders) || [];
 }
 
 function pushRecentFolder(path) {
-  const list = [path, ...recentFolders().filter(p => p !== path)].slice(0, 10);
-  localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(list));
+  const list = [path, ...recentFolders().filter(p => p !== path)].slice(0, RECENT_FOLDERS_LIMIT);
+  queueSettingsPatch({ recent_folders: list, last_folder: path });
 }
 
 function loadTheme() {
+  // First paint only; the server value applied by loadSettings() wins.
   try {
-    const saved = localStorage.getItem(THEME_KEY);
-    if (saved === "paper" || saved === "dark") state.theme = saved;
-  } catch (e) {
-    console.warn("Theme load failed", e);
+    const hint = localStorage.getItem(THEME_HINT_KEY);
+    if (hint === "paper" || hint === "dark") state.theme = hint;
+  } catch {
+    // storage may be unavailable
   }
   applyTheme(state.theme, { persist: false });
 }
@@ -98,12 +171,12 @@ function applyTheme(theme, { persist = true } = {}) {
   state.theme = nextTheme;
   document.body.dataset.theme = nextTheme;
   renderThemeSwitch();
-  if (!persist) return;
   try {
-    localStorage.setItem(THEME_KEY, nextTheme);
-  } catch (e) {
-    console.warn("Theme save failed", e);
+    localStorage.setItem(THEME_HINT_KEY, nextTheme);
+  } catch {
+    // ignore — the server copy is the real one
   }
+  if (persist) queueSettingsPatch({ theme: nextTheme });
 }
 
 function renderThemeSwitch() {
@@ -134,7 +207,7 @@ async function api(path, opts = {}) {
 // ---------- Initial load ----------
 
 async function init() {
-  loadStickyState();
+  await loadSettings();
 
   await refreshExifToolStatus();
 
@@ -207,15 +280,29 @@ function renderRecentFolders() {
   }
 }
 
+// Native folder dialog. Inside the desktop shell pywebview exposes a JS API
+// that opens a real NSOpenPanel; in browser mode the server runs an
+// out-of-process picker. Returns null when the user cancels.
+async function pickFolder() {
+  const bridge = window.pywebview && window.pywebview.api;
+  if (bridge && typeof bridge.pick_folder === "function") {
+    const folder = await bridge.pick_folder();
+    return folder || null;
+  }
+  const res = await api("/api/folder/pick", { method: "POST" });
+  if (res.cancelled || !res.folder) return null;
+  return res.folder;
+}
+
 async function onBrowse() {
   const btn = document.getElementById("browse-btn");
   btn.disabled = true;
   try {
-    const res = await api("/api/folder/pick", { method: "POST" });
-    if (res.cancelled || !res.folder) return;
+    const folder = await pickFolder();
+    if (!folder) return;
     const input = document.getElementById("folder-input");
-    input.value = res.folder;
-    state.folder = res.folder;
+    input.value = folder;
+    state.folder = folder;
     saveStickyState();
     onScan();
   } catch (err) {
@@ -1534,7 +1621,78 @@ async function openSettings() {
     // ignore — fall through to default
   }
   setActiveSettingsTab(remembered || DEFAULT_SETTINGS_TAB);
-  await refreshAllSettingsLists();
+  await Promise.all([refreshAllSettingsLists(), renderGeneralSettings()]);
+}
+
+// ---------- Settings: General tab ----------
+
+const DEFAULT_NAMING_TEMPLATE = "{date}-{camera}-{film}";
+
+async function renderGeneralSettings() {
+  const form = document.getElementById("general-settings-form");
+  if (!form) return;
+  const s = state.settings || (state.settings = await api("/api/settings"));
+  form.elements.library_root.value = s.library_root || "";
+  form.elements.exiftool_path.value = s.exiftool_path || "";
+  form.elements.naming_template.value = s.naming_template || DEFAULT_NAMING_TEMPLATE;
+  form.elements.naming_place_suffix.checked = !!s.naming_place_suffix;
+  form.elements.import_mode.value = s.import_mode || "copy";
+  document.getElementById("general-settings-status").textContent = "";
+  await renderExifToolDetection();
+}
+
+async function renderExifToolDetection() {
+  const el = document.getElementById("general-exiftool-status");
+  if (!el) return;
+  try {
+    const h = await api("/api/health");
+    if (h.exiftool_available) {
+      const version = h.exiftool_version ? ` v${h.exiftool_version}` : "";
+      el.textContent = `Using ${h.exiftool_path}${version} (${h.exiftool_source}).`;
+      el.classList.remove("bad");
+    } else {
+      el.textContent = "Not found. Install ExifTool or enter the path to its executable.";
+      el.classList.add("bad");
+    }
+  } catch {
+    el.textContent = "Could not check ExifTool.";
+    el.classList.add("bad");
+  }
+}
+
+async function submitGeneralSettings(e) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const status = document.getElementById("general-settings-status");
+  const patch = {
+    library_root: form.elements.library_root.value.trim() || null,
+    exiftool_path: form.elements.exiftool_path.value.trim() || null,
+    naming_template: form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE,
+    naming_place_suffix: form.elements.naming_place_suffix.checked,
+    import_mode: form.elements.import_mode.value,
+  };
+  try {
+    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+    status.textContent = "Saved.";
+    status.classList.remove("bad");
+    await Promise.all([renderExifToolDetection(), refreshExifToolStatus()]);
+  } catch (err) {
+    status.textContent = err.message;
+    status.classList.add("bad");
+  }
+}
+
+async function onBrowseLibraryRoot() {
+  const btn = document.getElementById("general-library-browse");
+  btn.disabled = true;
+  try {
+    const folder = await pickFolder();
+    if (folder) document.getElementById("general-settings-form").elements.library_root.value = folder;
+  } catch (err) {
+    document.getElementById("general-settings-status").textContent = `Could not open folder picker: ${err.message || err}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function closeSettings() {
@@ -2000,6 +2158,8 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("settings-form-cancel").addEventListener("click", closeSettingsForm);
   document.getElementById("settings-form-backdrop").addEventListener("click", closeSettingsForm);
   document.getElementById("settings-form-save").addEventListener("click", submitSettingsForm);
+  document.getElementById("general-settings-form").addEventListener("submit", submitGeneralSettings);
+  document.getElementById("general-library-browse").addEventListener("click", onBrowseLibraryRoot);
 
   setupWindowDrop();
 });
