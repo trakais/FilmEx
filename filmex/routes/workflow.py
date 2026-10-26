@@ -7,6 +7,8 @@ service layer.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import json
 import os
 import re
@@ -402,6 +404,23 @@ def file_open(folder: str, name: str) -> FileOpenResponse:
     return FileOpenResponse()
 
 
+class FolderRevealRequest(BaseModel):
+    folder: str
+
+
+@router.post("/api/folder/reveal", response_model=FileOpenResponse)
+def folder_reveal(req: FolderRevealRequest) -> FileOpenResponse:
+    """Open a folder in the system file manager."""
+    target = Path(req.folder).expanduser()
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail=f"Folder not found: {req.folder}")
+    try:
+        _open_with_default_app(target)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return FileOpenResponse()
+
+
 @router.post("/api/previews/create", response_model=PreviewBuildResponse)
 def create_previews(req: PreviewBuildRequest) -> PreviewBuildResponse:
     try:
@@ -631,7 +650,7 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
     exif_date = _exif_date(capture_date_value)
     roll_notes = _normalize_roll_notes(req.roll_notes)
 
-    files = [scan.folder / f.name for f in scan.files]
+    files = _select_files(scan, req.files)
 
     return _Pipeline(
         folder=scan.folder,
@@ -682,6 +701,22 @@ def _build_pipeline(req: DryRunRequest, session: Session) -> _Pipeline:
 
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _select_files(scan: fs.ScanResult, requested: Optional[list[str]]) -> list[Path]:
+    """All scanned files, or only the requested subset (validated by name)."""
+    if requested is None:
+        return [scan.folder / f.name for f in scan.files]
+    wanted = list(dict.fromkeys(name for name in requested if name))
+    if not wanted:
+        raise HTTPException(status_code=400, detail="files: empty selection")
+    scanned = {f.name for f in scan.files}
+    missing = [name for name in wanted if name not in scanned]
+    if missing:
+        shown = ", ".join(missing[:5]) + (" …" if len(missing) > 5 else "")
+        raise HTTPException(status_code=400, detail=f"files not in folder: {shown}")
+    selected = set(wanted)
+    return [scan.folder / f.name for f in scan.files if f.name in selected]
 
 
 def _normalize_roll_date(raw: str | None) -> str | None:

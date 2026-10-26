@@ -58,6 +58,10 @@ class DryRunRequest(BaseModel):
     roll_date: Optional[str] = None  # YYYY-MM-DD; when set, written as DateTimeOriginal@noon
     roll_notes: Optional[str] = None
     replace_managed_metadata: bool = False
+    # Restrict the dry-run / apply to these file names (as returned by the
+    # folder scan). None means every supported file in the folder. Used by
+    # the Library view's "tag remaining" action.
+    files: Optional[list[str]] = None
 
 
 class TagChangeOut(BaseModel):

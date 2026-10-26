@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 def migrate_db(engine: Engine) -> None:
@@ -59,6 +59,9 @@ def _apply_migration(engine: Engine, version: int) -> None:
         return
     if version == 5:
         _migrate_to_v5(engine)
+        return
+    if version == 6:
+        _migrate_to_v6(engine)
         return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
@@ -179,6 +182,39 @@ def _migrate_to_v5(engine: Engine) -> None:
             )
             """
         )
+
+
+def _migrate_to_v6(engine: Engine) -> None:
+    """Add the `library_folder` cache table (see services/library_cache.py)."""
+    inspector = inspect(engine)
+    if inspector.has_table("library_folder"):
+        return
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE library_folder (
+                path VARCHAR PRIMARY KEY NOT NULL,
+                root VARCHAR NOT NULL,
+                parent VARCHAR,
+                name VARCHAR NOT NULL,
+                display_name VARCHAR NOT NULL,
+                depth INTEGER NOT NULL,
+                status VARCHAR NOT NULL,
+                image_count INTEGER NOT NULL DEFAULT 0,
+                untagged_count INTEGER NOT NULL DEFAULT 0,
+                sidecar_count INTEGER NOT NULL DEFAULT 0,
+                kinds_json VARCHAR NOT NULL DEFAULT '{}',
+                has_manifest BOOLEAN NOT NULL DEFAULT 0,
+                roll_id VARCHAR,
+                film_display VARCHAR,
+                camera_display VARCHAR,
+                last_applied_at VARCHAR,
+                is_flat_year BOOLEAN NOT NULL DEFAULT 0,
+                scanned_at VARCHAR NOT NULL
+            )
+            """
+        )
+        conn.exec_driver_sql("CREATE INDEX ix_library_folder_root ON library_folder(root)")
 
 
 def _sync_film_brands(engine: Engine) -> None:

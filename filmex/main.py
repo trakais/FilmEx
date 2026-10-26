@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
 from filmex.db import get_engine, init_db
-from filmex.routes import entities, health, jobs, settings, workflow
+from filmex.routes import entities, health, jobs, library, settings, workflow
 from filmex.security import TOKEN_COOKIE, TOKEN_QUERY_PARAM, LoopbackGuard
 from filmex.services import jobs as job_service
 from filmex.services import settings as settings_service
@@ -51,6 +51,7 @@ def create_app(token: str | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(settings.router)
     app.include_router(jobs.router)
+    app.include_router(library.router)
     app.include_router(entities.router)
     app.include_router(workflow.router)
 
