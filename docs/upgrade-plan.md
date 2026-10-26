@@ -351,6 +351,27 @@ undone back to the original names and keyword. 197 tests pass. Short names
 are not yet set on the user's real gear, so proposals against the NAS will
 use slugged display names until they are.
 
+## UI review pass (2026-10-26)
+
+Done after phase 3, from a walk through every view in a browser:
+
+- Film picker tiles and the Tag view film tile show an SVG 35 mm cassette
+  glyph coloured from the brand palette (replaces the flat strip). This is
+  the lightweight answer to "3D canisters": no WebGL, no dependency, works
+  offline and in both themes. three.js stays an option only if a real 3D
+  scene is ever wanted.
+- Library: quick filter box; summary chips use the shared readout styling.
+- After an apply: subset cleared, library rescanned in the background,
+  "Back to Library" in the result.
+- Settings ▸ General: live example of the folder name template; the server
+  rejects invalid templates.
+- Favicon (inline SVG) so the console stops logging a 404.
+
+Ideas noted, not done: Dock progress and system notifications for long
+applies (needs the desktop shell to expose them), a Lightroom-style frame
+count hint on the contact sheet (phase 4), per-row "Rename" in the Library
+(batch panel covers it for now).
+
 ## Phase 4: Inbox import and roll split
 
 Goal: point at a temp folder of fresh scans (or an untagged library folder),

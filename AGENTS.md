@@ -168,6 +168,8 @@ produces confusing duplicates and broken filtering.
 ### Film brand colors
 
 The two-color palette lives on the `FilmBrand` row, not on each film stock.
+The UI renders it as a small SVG film cassette (`canisterSvg()` in app.js:
+primary = label band, secondary = accent stripe).
 Pick a dominant and an accent color drawn from the physical box — typically
 the cardboard / label color plus the brand's signature tone. The picker tile
 renders them as a vertical bookmark strip on the left edge.
