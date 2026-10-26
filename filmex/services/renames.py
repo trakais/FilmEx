@@ -92,6 +92,29 @@ def name_context(session: Session, manifest: dict[str, Any]) -> naming.NameConte
     )
 
 
+def context_from_ids(
+    session: Session,
+    *,
+    date: str | None,
+    camera_id: str | None,
+    film_stock_id: str | None,
+    lens_id: str | None,
+    place: str | None,
+) -> naming.NameContext:
+    """Template context for a roll draft that has not been tagged yet."""
+    camera = session.get(Camera, camera_id) if camera_id else None
+    film = session.get(FilmStock, film_stock_id) if film_stock_id else None
+    lens = session.get(Lens, lens_id) if lens_id else None
+    date = (date or "").strip() or None
+    return naming.NameContext(
+        date=date,
+        camera=naming.short_name_for(camera.display_name, camera.short_name) if camera else None,
+        film=naming.short_name_for(film.display_name, film.short_name) if film else None,
+        lens=naming.short_name_for(lens.display_name, None) if lens else None,
+        place=(place or "").strip() or None,
+    )
+
+
 def _short_from(session: Session, model, snapshot: dict[str, Any], *, has_short: bool = True) -> str:
     display = snapshot.get("display_name")
     row = session.get(model, snapshot["id"]) if snapshot.get("id") else None

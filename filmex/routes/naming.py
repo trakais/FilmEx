@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
-from filmex.services import jobs, naming, operations, renames
+from filmex.services import fileops, importer, jobs, naming, operations, renames
 from filmex.services import settings as settings_service
 
 router = APIRouter()
@@ -96,6 +96,42 @@ def apply_renames(req: ApplyRenamesRequest, session: Session = Depends(get_sessi
     return _stream_job(job, {"type": "start", "total": len(items)})
 
 
+_UNDO_BY_KIND = {
+    "rename": renames.undo,
+    "split": fileops.undo_split,
+    "import": importer.undo_import,
+}
+
+
+class RenderRequest(BaseModel):
+    roll_date: str | None = None
+    camera_id: str | None = None
+    film_stock_id: str | None = None
+    lens_id: str | None = None
+    place: str | None = None
+    template: str | None = None
+
+
+@router.post("/api/naming/render")
+def render_name(req: RenderRequest, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Folder name for a roll draft (contact sheet segments) from the template."""
+    settings = settings_service.get_all(session)
+    template = (req.template or settings["naming_template"] or naming.DEFAULT_TEMPLATE).strip()
+    ctx = renames.context_from_ids(
+        session,
+        date=req.roll_date,
+        camera_id=req.camera_id,
+        film_stock_id=req.film_stock_id,
+        lens_id=req.lens_id,
+        place=req.place,
+    )
+    try:
+        name = naming.render(template, ctx, place_suffix=bool(settings["naming_place_suffix"]))
+    except naming.NamingError as exc:
+        return {"name": None, "error": str(exc), "template": template}
+    return {"name": name, "error": None, "template": template}
+
+
 @router.get("/api/operations")
 def list_operations(kind: str | None = None, limit: int = 20, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
     return operations.recent(session, kind=kind, limit=limit)
@@ -108,12 +144,13 @@ def undo_operation(op_id: str, session: Session = Depends(get_session)) -> Strea
         raise HTTPException(status_code=404, detail="Unknown operation")
     if op.status == operations.UNDONE:
         raise HTTPException(status_code=409, detail="Operation already undone")
-    if op.kind != "rename":
+    undo_fn = _UNDO_BY_KIND.get(op.kind)
+    if undo_fn is None:
         raise HTTPException(status_code=400, detail=f"Cannot undo operations of kind {op.kind}")
 
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
         with Session(get_engine()) as job_session:
-            result = renames.undo(job_session, op_id, progress=job_ctx.emit, cancelled=job_ctx.cancelled)
+            result = undo_fn(job_session, op_id, progress=job_ctx.emit, cancelled=job_ctx.cancelled)
         job_ctx.emit({"type": "done", **result})
         return result
 
