@@ -379,31 +379,50 @@ cut it into rolls on a contact sheet, tag each roll, and import into
 `<root>/<year>/<generated name>` with copy-and-verify.
 
 ### P4.1 Contact sheet
-- [ ] Reusable grid of thumbnails for a folder (previews built via the
+- [x] Reusable grid of thumbnails for a folder (previews built via the
       existing job), sorted by name, with click, shift-click range, and
       "split here" markers that turn the sequence into segments.
-- [ ] Each segment is a roll draft: name preview from the template, gear
+      Done as `renderContactSheet()` in app.js: click, shift-click range,
+      ⌘-click add; "Cut here" at the selected frame, "New roll from
+      selection", "Leave out", per-roll "Add selection" and "Merge into
+      roll N". Roll colours as a stripe and stamp on every frame.
+- [x] Each segment is a roll draft: name preview from the template, gear
       and film tiles, advanced fields. Segments can be merged or removed.
-- [ ] Same-basename raw+JPEG pairs move as a unit; unmatched JPEGs are
-      listed with include/exclude toggles.
+      Name rendered server-side (`POST /api/naming/render`) from the
+      roll's date, camera, film and place; editable, with "use template"
+      to go back to automatic.
+- [x] Same-basename raw+JPEG pairs move as a unit; unmatched JPEGs are
+      listed with include/exclude toggles. `services/frames.py` groups
+      images, both sidecar forms and `.thm` by basename; a JPEG-only
+      frame in a folder that has raw frames is flagged and the toolbar
+      offers "Leave out / Include N JPEG-only frames".
+- [x] The Tag view shows the same sheet read-only under the scan summary
+      (click opens the file) with "Split into rolls…" leading to the Inbox.
 
 ### P4.2 Split inside the library
-- [ ] `fileops.plan_split(folder, groups)`: target parent is the folder
+- [x] `fileops.plan_split(folder, groups)`: target parent is the folder
       itself when it is a flat year folder, otherwise the folder's parent
       (so `2026/EUR-04` becomes two siblings under `2026`). Each file moves
       with its sidecar (both `.xmp` forms) and `.thm`. Same-volume rename
       only; cross-volume is refused with a clear message. Never overwrite.
       Remove the source folder only when it holds no images afterwards.
-- [ ] `POST /api/folder/split` returns the plan; `POST
+      A folder outside the library is cut into subfolders. An emptied
+      source keeps its old manifest in the journal (restored by undo) and
+      is removed only when nothing but desktop litter is left.
+- [x] `POST /api/folder/split` returns the plan; `POST
       /api/folder/split/apply` runs it as an exclusive job and logs it for
       undo.
-- [ ] After the split, each new folder opens in the Tag view in turn, or
+- [x] After the split, each new folder opens in the Tag view in turn, or
       the roll drafts' tagging is applied directly as part of the job.
-- [ ] Tests: plan and apply on tmp tree with sidecars and pairs, EXDEV
+      Chosen: tagging runs inside the job per new folder (manifest,
+      keywords, `Roll|<new name>`), so the Library shows the rolls as
+      tagged at once. Without ExifTool the files still move and the
+      result says they were not tagged.
+- [x] Tests: plan and apply on tmp tree with sidecars and pairs, EXDEV
       refusal (monkeypatch `os.rename`), undo, empty-source cleanup.
 
 ### P4.3 Inbox import
-- [ ] `services/importer.py`: per roll draft: resolve year from the roll
+- [x] `services/importer.py`: per roll draft: resolve year from the roll
       date (fallback: earliest file date; else ask), create
       `<root>/<year>/<name>` (refuse if it exists), copy files, sidecars
       and `.thm` with `shutil.copy2` in chunks with progress, verify size
@@ -411,19 +430,42 @@ cut it into rolls on a contact sheet, tag each roll, and import into
       write the manifest with `import_source {path, imported_at,
       verified}`, then if mode is `move` delete sources only after every
       file in the roll verified. Log the operation.
-- [ ] Routes: `POST /api/import/plan`, `POST /api/import/apply` (job).
-- [ ] UI: Inbox view: source picker, contact sheet, segments, per-segment
+      The copy hashes the source bytes on the way out and then reads the
+      destination back for the comparison; a mismatch removes the bad copy
+      and stops that roll. Free space is checked in the plan.
+- [x] Routes: `POST /api/import/plan`, `POST /api/import/apply` (job).
+- [x] UI: Inbox view: source picker, contact sheet, segments, per-segment
       tagging, "Import N rolls", progress with per-file verification,
       results with Open and Reveal actions, undo.
-- [ ] Tests: copy+verify detects a corrupted destination, collision stops
+      One Inbox view serves both flows: the Destination control picks
+      "Library · copy", "Library · move" or "Split in place". The Library's
+      "Split…" row action and the Tag view's link open it preset to split.
+- [x] Tests: copy+verify detects a corrupted destination, collision stops
       before any copy, move deletes only after verification, manifest
       carries `import_source`.
 
 ### P4.4 Wrap-up
-- [ ] AGENTS.md: inbox and split semantics, file operation rules, undo log.
-- [ ] README: library, naming and import sections with screenshots.
+- [x] AGENTS.md: inbox and split semantics, file operation rules, undo log.
+- [x] README: library, naming and import sections. Screenshots not added:
+      the only material at hand was synthetic scratch data; take them from
+      the real library.
 
 ---
+
+**Phase 4 status (2026-10-26): complete.** The apply pipeline moved from
+the workflow routes into `services/tagging.py` so jobs can tag a folder.
+Verified in a browser against a scratch inbox (19 frames: 4 DNG+JPEG pairs,
+one JPEG without raw, 14 lab JPEGs) and the synthetic scratch library,
+never the NAS: cut into two rolls, imported by copy with real ExifTool
+tagging (sidecars written for the DNGs), undone cleanly; split in place
+into two subfolders, undone cleanly. First undo attempt left a folder
+behind because the tagging step had written new sidecars; both undo paths
+now carry those sidecars (back with the raw on a move or split, discarded
+with the copy). 219 tests pass.
+
+Ideas noted, not done: reconnect to a running import after a page reload
+(the job log supports it, the Inbox view does not use it yet); a frame
+count hint ("36 of 36") per roll card; drag-and-drop between roll cards.
 
 ## Cross-cutting rules
 

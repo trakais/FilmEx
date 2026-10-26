@@ -38,6 +38,33 @@ _Film roll and stock selection_
 7. Add optional roll notes.
 8. Apply the changes.
 
+## Library, naming and inbox
+
+Beyond tagging one folder at a time, FilmEx can manage the library itself.
+Set the library root in Settings ▸ General (the top folder with the year
+folders inside).
+
+- **Library** lists every roll folder by year with its status (tagged,
+  partial, untagged, or unsorted for loose files in a year folder), counts,
+  film and camera, and offers Open, Tag remaining, Split and Reveal. The
+  index is cached, so it opens even when the share is unmounted.
+- **Normalize names** proposes a folder name for every tagged roll from the
+  template in Settings ▸ General (default `{date}-{camera}-{film}`, using
+  each camera's and film's short name), shows the full old/new list with
+  conflicts, renames in place, updates the manifest and the `Roll|` keyword
+  on every tagged file, and can undo the batch.
+- **Inbox** takes a folder of fresh scans, shows every frame on a contact
+  sheet, and lets you cut it into rolls: select a frame and press "Cut
+  here", or build a roll from a selection. Each roll gets its gear, film,
+  date and a folder name from the template. Then either import the rolls
+  into `<root>/<year>/<name>` (copy or move; every file is read back and
+  verified before a source is ever deleted, and each new folder is tagged
+  on the spot) or split them in place next to the source folder. The plan
+  is shown before anything runs, and the last batch can be undone.
+
+Raw files and their JPEGs, sidecars and `.thm` thumbnails always travel
+together. Files that belong to no frame, such as notes, stay behind.
+
 ## Desktop app
 
 FilmEx also runs as a native window with no Terminal and no background

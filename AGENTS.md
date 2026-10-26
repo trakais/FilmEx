@@ -56,9 +56,12 @@ filmex/
 │   ├── migrations.py         # PRAGMA user_version app-managed migrations
 │   ├── models/               # SQLModel tables (+ app_setting)
 │   ├── schemas/              # Pydantic request/response DTOs
-│   ├── routes/               # entities, workflow, health, settings, jobs
+│   ├── routes/               # entities, workflow, health, settings, jobs,
+│   │                         # library, naming, fileops (split, import)
 │   ├── services/             # exiftool (+locator), keywords, folder scan,
-│   │                         # manifest, previews, settings, jobs
+│   │                         # manifest, previews, settings, jobs, tagging,
+│   │                         # library, naming, renames, frames, fileops,
+│   │                         # importer, operations
 │   ├── static/               # vanilla-JS single-page UI
 │   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
 │   └── default_data.sqlite   # bundled starter DB; copied to the data dir on first run
@@ -218,8 +221,8 @@ film stock rows.
   posts). In desktop mode the window opens `/?token=…` once; the server
   swaps it for a `SameSite=Strict` cookie that every API call must carry.
   Tests must use a loopback `base_url`.
-- **Jobs** (`services/jobs.py`): long operations (apply, preview build, and
-  later rename / split / import) run as in-process jobs with an ordered
+- **Jobs** (`services/jobs.py`): long operations (apply, preview build,
+  rename, split, import, undo) run as in-process jobs with an ordered
   event log. `GET /api/jobs/{id}/events` replays and follows; `POST
   /api/jobs/{id}/cancel` requests a stop that bodies check between files.
   Jobs that mutate the user's files are `exclusive` and serialize. An apply
@@ -229,6 +232,13 @@ film stock rows.
   `FILMEX_EXIFTOOL` → `PATH` → Homebrew/system candidates → bundled copy.
   Never spawn a bare `"exiftool"`; take the argv prefix from the locator.
 - **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
+- **Tagging pipeline** (`services/tagging.py`): `build_pipeline(request,
+  session)` resolves ids into snapshots and intents, `run_apply` /
+  `apply_all` write file by file and the manifest at the end. The workflow
+  routes wrap it for HTTP; the split and import jobs call it directly on
+  each new folder. Validation failures raise `TaggingError` with a status
+  code; tests stub `tagging.exiftool_available`, `read_managed_tags` and
+  `apply_intent`.
 
 ## Naming system
 
@@ -266,6 +276,57 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   replaces the cache in one transaction as a job.
 - Dry-run and apply accept `files: [...]` to restrict to a subset; names
   are validated against the scan. The UI shows the subset as a chip.
+
+## Inbox: split and import
+
+`services/frames.py` turns a folder into **frames**: every file sharing a
+basename (`DSC0001.ARW`, `DSC0001.JPG`, `DSC0001.xmp` or the legacy
+`DSC0001.ARW.xmp`, `DSC0001.thm`). Frames are the unit of every move and
+copy; a frame never splits. Files that belong to no frame (the manifest,
+notes, orphan sidecars) stay where they are and the plan says so. In a
+folder with raw frames, a JPEG-only frame is flagged `unmatched_jpeg` so
+the user can leave camera JPEGs behind.
+
+A **roll draft** (`fileops.Segment`) is a folder name, a list of frame
+keys and the tagging fields of `DryRunRequest` minus folder and files. The
+Inbox view builds drafts on a contact sheet; the server never trusts them:
+`resolve_segments` re-checks names, duplicates and frame membership, and
+both apply paths re-plan right before running.
+
+**Split** (`services/fileops.py`): a roll folder under `<root>/<year>/`
+becomes siblings in that year folder; a flat year folder or a folder
+outside the library gets subfolders. Rules: same volume only
+(`os.rename`), never overwrite, a collision anywhere stops the whole
+batch, frames move with sidecars and `.thm`, each new folder is tagged by
+the pipeline inside the same exclusive job (`Roll|<new name>` replaces the
+old Roll keyword through the normal reconciliation). When the source holds
+no images afterwards, its manifest goes into the journal and the folder is
+removed only if just desktop litter (`.DS_Store`, `._*`, `Thumbs.db`) is
+left.
+
+**Import** (`services/importer.py`): per roll, `<root>/<year>/<name>` with
+the year from the roll date, else the oldest file. Order: create the
+folder (refuse if it exists), copy in chunks hashing the source, read the
+destination back and compare size and BLAKE2b, tag at the destination,
+write `import_source {path, imported_at, verified, mode, files[name, size,
+blake2b]}` into the manifest, and only in move mode delete the sources,
+only after every file of that roll verified. A verification failure
+removes the bad copy and stops that roll; later rolls are not started.
+Free space is checked in the plan.
+
+**Undo** (`operation_log`, kinds `rename`, `split`, `import`): `POST
+/api/operations/{id}/undo` dispatches by kind. Split undo moves every
+frame back, restores the stashed manifest and removes the created folders.
+Import undo copies moved files back (verified against the recorded hash)
+or removes copies once the source is confirmed present. Sidecars that the
+tagging step wrote travel with their raw file on a move and are discarded
+with a copy. Metadata written by the batch stays on the files; re-tagging
+the folder replaces it.
+
+Routes: `GET /api/folder/frames`, `POST /api/naming/render`, `POST
+/api/folder/split` (plan), `POST /api/folder/split/apply` (job), `POST
+/api/import/plan`, `POST /api/import/apply` (job). Plan failures answer
+`400 {"detail": {"errors": [...]}}`.
 
 ## Metadata write policy
 
@@ -453,6 +514,13 @@ Must stay covered:
 - Archive flag filtering
 - Manifest create / update / history
 - Folder scan source-kind detection and scan-tier derivation
+- Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag
+- Split: layout (siblings vs subfolders), collisions, moves with
+  companions, cross-volume stop with a partial undo, emptied-source
+  cleanup, undo including tagging sidecars
+- Import: copy-and-verify catches a corrupted destination, collision stops
+  before any copy, move deletes sources only after the roll verified,
+  `import_source` in the manifest, undo in both modes
 - CLI batch idempotency
 
 Have at least one integration test that uses real ExifTool if it's on PATH.
