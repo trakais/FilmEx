@@ -20,6 +20,10 @@
 
   <header class="top">
     <div class="brand">FilmEx</div>
+    <nav class="view-nav" aria-label="Views">
+      <button type="button" class="view-tab" data-view="library">Library</button>
+      <button type="button" class="view-tab active" data-view="workflow">Tag</button>
+    </nav>
     <div class="status" id="status">
       <span id="exiftool-status" class="pill warn hidden">checking exiftool…</span>
       <div class="theme-switch" role="group" aria-label="Theme">
@@ -29,6 +33,20 @@
       <button id="settings-open" class="icon-btn" aria-label="Settings" title="Settings">⚙</button>
     </div>
   </header>
+
+  <main id="library-view" class="hidden">
+    <section class="library-head">
+      <h2>Library</h2>
+      <div class="library-toolbar">
+        <code id="library-root-path" class="library-root-path"></code>
+        <button id="library-choose-root" class="secondary" type="button">Choose root…</button>
+        <button id="library-rescan" class="secondary" type="button">Rescan</button>
+      </div>
+    </section>
+    <div id="library-banner" class="summary hidden"></div>
+    <div id="library-summary" class="summary hidden"></div>
+    <div id="library-groups" class="library-groups"></div>
+  </main>
 
   <main id="workflow-view">
     <!-- Step 1: Folder -->

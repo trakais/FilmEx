@@ -8,6 +8,11 @@ const DEFAULT_PAGE_TITLE = document.title;
 
 const state = {
   settings: null,  // server-side settings cache (`/api/settings`)
+  view: "workflow",
+  viewInitialised: false,
+  library: null,          // last `/api/library` payload
+  libraryRescanning: false,
+  fileSubset: null,       // { folder, files } when tagging only part of a roll
   folder: "",
   theme: "dark",
   scan: null,
@@ -379,6 +384,7 @@ async function initInner() {
   if (state.lens && !lenses.find(l => l.id === state.lens.id)) state.lens = null;
   if (state.film && !films.find(f => f.id === state.film.id)) state.film = null;
   renderTiles();
+  chooseStartView();
 }
 
 async function refreshExifToolStatus() {
@@ -456,6 +462,7 @@ async function onScan() {
   clearScanOutput();
   clearPreviewStatus();
   clearManifestSummary();
+  if (state.fileSubset && state.fileSubset.folder !== folder) state.fileSubset = null;
   state.folder = folder;
   try {
     const scan = await api("/api/folder/scan", {
@@ -517,9 +524,21 @@ function renderScanSummary() {
     parts.push(renderScanSummaryItem("Resolution", tierLabel));
   }
   parts.push(renderScanSummaryItem("Folder", state.scan.roll_id, "summary-code"));
+  const subset = activeFileSubset();
+  if (subset) {
+    parts.push(
+      `<span class="summary-item">` +
+        `<span class="summary-label">Tagging</span>` +
+        `<span class="summary-value summary-value--accent">${subset.length} of ${count} files</span>` +
+        `<button id="subset-clear-btn" type="button" class="summary-refresh" aria-label="Tag all files instead" title="Tag all files instead">✕</button>` +
+      `</span>`
+    );
+  }
   el.innerHTML = parts.join("");
   const refreshBtn = document.getElementById("scan-refresh-btn");
   if (refreshBtn) refreshBtn.addEventListener("click", onScan);
+  const subsetBtn = document.getElementById("subset-clear-btn");
+  if (subsetBtn) subsetBtn.addEventListener("click", clearFileSubset);
 }
 
 function renderScanSummaryItem(label, value, valueClass = "") {
@@ -1200,8 +1219,10 @@ function readAdvanced() {
 // ---------- Dry run / Apply ----------
 
 function buildRequestBody() {
+  const files = activeFileSubset();
   return {
     folder: state.folder,
+    files: files || undefined,
     camera_id: state.camera?.id,
     lens_id: state.lens?.id || null,
     film_stock_id: state.film?.id,
@@ -1729,8 +1750,8 @@ function setActiveSettingsTab(tab) {
 }
 
 async function openSettings() {
-  document.getElementById("workflow-view").classList.add("hidden");
-  document.getElementById("settings-view").classList.remove("hidden");
+  state.viewBeforeSettings = state.view === "settings" ? "workflow" : state.view;
+  showView("settings");
   let remembered = null;
   try {
     remembered = sessionStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
@@ -1739,6 +1760,279 @@ async function openSettings() {
   }
   setActiveSettingsTab(remembered || DEFAULT_SETTINGS_TAB);
   await Promise.all([refreshAllSettingsLists(), renderGeneralSettings()]);
+}
+
+// ---------- Views ----------
+
+const VIEW_IDS = { library: "library-view", workflow: "workflow-view", settings: "settings-view" };
+
+function showView(name) {
+  const next = VIEW_IDS[name] ? name : "workflow";
+  for (const [key, id] of Object.entries(VIEW_IDS)) {
+    document.getElementById(id).classList.toggle("hidden", key !== next);
+  }
+  for (const tab of document.querySelectorAll(".view-tab")) {
+    tab.classList.toggle("active", tab.dataset.view === next);
+  }
+  state.view = next;
+}
+
+function chooseStartView() {
+  if (state.viewInitialised) return;
+  state.viewInitialised = true;
+  if (state.settings && state.settings.library_root) {
+    showView("library");
+    void loadLibrary({ rescan: true });
+  } else {
+    showView("workflow");
+  }
+}
+
+// ---------- Library view ----------
+
+async function openLibrary() {
+  showView("library");
+  await loadLibrary({ rescan: true });
+}
+
+async function loadLibrary({ rescan = false } = {}) {
+  try {
+    state.library = await api("/api/library");
+  } catch (e) {
+    renderLibraryBanner(`Could not load the library index: ${e.message}`, "bad");
+    return;
+  }
+  renderLibrary();
+  if (rescan && state.library.root && state.library.reachable && !state.libraryRescanning) {
+    await rescanLibrary();
+  }
+}
+
+async function rescanLibrary() {
+  if (state.libraryRescanning) return;
+  state.libraryRescanning = true;
+  const btn = document.getElementById("library-rescan");
+  btn.disabled = true;
+  btn.textContent = "Rescanning…";
+  try {
+    const res = await fetch("/api/library/rescan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+    await consumeNdjson(res, (ev) => {
+      if (ev.type === "progress") btn.textContent = `Rescanning… ${ev.scanned}`;
+      else if (ev.type === "error") throw new Error(ev.error || "rescan failed");
+    });
+    state.library = await api("/api/library");
+    renderLibrary();
+  } catch (e) {
+    renderLibraryBanner(`Rescan failed: ${e.message}`, "bad");
+  } finally {
+    state.libraryRescanning = false;
+    btn.disabled = false;
+    btn.textContent = "Rescan";
+  }
+}
+
+function renderLibraryBanner(message, level = "warn") {
+  const el = document.getElementById("library-banner");
+  if (!message) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `<span class="pill ${level}">${level === "bad" ? "Problem" : "Note"}</span> <span>${escapeHtml(message)}</span>`;
+}
+
+function renderLibrary() {
+  const lib = state.library;
+  const rootEl = document.getElementById("library-root-path");
+  const groupsEl = document.getElementById("library-groups");
+  const summaryEl = document.getElementById("library-summary");
+  const rescanBtn = document.getElementById("library-rescan");
+  renderLibraryBanner("");
+
+  if (!lib || !lib.root) {
+    rootEl.textContent = "no library root";
+    rescanBtn.disabled = true;
+    summaryEl.classList.add("hidden");
+    groupsEl.innerHTML = `
+      <div class="library-empty">
+        <div>No library root set. Point FilmEx at the top folder of your film library, the one with the year folders inside.</div>
+        <button type="button" class="primary" id="library-empty-choose">Choose library root…</button>
+      </div>`;
+    document.getElementById("library-empty-choose").addEventListener("click", onChooseLibraryRoot);
+    return;
+  }
+
+  rootEl.textContent = lib.root;
+  rootEl.title = lib.root;
+  rescanBtn.disabled = !lib.reachable || state.libraryRescanning;
+  if (!lib.reachable) {
+    renderLibraryBanner(
+      `Library root is not reachable right now (NAS unmounted?). Showing cached results` +
+      (lib.scanned_at ? ` from ${formatStamp(lib.scanned_at)}.` : "."),
+      "warn"
+    );
+  }
+
+  const s = lib.summary || {};
+  summaryEl.classList.remove("hidden");
+  summaryEl.innerHTML = [
+    renderScanSummaryItem("Rolls", String(lib.folders.length)),
+    renderScanSummaryItem("Tagged", String(s.tagged || 0)),
+    renderScanSummaryItem("Partial", String(s.partial || 0)),
+    renderScanSummaryItem("Untagged", String(s.untagged || 0)),
+    lib.scanned_at ? renderScanSummaryItem("Scanned", formatStamp(lib.scanned_at)) : "",
+  ].join("");
+
+  const groups = new Map();
+  for (const row of lib.folders) {
+    const key = row.parent || row.display_name;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const keys = Array.from(groups.keys()).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  groupsEl.innerHTML = "";
+  for (const key of keys) {
+    const rows = groups.get(key).slice().sort((a, b) => {
+      if (a.is_flat_year !== b.is_flat_year) return a.is_flat_year ? -1 : 1;
+      return a.display_name.localeCompare(b.display_name, undefined, { numeric: true });
+    });
+    const section = document.createElement("section");
+    section.className = "lib-group";
+    section.innerHTML = `<h3 class="lib-group-title">${escapeHtml(key)} <span class="lib-group-count">${rows.length} folder${rows.length === 1 ? "" : "s"}</span></h3>`;
+    const list = document.createElement("div");
+    list.className = "lib-list";
+    for (const row of rows) list.appendChild(renderLibraryRow(row));
+    section.appendChild(list);
+    groupsEl.appendChild(section);
+  }
+  if (!keys.length) {
+    groupsEl.innerHTML = `<div class="library-empty">No folders with images found under this root yet.</div>`;
+  }
+}
+
+const KIND_SHORT = { camera_scan_raw: "raw", lab_scan_jpeg: "jpg", positive_master_tiff: "tif", other: "other" };
+
+function libraryCountsText(row) {
+  const parts = Object.entries(row.kinds || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([kind, n]) => `${n} ${KIND_SHORT[kind] || kind}`);
+  if (!parts.length) parts.push("no images");
+  if (row.sidecar_count) parts.push(`${row.sidecar_count} xmp`);
+  return parts.join(" · ");
+}
+
+function libraryStatusPill(row) {
+  if (row.is_flat_year) return `<span class="pill warn lib-status" title="Loose files directly in a year folder">Unsorted</span>`;
+  const cls = { tagged: "ok", partial: "warn", untagged: "", empty: "" }[row.status] || "";
+  return `<span class="pill ${cls} lib-status">${escapeHtml(row.status)}</span>`;
+}
+
+function renderLibraryRow(row) {
+  const el = document.createElement("div");
+  el.className = `lib-row ${row.status}`;
+  el.dataset.path = row.path;
+  const meta = [row.film_display, row.camera_display].filter(Boolean).join(" · ");
+  const actions = [];
+  if (row.status === "partial") {
+    actions.push(`<button type="button" class="primary" data-act="remaining">Tag remaining ${row.untagged_count}</button>`);
+  } else if (row.status === "untagged") {
+    actions.push(`<button type="button" class="primary" data-act="open">Tag</button>`);
+  }
+  if (row.status !== "untagged") {
+    actions.push(`<button type="button" class="secondary" data-act="open">Open</button>`);
+  }
+  actions.push(`<button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button>`);
+  el.innerHTML = `
+    ${libraryStatusPill(row)}
+    <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))}</span></span>
+    <span class="lib-meta" title="${escapeHtml(meta)}">${escapeHtml(meta || "")}</span>
+    <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
+    <span class="lib-actions">${actions.join("")}</span>
+  `;
+  el.querySelectorAll("[data-act]").forEach((btn) => {
+    btn.addEventListener("click", () => onLibraryAction(btn.dataset.act, row));
+  });
+  return el;
+}
+
+async function onLibraryAction(action, row) {
+  if (action === "reveal") {
+    await revealFolder(row.path);
+    return;
+  }
+  if (action === "remaining") {
+    try {
+      const details = await api(`/api/library/folder?${new URLSearchParams({ path: row.path })}`);
+      await openFolderInTagView(row.path, details.untagged_files);
+    } catch (e) {
+      renderLibraryBanner(`Could not read the folder: ${e.message}`, "bad");
+    }
+    return;
+  }
+  await openFolderInTagView(row.path, null);
+}
+
+async function revealFolder(path) {
+  const bridge = window.pywebview && window.pywebview.api;
+  try {
+    if (bridge && typeof bridge.reveal_path === "function") {
+      await bridge.reveal_path(path);
+    } else {
+      await api("/api/folder/reveal", { method: "POST", body: JSON.stringify({ folder: path }) });
+    }
+  } catch (e) {
+    renderLibraryBanner(`Could not reveal the folder: ${e.message}`, "bad");
+  }
+}
+
+// Hand a library folder to the Tag view, optionally restricted to a subset
+// of its files (the untagged remainder of a partially tagged roll).
+async function openFolderInTagView(path, files) {
+  state.folder = path;
+  state.fileSubset = null;
+  renderFolderInput();
+  showView("workflow");
+  await onScan();
+  if (files && files.length && state.scan) {
+    state.fileSubset = { folder: path, files: files.slice() };
+    renderScanSummary();
+  }
+}
+
+function activeFileSubset() {
+  const subset = state.fileSubset;
+  if (!subset || subset.folder !== state.folder || !state.scan) return null;
+  return subset.files;
+}
+
+function clearFileSubset() {
+  state.fileSubset = null;
+  state.lastDryRunResult = null;
+  renderScanSummary();
+  clearScanOutput();
+  updateActionButtons();
+}
+
+async function onChooseLibraryRoot() {
+  try {
+    const folder = await pickFolder();
+    if (!folder) return;
+    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify({ library_root: folder }) });
+    await loadLibrary({ rescan: true });
+  } catch (e) {
+    renderLibraryBanner(`Could not set the library root: ${e.message}`, "bad");
+  }
+}
+
+function formatStamp(iso, { dateOnly = false } = {}) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return dateOnly ? date : `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // ---------- Settings: General tab ----------
@@ -1813,10 +2107,11 @@ async function onBrowseLibraryRoot() {
 }
 
 function closeSettings() {
-  document.getElementById("settings-view").classList.add("hidden");
-  document.getElementById("workflow-view").classList.remove("hidden");
+  const back = state.viewBeforeSettings || "workflow";
+  showView(back);
   // Refresh main-flow entity caches in case the user edited/archived anything.
   init();
+  if (back === "library") void loadLibrary({ rescan: false });
 }
 
 async function refreshAllSettingsLists() {
@@ -2258,6 +2553,14 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Settings view toggle
   document.getElementById("settings-open").addEventListener("click", openSettings);
+  for (const tab of document.querySelectorAll(".view-tab")) {
+    tab.addEventListener("click", () => {
+      if (tab.dataset.view === "library") void openLibrary();
+      else showView(tab.dataset.view);
+    });
+  }
+  document.getElementById("library-rescan").addEventListener("click", () => void rescanLibrary());
+  document.getElementById("library-choose-root").addEventListener("click", onChooseLibraryRoot);
   document.getElementById("theme-dark").addEventListener("click", () => applyTheme("dark"));
   document.getElementById("theme-paper").addEventListener("click", () => applyTheme("paper"));
   document.getElementById("settings-back").addEventListener("click", closeSettings);
