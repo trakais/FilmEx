@@ -326,8 +326,12 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   (`inspect_roll` / `roll_from_renditions`) with summed counts, a
   combined status (tagged only when every rendition is), gear from the
   rendition tagged last, and the rendition rows under `renditions`
-  (cached as JSON, schema v9); the UI draws the roll row with Gather and
-  Reveal and one slimmer row per rendition with the tagging actions.
+  (cached as JSON, schema v9). The UI draws them as one block: the roll
+  row has no status pill (it holds no files; the combined status still
+  feeds the summary and the filter), shows the gear once and offers
+  Gather and Reveal; one slimmer row per rendition hangs off it on a tree
+  line with its own status, date and tagging actions, repeating the gear
+  only where it differs.
   Otherwise (a lab order with one subfolder per roll) it is a container,
   not a row: its subfolders are the rolls, at depth three, named
   `container/roll`. Normalize names skips both kinds.

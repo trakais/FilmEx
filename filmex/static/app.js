@@ -2066,9 +2066,6 @@ function renderLibraryRow(row) {
   return renderLibraryFolderRow(row);
 }
 
-// A roll kept as RAW and JPG renditions: the roll's row carries the combined
-// status and gear; one slimmer row per rendition carries the actions, since
-// each rendition is tagged on its own (same gear, its own scan source).
 // Film and camera of a Library row, led by the film's cassette in its brand
 // colours when the stock is known.
 function libraryMetaHtml(row) {
@@ -2082,30 +2079,38 @@ function libraryMetaHtml(row) {
   return `<span class="lib-meta" title="${escapeHtml(meta)}">${can}${escapeHtml(meta)}</span>`;
 }
 
+// A roll kept as RAW and JPG renditions reads as one block. The roll's row
+// holds no files, so it carries no status of its own: it names the roll,
+// sums the counts, shows the gear once and offers Gather. One slimmer row per
+// rendition hangs off it with its own status, date and tagging actions,
+// since each rendition is tagged on its own (same gear, its own scan source).
+// The combined status still counts in the summary and the filter.
 function renderLibraryRoll(row) {
   const frag = document.createDocumentFragment();
   const head = document.createElement("div");
   head.className = `lib-row lib-roll ${row.status}`;
   head.dataset.path = row.path;
   head.innerHTML = `
-    ${libraryStatusPill(row)}
+    <span class="lib-status" aria-hidden="true"></span>
     <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))} · ${row.renditions.length} renditions</span></span>
     ${libraryMetaHtml(row)}
-    <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
+    <span class="lib-date"></span>
     <span class="lib-actions"><button type="button" class="secondary" data-act="gather" title="Move the renditions' files into the roll folder">Gather</button><button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button></span>
   `;
   head.querySelector("[data-act=reveal]").addEventListener("click", () => onLibraryAction("reveal", row));
   head.querySelector("[data-act=gather]").addEventListener("click", () => void gatherRoll(row.path));
   frag.appendChild(head);
-  for (const part of row.renditions) {
-    const el = renderLibraryFolderRow({ ...part, display_name: part.rendition });
+  row.renditions.forEach((part, i) => {
+    const el = renderLibraryFolderRow({ ...part, display_name: part.rendition }, { roll: row });
     el.classList.add("lib-rendition");
+    if (i === row.renditions.length - 1) el.classList.add("lib-rendition-last");
     frag.appendChild(el);
-  }
+  });
   return frag;
 }
 
-function renderLibraryFolderRow(row) {
+// `roll`: the roll a rendition row hangs off; its gear is not repeated.
+function renderLibraryFolderRow(row, { roll = null } = {}) {
   const el = document.createElement("div");
   el.className = `lib-row ${row.status}`;
   el.dataset.path = row.path;
@@ -2121,7 +2126,7 @@ function renderLibraryFolderRow(row) {
   el.innerHTML = `
     ${libraryStatusPill(row)}
     <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))}</span></span>
-    ${libraryMetaHtml(row)}
+    ${roll && row.film_display === roll.film_display && row.camera_display === roll.camera_display ? `<span class="lib-meta"></span>` : libraryMetaHtml(row)}
     <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
     <span class="lib-actions">${actions.join("")}</span>
   `;

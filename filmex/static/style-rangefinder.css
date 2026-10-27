@@ -1809,10 +1809,31 @@ body[data-theme="paper"] .dialog {
 .lib-row:hover { background: rgba(255, 255, 255, 0.04); }
 .lib-row.empty { opacity: 0.55; }
 /* A roll kept as renditions: the roll's row, then one row per rendition. */
-.lib-row.lib-roll { border-bottom-style: dashed; }
-.lib-row.lib-rendition { padding-top: 6px; padding-bottom: 6px; }
-.lib-row.lib-rendition .lib-name { padding-left: 22px; position: relative; }
-.lib-row.lib-rendition .lib-name::before { content: ""; position: absolute; left: 7px; top: 1px; width: 8px; height: 8px; border-left: 1px solid var(--muted-2); border-bottom: 1px solid var(--muted-2); }
+/* A roll kept as renditions is one block: no separators inside it, and one
+   drawn tree line runs from under the roll's name into each rendition. The
+   line overshoots each row's padding so consecutive rows join without gaps. */
+.lib-row.lib-roll { border-bottom: none; padding-bottom: 6px; }
+.lib-row.lib-rendition { border-bottom: none; padding-top: 4px; padding-bottom: 4px; }
+.lib-row.lib-rendition-last { padding-bottom: 10px; }
+.lib-row.lib-rendition-last:not(:last-child) { border-bottom: 1px solid var(--border); }
+.lib-row.lib-rendition .lib-name { padding-left: 26px; position: relative; }
+.lib-row.lib-rendition .lib-name::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: -12px;
+  bottom: -12px;
+  border-left: 1px solid var(--border-strong);
+}
+.lib-row.lib-rendition .lib-name::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 11px;
+  border-top: 1px solid var(--border-strong);
+}
+.lib-row.lib-rendition-last .lib-name::before { bottom: auto; height: 20px; }
 .lib-row.lib-rendition .lib-name code { font-size: var(--fs-meta); color: var(--muted); }
 .lib-status { justify-self: start; }
 .lib-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
