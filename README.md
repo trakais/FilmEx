@@ -5,8 +5,8 @@ the analog camera, lens and film they came from, before the scans go into
 Lightroom or any other DAM. It is local-first: ExifTool runs on your
 machine, your folders stay where they are, nothing leaves the computer.
 
-![FilmEx library view](docs/screenshots/filmex-library.webp)
-_The Library: every roll by year, with its status, film and camera_
+![FilmEx folder screen](docs/screenshots/filmex-folder.webp)
+_A roll of scans: the contact sheet, the gear, one action_
 
 ## Install
 
@@ -75,6 +75,8 @@ The same screen covers the rest:
   year with its status, counts, film and camera, with Tag, Tag remaining,
   Open and Reveal on each row. The index is cached, so it opens even when
   the share is unmounted.
+
+  ![FilmEx library view](docs/screenshots/filmex-library.webp)
 - **Importing.** With a library set, a folder opened from anywhere else
   offers "Copy to library" and "Move to library". Rolls land in
   `<root>/<year>/<name>`, every file is read back and verified before a
