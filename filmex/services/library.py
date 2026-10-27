@@ -104,7 +104,10 @@ def last_applied_at(manifest: dict[str, Any] | None) -> str | None:
     return max(stamps) if stamps else None
 
 
-def inspect_folder(folder: Path, *, depth: int, parent: str | None) -> LibraryFolder:
+def inspect_folder(folder: Path, *, depth: int, parent: str | None, label: str | None = None) -> LibraryFolder:
+    """One row for ``folder``. ``label`` is the display name for a roll
+    nested inside another folder (``order/roll``); default is the folder's
+    own name in NFC."""
     try:
         listing = fr.list_frames(folder)
         images, sidecars = listing.images, listing.sidecar_count
@@ -133,7 +136,7 @@ def inspect_folder(folder: Path, *, depth: int, parent: str | None) -> LibraryFo
         path=str(folder),
         parent=parent,
         name=folder.name,
-        display_name=display_name(folder.name),
+        display_name=label or display_name(folder.name),
         depth=depth,
         status=status,
         image_count=len(images),
@@ -161,11 +164,16 @@ def scan_library(
     *,
     progress: Callable[[int], None] | None = None,
 ) -> list[LibraryFolder]:
-    """Walk ``root`` two levels deep and inspect every candidate folder.
+    """Walk ``root`` and inspect every candidate roll folder.
 
-    Depth-one folders appear as rows only when they hold images themselves
-    (the old flat year folders); their subfolders always appear, so an empty
-    roll folder shows up as ``empty`` rather than vanishing.
+    The layout is ``<root>/<year>/<roll>``. Depth-one folders appear as rows
+    only when they hold images themselves (the old flat year folders); their
+    subfolders always appear, so an empty roll folder shows up as ``empty``
+    rather than vanishing. A depth-two folder that holds no images but has
+    subfolders with images (a roll kept as ``JPG`` and ``RAW``, a lab order
+    with one subfolder per roll) is a container: its image-bearing
+    subfolders are the rolls, listed as ``container/roll`` at depth three,
+    and the container itself is not a row.
     """
     root_path = Path(root).expanduser()
     if not root_path.is_dir():
@@ -181,7 +189,16 @@ def scan_library(
             if progress:
                 progress(len(rows))
         for sub in _subdirs(top_path):
-            rows.append(inspect_folder(Path(sub.path), depth=2, parent=top_row.display_name))
+            sub_path = Path(sub.path)
+            row = inspect_folder(sub_path, depth=2, parent=top_row.display_name)
+            nested = [
+                inspect_folder(Path(e.path), depth=3, parent=top_row.display_name, label=f"{row.display_name}/{display_name(e.name)}")
+                for e in _subdirs(sub_path)
+            ]
+            nested = [n for n in nested if n.image_count]
+            if row.image_count or not nested:
+                rows.append(row)
+            rows.extend(nested)
             if progress:
                 progress(len(rows))
     return rows

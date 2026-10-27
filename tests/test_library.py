@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import unicodedata
 from pathlib import Path
 
@@ -111,8 +110,11 @@ def test_scan_library_derives_status_and_skips_junk(library_tree):
     assert flat.is_flat_year is True
     assert flat.depth == 1
     assert flat.image_count == 3
-    assert "nested" in rows  # depth-2 folder under a flat year still listed
-    assert rows["nested"].status == lib.EMPTY  # its images are one level too deep
+    # A folder whose images live one level down is a container, not a roll:
+    # the image-bearing subfolder is the row, named through its parent.
+    assert "nested" not in rows
+    deep = rows["nested/too-deep"]
+    assert deep.depth == 3 and deep.parent == "2010" and deep.image_count == 1 and deep.status == lib.UNTAGGED
 
     assert ".dtrash" not in rows and "files" not in rows
     assert "@eaDir" not in rows
@@ -161,7 +163,7 @@ def test_library_routes_rescan_cache_and_details(client, library_tree):
         events = [json.loads(line) for line in res.iter_lines() if line.strip()]
     assert events[0]["type"] == "start"
     assert events[-1]["type"] == "done"
-    assert events[-1]["summary"] == {"tagged": 1, "partial": 1, "untagged": 3, "empty": 2}
+    assert events[-1]["summary"] == {"tagged": 1, "partial": 1, "untagged": 4, "empty": 1}
 
     after = client.get("/api/library").json()
     assert after["stale"] is False
@@ -257,3 +259,43 @@ def test_apply_subset_touches_only_selected_files(client, roll_factory, fake_exi
     row = lib.inspect_folder(folder, depth=2, parent=None)
     assert row.status == lib.PARTIAL
     assert row.untagged_files == ["scan_000.jpg", "scan_002.jpg"]
+
+
+def test_rolls_kept_in_subfolders_are_listed_as_rolls(tmp_path: Path, make_jpeg):
+    """A roll split into JPG and RAW folders, and a lab order holding one
+    subfolder per roll: the subfolders are the rolls, the parents are not."""
+    root = tmp_path / "Filma"
+    year = root / "2026"
+    make_jpeg("R1-004A.JPG", long_edge=64, folder=year / "2026-04-16-Fed2-Fuji" / "JPG")
+    make_jpeg("DSC09040.jpg", long_edge=64, folder=year / "2026-04-16-Fed2-Fuji" / "RAW")
+    (year / "2026-04-16-Fed2-Fuji" / "notes.txt").write_text("lab order")
+    make_jpeg("004246440001.jpg", long_edge=64, folder=year / "2026-04-21-bfs" / "00424644-opjaZiepis")
+    make_jpeg("004246450001.jpg", long_edge=64, folder=year / "2026-04-21-bfs" / "00424645-Praktica")
+    (year / "2026-04-21-bfs" / "empty-sub").mkdir()
+    # A roll with its own images keeps its row even if a subfolder holds more.
+    make_jpeg("a.jpg", long_edge=64, folder=year / "2026-05-01-mixed")
+    make_jpeg("b.jpg", long_edge=64, folder=year / "2026-05-01-mixed" / "extra")
+
+    rows = {row.display_name: row for row in lib.scan_library(root)}
+    assert "2026-04-16-Fed2-Fuji" not in rows and "2026-04-21-bfs" not in rows
+    assert rows["2026-04-16-Fed2-Fuji/JPG"].depth == 3
+    assert rows["2026-04-16-Fed2-Fuji/JPG"].parent == "2026"
+    assert rows["2026-04-16-Fed2-Fuji/JPG"].name == "JPG"
+    assert rows["2026-04-16-Fed2-Fuji/RAW"].image_count == 1
+    assert rows["2026-04-21-bfs/00424645-Praktica"].status == lib.UNTAGGED
+    assert "2026-04-21-bfs/empty-sub" not in rows
+    assert rows["2026-05-01-mixed"].image_count == 1 and rows["2026-05-01-mixed/extra"].image_count == 1
+    assert lib.summarize(list(rows.values()))["untagged"] == 6
+
+
+def test_library_folder_details_for_a_nested_roll(client, tmp_path: Path, make_jpeg):
+    root = tmp_path / "Filma"
+    roll = root / "2026" / "2026-04-21-bfs" / "00424645-Praktica"
+    make_jpeg("004246450001.jpg", long_edge=64, folder=roll)
+    client.patch("/api/settings", json={"library_root": str(root)})
+    data = client.get("/api/library/folder", params={"path": str(roll)}).json()
+    assert data["depth"] == 3 and data["parent"] == "2026"
+    assert data["display_name"] == "2026-04-21-bfs/00424645-Praktica"
+    assert data["untagged_files"] == ["004246450001.jpg"]
+    nested_rename = client.post("/api/naming/propose", json={}).json()["proposals"]
+    assert nested_rename[0]["status"] == "skipped" and "inside another folder" in nested_rename[0]["reason"]

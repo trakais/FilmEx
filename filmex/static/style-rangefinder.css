@@ -1659,6 +1659,7 @@ body[data-theme="paper"] .dialog {
 }
 
 /* ---------- View navigation (header) ---------- */
+.top-left { display: flex; align-items: center; min-width: 0; }
 .view-nav {
   display: flex;
   align-items: center;

@@ -290,6 +290,11 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   `untagged`; some files applied → `partial`; all applied → `tagged`. A
   depth-one folder holding images itself is a flat year folder
   (`is_flat_year`, shown as "unsorted").
+- **Nested rolls**: a roll folder with no images of its own but with
+  image-bearing subfolders (a roll kept as `JPG` and `RAW`, a lab order
+  with one subfolder per roll) is a container, not a row. Its subfolders
+  are the rolls, at depth three, named `container/roll`; the UI labels an
+  open one the same way. Normalize names skips them.
 - Names are taken from the directory listing as-is (SMB shares store some
   NFD); `display_name` is NFC. Never retype a path from its display name.
 - Junk is skipped everywhere: hidden entries, `@eaDir`, `#recycle`, `._*`

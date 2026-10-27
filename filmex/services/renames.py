@@ -130,13 +130,16 @@ def propose(
 ) -> list[RenameProposal]:
     """One proposal per roll folder under ``root`` (fresh walk, not the cache)."""
     naming.validate_template(template)
-    rows = [r for r in lib.scan_library(root) if r.depth == 2 or r.is_flat_year]
+    rows = [r for r in lib.scan_library(root) if r.depth >= 2 or r.is_flat_year]
     proposals: list[RenameProposal] = []
     candidates: list[tuple[lib.LibraryFolder, naming.NameContext, dict[str, Any]]] = []
 
     for row in rows:
         if row.is_flat_year:
             proposals.append(_skip(row, "loose year folder; carve rolls out first"))
+            continue
+        if row.depth > 2:
+            proposals.append(_skip(row, "inside another folder; rename it by hand"))
             continue
         if row.status == lib.EMPTY:
             proposals.append(_skip(row, "no images"))

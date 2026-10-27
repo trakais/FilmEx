@@ -469,18 +469,26 @@ function hasLibrary() {
   return !!(state.settings && state.settings.library_root);
 }
 
-// Tabs appear only for places that exist: Library once a root is set, the
-// folder once one is open. "Open folder" is always there.
+// Tabs sit next to the brand and only appear for places that exist:
+// Library once a root is set, the folder once one is open. A tab that would
+// stand alone pointing at the screen already shown is left out, since the
+// screen's own heading says where you are. "Open folder" is always there.
 function renderHeader() {
   const libraryTab = document.querySelector('.view-tab[data-view="library"]');
   const folderTab = document.querySelector('.view-tab[data-view="folder"]');
-  libraryTab.classList.toggle("hidden", !hasLibrary());
-  libraryTab.classList.toggle("active", state.view === "library");
   const open = !!state.folder.path;
-  folderTab.classList.toggle("hidden", !open);
-  folderTab.classList.toggle("active", state.view === "folder");
+  const tabs = [
+    { el: libraryTab, exists: hasLibrary(), active: state.view === "library" },
+    { el: folderTab, exists: open, active: state.view === "folder" },
+  ];
+  const visible = tabs.filter(t => t.exists);
+  const lone = visible.length === 1 && visible[0].active;
+  for (const tab of tabs) {
+    tab.el.classList.toggle("hidden", !tab.exists || lone);
+    tab.el.classList.toggle("active", tab.active);
+  }
   if (open) {
-    folderTab.textContent = baseName(state.folder.path);
+    folderTab.textContent = folderLabel(state.folder.path);
     folderTab.title = state.folder.path;
   }
 }
@@ -498,6 +506,18 @@ function chooseStartView() {
 
 function baseName(path) {
   return (path || "").replace(/\/+$/, "").split("/").pop() || path;
+}
+
+// How a folder is called in the header and on its screen: inside the
+// library, its path below the year (`order-77/roll-a`), else its name.
+function folderLabel(path) {
+  const root = (state.settings?.library_root || "").replace(/\/+$/, "");
+  const clean = (path || "").replace(/\/+$/, "");
+  if (root && clean.startsWith(root + "/")) {
+    const parts = clean.slice(root.length + 1).split("/");
+    if (parts.length >= 2) return parts.slice(1).join("/");
+  }
+  return baseName(clean);
 }
 
 function setPageTitleProgress(label, current, total) {
@@ -2259,7 +2279,7 @@ function renderFolderBanner(message, level = "warn") {
 function renderFolder() {
   const folder = state.folder;
   const has = !!folder.listing;
-  document.getElementById("folder-name").textContent = baseName(folder.path);
+  document.getElementById("folder-name").textContent = folderLabel(folder.path);
   document.getElementById("folder-name").title = folder.path;
   renderFolderStatus();
   document.getElementById("sheet-section").classList.toggle("hidden", !has);

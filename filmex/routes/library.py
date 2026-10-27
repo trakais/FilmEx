@@ -93,10 +93,10 @@ def read_library_folder(path: str, session: Session = Depends(get_session)) -> d
         raise HTTPException(status_code=404, detail=f"Folder not found: {path}")
     if root and not lib.folder_is_under(root, folder):
         raise HTTPException(status_code=400, detail="Folder is outside the library root")
-    parent = folder.parent.name if root and folder.parent != Path(root).expanduser() else None
-    depth = 1 if root and folder.parent == Path(root).expanduser() else 2
-    row = lib.inspect_folder(
-        folder, depth=depth, parent=fr.display_name(parent) if parent else None
-    )
+    parts = folder.resolve().relative_to(Path(root).expanduser().resolve()).parts if root else ()
+    depth = len(parts) or 2
+    parent = fr.display_name(parts[0]) if depth >= 2 else None
+    label = "/".join(fr.display_name(p) for p in parts[1:]) if depth >= 3 else None
+    row = lib.inspect_folder(folder, depth=depth, parent=parent, label=label)
     row.is_flat_year = depth == 1 and row.image_count > 0
     return row.to_dict()
