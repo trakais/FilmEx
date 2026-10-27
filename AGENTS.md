@@ -58,7 +58,7 @@ filmex/
 │   ├── services/             # exiftool (+locator), keywords, folder scan,
 │   │                         # manifest, previews, settings, jobs, tagging,
 │   │                         # library, naming, renames, frames, fileops,
-│   │                         # importer, operations
+│   │                         # importer, operations, renditions, gather
 │   ├── static/               # vanilla-JS single-page UI
 │   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
 │   └── default_data.sqlite   # bundled starter DB; copied to the data dir on first run
@@ -259,7 +259,23 @@ film stock rows.
   (hidden files, `._*` AppleDouble, `smbdelete*`, `@eaDir`, `#recycle`,
   `Thumbs.db`), the litter a cleanup may delete, frame grouping and the
   `.thm` lookup. The folder scan, thumbnails, Library index, contact
-  sheet, split and import all read folders through it.
+  sheet, split and import all read folders through it. A JPEG or TIFF
+  whose stem is a raw frame's stem plus a separator and a word
+  (`DSC0001-positive.jpg` beside `DSC0001.ARW`) is a developed copy of
+  that frame: it joins the raw frame as a *positive* (`Frame.positives`),
+  is tagged and moved with it, is the frame's thumbnail (never inverted),
+  while capture time and size for cut suggestions come from
+  `Frame.scan_image`. Only raw stems in the same folder count.
+- **Renditions** (`services/renditions.py`): a subfolder named like a
+  format or a scan source (`RAW`, `JPG`, `TIFF`, `positives`, `lab`,
+  `scans`…, see `RENDITION_NAMES`) is a rendition of the roll folder
+  above it, not a roll. `roll_id_for(folder)` gives the roll's name for
+  the `Roll|…` keyword and the manifest's `roll_id` (`folder_scan`
+  uses it); the rendition keeps its own files, manifest, scan provider
+  and method. `GET /api/folder/frames` reports `roll_id`, `rendition`
+  and `sibling_renditions`; the Folder screen shows a rendition as
+  `roll/RAW`, offers no move, and seeds an untagged rendition's camera,
+  lens, film, date and place from a tagged sibling's manifest.
 
 ## Naming system
 
@@ -289,10 +305,16 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   depth-one folder holding images itself is a flat year folder
   (`is_flat_year`, shown as "unsorted").
 - **Nested rolls**: a roll folder with no images of its own but with
-  image-bearing subfolders (a roll kept as `JPG` and `RAW`, a lab order
-  with one subfolder per roll) is a container, not a row. Its subfolders
-  are the rolls, at depth three, named `container/roll`; the UI labels an
-  open one the same way. Normalize names skips them.
+  image-bearing subfolders is one of two things. When every such
+  subfolder is a rendition (`JPG`, `RAW`…) it is **one roll**: one row
+  (`inspect_roll` / `roll_from_renditions`) with summed counts, a
+  combined status (tagged only when every rendition is), gear from the
+  rendition tagged last, and the rendition rows under `renditions`
+  (cached as JSON, schema v9); the UI draws the roll row with Gather and
+  Reveal and one slimmer row per rendition with the tagging actions.
+  Otherwise (a lab order with one subfolder per roll) it is a container,
+  not a row: its subfolders are the rolls, at depth three, named
+  `container/roll`. Normalize names skips both kinds.
 - Names are taken from the directory listing as-is (SMB shares store some
   NFD); `display_name` is NFC. Never retype a path from its display name.
 - Junk is skipped everywhere: hidden entries, `@eaDir`, `#recycle`, `._*`
@@ -396,8 +418,24 @@ only after every file of that roll verified. A verification failure
 removes the bad copy and stops that roll; later rolls are not started.
 Free space is checked in the plan.
 
-**Undo** (`operation_log`, kinds `rename`, `split`, `import`): `POST
-/api/operations/{id}/undo` dispatches by kind. Split undo moves every
+**Gather** (`services/gather.py`): the renditions of a roll become one
+folder. `plan_gather(folder)` takes the roll folder or any rendition,
+lists every file of every rendition (frames and loose files, never the
+manifest) and refuses on any name present twice or already in the roll
+folder. `apply_gather` renames each file up into the roll folder (same
+volume by construction), merges the renditions' manifests into one
+(`merge_manifests`: roll-level fields from the rendition tagged last,
+apply histories joined in time order, file overrides merged, each
+rendition's own roll id, scan source and applied files kept under
+`gathered_renditions`), writes `Roll|<roll>` on files that were tagged
+under an old per-subfolder roll id, and removes the emptied subfolders.
+The UI confirms with the Lightroom warning first: a catalog that holds
+these files shows them as missing until the folder is relinked.
+
+**Undo** (`operation_log`, kinds `rename`, `split`, `import`, `gather`):
+`POST /api/operations/{id}/undo` dispatches by kind. Gather undo moves
+every file back, restores the renditions' manifests and their old Roll
+keywords, and drops the merged manifest. Split undo moves every
 frame back, restores the stashed manifest and removes the created folders.
 Import undo copies moved files back (the copy back is verified; the hash
 recorded at import time is not compared, tagging rewrote the file since)
@@ -408,7 +446,8 @@ the folder replaces it.
 
 **Results are typed, their JSON is fixed.** Split and import return
 `SplitResult` / `ImportResult` (with `SplitRoll`, `ImportedRoll`, `Move`,
-`ImportedFile`), undo returns `SplitUndoResult` / `ImportUndoResult`.
+`ImportedFile`), gather returns `GatherResult` (with `GatheredRendition`),
+undo returns `SplitUndoResult` / `ImportUndoResult` / `GatherUndoResult`.
 `to_dict()` is both what the job reports and what `operation_log` stores;
 `from_dict()` reads a journal entry back for undo. The JSON keys (`from`,
 `to`, `created`, `moves`, …) are a stored format: old journal entries must
@@ -419,7 +458,8 @@ with its roll) in Python and in their JSON.
 
 Routes: `GET /api/folder/frames`, `POST /api/naming/render`, `POST
 /api/folder/split` (plan), `POST /api/folder/split/apply` (job), `POST
-/api/import/plan`, `POST /api/import/apply` (job). Plan failures answer
+/api/import/plan`, `POST /api/import/apply` (job), `POST
+/api/folder/gather` (plan), `POST /api/folder/gather/apply` (job). Plan failures answer
 `400 {"detail": {"errors": [...]}}`; a plan that comes back with
 `"ok": false` lists why in `problems`.
 
@@ -635,8 +675,15 @@ Must stay covered:
 - Archive flag filtering
 - Manifest create / update / history
 - Folder scan source-kind detection and scan-tier derivation
-- Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag, and every
+- Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag, developed
+  positives joining their raw frame (and not without a raw), and every
   folder view (scan, thumbnails, Library, sheet) skipping the same junk
+- Renditions: roll id from the parent in the scan, the keyword and the
+  manifest; one Library row per roll with combined status; the folder and
+  frames endpoints; Normalize names skipping such rolls
+- Gather: plan lists every file and stops on a collision, apply moves,
+  merges manifests, swaps old Roll keywords and removes subfolders, undo
+  puts all of it back, HTTP plan/apply/undo
 - Job protocol: start, body events, one terminal event, reserved types
 - Split: layout (siblings vs subfolders), collisions, moves with
   companions, cross-volume stop with a partial undo, emptied-source

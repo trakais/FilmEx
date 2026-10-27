@@ -17,7 +17,7 @@ from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
-from filmex.services import cuts, fileops, importer, jobs, renditions
+from filmex.services import cuts, fileops, gather, importer, jobs, renditions
 from filmex.services import frames as fr
 from filmex.services import settings as settings_service
 
@@ -103,6 +103,42 @@ def folder_cuts(path: str, frames_per_roll: int | None = None, session: Session 
     data = report.to_dict()
     data["facts"] = [f.to_dict() for f in facts]
     return data
+
+
+# ---------- gather ----------
+
+
+class GatherRequest(BaseModel):
+    folder: str  # the roll folder or any of its renditions
+
+
+@router.post("/api/folder/gather")
+def gather_plan(req: GatherRequest) -> dict[str, Any]:
+    try:
+        return gather.plan_gather(req.folder).to_dict()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/folder/gather/apply")
+def gather_apply(req: GatherRequest) -> StreamingResponse:
+    try:
+        plan = gather.plan_gather(req.folder)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not plan.ok:
+        raise HTTPException(status_code=400, detail={"errors": plan.problems})
+    folder = req.folder
+
+    def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
+        with Session(get_engine()) as job_session:
+            try:
+                return gather.apply_gather(job_session, folder, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict()
+            except fileops.PlanError as exc:
+                raise RuntimeError("; ".join(exc.errors)) from exc
+
+    start = {"total": plan.file_count, "renditions": len(plan.items)}
+    return job_routes.stream(jobs.get_manager().submit("gather", body, exclusive=True, start=start))
 
 
 # ---------- split ----------

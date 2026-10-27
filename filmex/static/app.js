@@ -1893,9 +1893,10 @@ function renderLibraryRoll(row) {
     <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))} · ${row.renditions.length} renditions</span></span>
     <span class="lib-meta" title="${escapeHtml(meta)}">${escapeHtml(meta || "")}</span>
     <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
-    <span class="lib-actions"><span></span><button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button></span>
+    <span class="lib-actions"><button type="button" class="secondary" data-act="gather" title="Move the renditions' files into the roll folder">Gather</button><button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button></span>
   `;
   head.querySelector("[data-act=reveal]").addEventListener("click", () => onLibraryAction("reveal", row));
+  head.querySelector("[data-act=gather]").addEventListener("click", () => void gatherRoll(row.path));
   frag.appendChild(head);
   for (const part of row.renditions) {
     const el = renderLibraryFolderRow({ ...part, display_name: part.rendition });
@@ -2362,6 +2363,7 @@ function renderFolder() {
   document.getElementById("rolls-section").classList.toggle("hidden", !has);
   document.getElementById("folder-actions").classList.toggle("hidden", !has);
   renderFolderSummary();
+  renderFolderRenditions();
   renderHeader();
   if (!has) return;
   renderSheet();
@@ -2381,6 +2383,77 @@ function renderFolderStatus() {
   if (history.length) parts.push(`tagged ${formatStamp(history[history.length - 1].timestamp, { dateOnly: true })}`);
   else if (folder.listing) parts.push("untagged");
   el.textContent = parts.join(" · ");
+}
+
+// A rendition folder (RAW, JPG…) names its roll and the other renditions,
+// with the way to make them one folder.
+function renderFolderRenditions() {
+  const el = document.getElementById("folder-renditions");
+  const listing = state.folder.listing;
+  if (!listing || !listing.rendition) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const others = (listing.sibling_renditions || []).map(baseName);
+  const text = others.length
+    ? `${listing.rendition} rendition of ${listing.roll_id}; ${others.join(", ")} beside it.`
+    : `${listing.rendition} rendition of ${listing.roll_id}.`;
+  el.classList.remove("hidden");
+  el.innerHTML = `<span>${escapeHtml(text)}</span> <button type="button" class="action-link" id="folder-gather">Gather into one folder</button>`;
+  document.getElementById("folder-gather").addEventListener("click", () => void gatherRoll(state.folder.path));
+}
+
+// Gather the roll that `path` belongs to: its renditions' files move up into
+// the roll folder. Lightroom tracks files by path, so the confirmation says
+// what that means before anything moves.
+async function gatherRoll(path) {
+  if (state.folder.running) return;
+  let plan;
+  try {
+    plan = await api("/api/folder/gather", { method: "POST", body: JSON.stringify({ folder: path }) });
+  } catch (e) {
+    await notify(planErrorsText(e), "Nothing to gather");
+    return;
+  }
+  if (!plan.ok) {
+    await notify(plan.problems.join("\n"), "The roll cannot be gathered as it is");
+    return;
+  }
+  const names = plan.items.map(i => i.rendition).join(" and ");
+  const ok = await ask(
+    `Move ${plan.file_count} file${plan.file_count === 1 ? "" : "s"} from ${names} into ${plan.roll_name}, merge their manifests, and remove the empty subfolders?\n\n` +
+    `Lightroom knows these files by their current paths: a catalog that has them will show them as missing until you relink the folder (Library ▸ Find Missing Folder). ` +
+    `That is harmless for developed JPEGs; for raws you have edited in Lightroom, move the folder in Lightroom instead.\n\nThe batch can be undone.`,
+    { title: "Gather into one folder", okLabel: "Gather" }
+  );
+  if (!ok) return;
+  if (state.folder.path !== plan.roll) await openFolder(plan.roll);
+  const folder = state.folder;
+  folder.running = true;
+  updateRunButton();
+  renderFolderProgress("Gathering…", 0);
+  try {
+    let total = 0;
+    const done = await runJob("/api/folder/gather/apply", {
+      body: { folder: path },
+      onStart: (ev) => { total = ev.total || 0; setPageTitleProgress("Gathering", 0, total); },
+      onEvent: (ev) => {
+        if (ev.step === "move" && ev.file) { renderFolderProgress(`Moving ${ev.file}`, total ? ev.done / total : null); setPageTitleProgress("Gathering", ev.done, total); }
+        else if (ev.step === "keywords" && ev.file) renderFolderProgress(`Roll keyword on ${ev.file}`, null);
+      },
+    });
+    renderFolderProgress(null);
+    const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
+    await notify(`${done.moves.length} file${done.moves.length === 1 ? "" : "s"} moved into ${baseName(done.roll)}, ${done.removed_folders.length} subfolder${done.removed_folders.length === 1 ? "" : "s"} removed, Roll keyword updated on ${done.keyword_files.length}.${problems}`, "Roll gathered");
+    if (hasLibrary()) void loadLibrary({ rescan: true });
+    await openFolder(plan.roll);
+    state.folder.lastOperation = done.operation_id || null;
+    updateRunButton();
+  } catch (e) {
+    renderFolderProgress(null);
+    await notify(planErrorsText(e), "Gathering failed");
+  } finally {
+    state.folder.running = false;
+    resetPageTitle();
+    updateRunButton();
+  }
 }
 
 function renderFolderSummary() {

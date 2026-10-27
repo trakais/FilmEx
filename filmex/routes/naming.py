@@ -12,7 +12,7 @@ from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
-from filmex.services import fileops, importer, jobs, naming, operations, renames
+from filmex.services import fileops, gather, importer, jobs, naming, operations, renames
 from filmex.services import settings as settings_service
 
 router = APIRouter()
@@ -85,6 +85,7 @@ _UNDO_BY_KIND = {
     "rename": renames.undo,
     "split": lambda session, op_id, **options: fileops.undo_split(session, op_id, **options).to_dict(),
     "import": lambda session, op_id, **options: importer.undo_import(session, op_id, **options).to_dict(),
+    "gather": lambda session, op_id, **options: gather.undo_gather(session, op_id, **options).to_dict(),
 }
 
 
