@@ -17,7 +17,7 @@ from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
-from filmex.services import cuts, fileops, importer, jobs
+from filmex.services import cuts, fileops, importer, jobs, renditions
 from filmex.services import frames as fr
 from filmex.services import settings as settings_service
 
@@ -82,6 +82,9 @@ def folder_frames(path: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     data = listing.to_dict()
     data["suggested_roll_date"] = fr.earliest_file_date(folder, listing.frames)
+    data["roll_id"] = renditions.roll_id_for(folder)
+    data["rendition"] = renditions.rendition_name(folder)
+    data["sibling_renditions"] = [str(p) for p in renditions.sibling_renditions(folder)]
     return data
 
 

@@ -25,7 +25,7 @@ from typing import Optional
 from PIL import Image
 
 from filmex.services import frames as fr
-from filmex.services import previews
+from filmex.services import previews, renditions
 
 HIGH_RES_JPG_THRESHOLD = 3000
 
@@ -97,7 +97,7 @@ def scan_folder(folder: str | Path) -> ScanResult:
 
     return ScanResult(
         folder=folder_path,
-        roll_id=folder_path.name,
+        roll_id=renditions.roll_id_for(folder_path),
         files=files,
         source_kind=folder_kind,
         scan_tier=tier,

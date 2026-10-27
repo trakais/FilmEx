@@ -97,6 +97,6 @@ def read_library_folder(path: str, session: Session = Depends(get_session)) -> d
     depth = len(parts) or 2
     parent = fr.display_name(parts[0]) if depth >= 2 else None
     label = "/".join(fr.display_name(p) for p in parts[1:]) if depth >= 3 else None
-    row = lib.inspect_folder(folder, depth=depth, parent=parent, label=label)
+    row = lib.inspect_roll(folder, depth=depth, parent=parent, label=label)
     row.is_flat_year = depth == 1 and row.image_count > 0
     return row.to_dict()

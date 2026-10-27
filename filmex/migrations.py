@@ -12,7 +12,7 @@ import uuid
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 def migrate_db(engine: Engine) -> None:
@@ -68,6 +68,9 @@ def _apply_migration(engine: Engine, version: int) -> None:
         return
     if version == 8:
         _migrate_to_v8(engine)
+        return
+    if version == 9:
+        _migrate_to_v9(engine)
         return
     raise RuntimeError(f"No migration registered for schema version {version}")
 
@@ -252,6 +255,13 @@ def _migrate_to_v8(engine: Engine) -> None:
         )
         conn.exec_driver_sql("CREATE INDEX ix_operation_log_kind ON operation_log(kind)")
         conn.exec_driver_sql("CREATE INDEX ix_operation_log_status ON operation_log(status)")
+
+
+def _migrate_to_v9(engine: Engine) -> None:
+    """Library rows know about renditions: a roll kept as RAW and JPG
+    subfolders is one row carrying its rendition rows."""
+    _ensure_column(engine, "library_folder", "rendition", "VARCHAR")
+    _ensure_column(engine, "library_folder", "renditions_json", "VARCHAR NOT NULL DEFAULT '[]'")
 
 
 def _sync_film_brands(engine: Engine) -> None:

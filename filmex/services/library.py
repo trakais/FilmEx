@@ -22,6 +22,7 @@ from typing import Any
 
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
+from filmex.services import renditions as rd
 from filmex.services.frames import display_name
 
 MAX_DEPTH = 2
@@ -52,6 +53,8 @@ class LibraryFolder:
     last_applied_at: str | None
     is_flat_year: bool = False
     untagged_files: list[str] = field(default_factory=list)
+    rendition: str | None = None  # this folder is the RAW/JPG… rendition of the roll above it
+    renditions: list[dict[str, Any]] = field(default_factory=list)  # a roll kept as renditions: one entry each
 
     def to_dict(self, *, include_files: bool = True) -> dict[str, Any]:
         data = asdict(self)
@@ -149,7 +152,51 @@ def inspect_folder(folder: Path, *, depth: int, parent: str | None, label: str |
         camera_display=camera.get("display_name") or None,
         last_applied_at=last_applied_at(manifest),
         untagged_files=untagged,
+        rendition=rd.rendition_name(folder),
     )
+
+
+def inspect_roll(folder: Path, *, depth: int, parent: str | None, label: str | None = None) -> LibraryFolder:
+    """``inspect_folder``, except that a folder without images of its own
+    whose image-bearing subfolders are all renditions (``RAW``, ``JPG``…)
+    is one roll: its row carries the renditions and their combined status."""
+    row = inspect_folder(folder, depth=depth, parent=parent, label=label)
+    if row.image_count:
+        return row
+    parts = [inspect_folder(sub, depth=depth + 1, parent=parent, label=f"{row.display_name}/{display_name(sub.name)}") for sub in rd.rendition_dirs(folder)]
+    return roll_from_renditions(row, parts) if parts else row
+
+
+def roll_from_renditions(row: LibraryFolder, parts: list[LibraryFolder]) -> LibraryFolder:
+    """One row for the roll: counts summed, status combined (tagged only
+    when every rendition is), gear from the rendition tagged last."""
+    statuses = {p.status for p in parts if p.status != EMPTY}
+    if not statuses:
+        status = EMPTY
+    elif statuses == {TAGGED}:
+        status = TAGGED
+    elif statuses == {UNTAGGED}:
+        status = UNTAGGED
+    else:
+        status = PARTIAL
+    kinds: Counter[str] = Counter()
+    for p in parts:
+        kinds.update(p.kinds)
+    tagged = [p for p in parts if p.last_applied_at]
+    latest = max(tagged, key=lambda p: p.last_applied_at or "") if tagged else None
+    row.status = status
+    row.image_count = sum(p.image_count for p in parts)
+    row.untagged_count = sum(p.untagged_count for p in parts)
+    row.sidecar_count = sum(p.sidecar_count for p in parts)
+    row.kinds = dict(kinds)
+    row.has_manifest = any(p.has_manifest for p in parts)
+    row.roll_id = row.name
+    row.film_display = latest.film_display if latest else None
+    row.camera_display = latest.camera_display if latest else None
+    row.last_applied_at = latest.last_applied_at if latest else None
+    row.untagged_files = []
+    row.renditions = [p.to_dict(include_files=False) for p in parts]
+    return row
 
 
 def _safe_read_manifest(folder: Path) -> dict[str, Any] | None:
@@ -170,8 +217,9 @@ def scan_library(
     only when they hold images themselves (the old flat year folders); their
     subfolders always appear, so an empty roll folder shows up as ``empty``
     rather than vanishing. A depth-two folder that holds no images but has
-    subfolders with images (a roll kept as ``JPG`` and ``RAW``, a lab order
-    with one subfolder per roll) is a container: its image-bearing
+    subfolders with images is either a roll kept as renditions (``JPG`` and
+    ``RAW``: one row for the roll, the renditions inside it) or a container
+    (a lab order with one subfolder per roll): then its image-bearing
     subfolders are the rolls, listed as ``container/roll`` at depth three,
     and the container itself is not a row.
     """
@@ -190,7 +238,12 @@ def scan_library(
                 progress(len(rows))
         for sub in _subdirs(top_path):
             sub_path = Path(sub.path)
-            row = inspect_folder(sub_path, depth=2, parent=top_row.display_name)
+            row = inspect_roll(sub_path, depth=2, parent=top_row.display_name)
+            if row.renditions:
+                rows.append(row)
+                if progress:
+                    progress(len(rows))
+                continue
             nested = [
                 inspect_folder(Path(e.path), depth=3, parent=top_row.display_name, label=f"{row.display_name}/{display_name(e.name)}")
                 for e in _subdirs(sub_path)

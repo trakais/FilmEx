@@ -115,7 +115,7 @@ class CutReport:
 
 def frame_facts(folder: Path, frames: list[fr.Frame]) -> list[FrameFact]:
     """One fact per frame, read from its preview image (JPEG over raw)."""
-    paths = {f.key: folder / f.preview for f in frames if f.preview}
+    paths = {f.key: folder / f.scan_image for f in frames if f.scan_image}
     exif = read_exif_facts(list(paths.values()))
     facts: list[FrameFact] = []
     for frame in frames:

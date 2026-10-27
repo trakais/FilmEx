@@ -1756,6 +1756,13 @@ body[data-theme="paper"] .dialog {
 .lib-row:last-child { border-bottom: none; }
 .lib-row:hover { background: rgba(255, 255, 255, 0.025); }
 .lib-row.empty { opacity: 0.55; }
+/* A roll kept as renditions: the roll's row, then one row per rendition. */
+.lib-row.lib-roll { border-bottom-style: dashed; }
+.lib-row.lib-rendition { padding-top: 6px; padding-bottom: 6px; }
+.lib-row.lib-rendition .lib-name { padding-left: 22px; position: relative; }
+.lib-row.lib-rendition .lib-name::before { content: "└"; position: absolute; left: 6px; top: 0; color: var(--muted-2); font-family: var(--font-mono); }
+.lib-row.lib-rendition .lib-name code { font-size: 12px; color: var(--muted); }
+.lib-row.lib-rendition .lib-status { transform: scale(0.92); transform-origin: left center; }
 .lib-status { justify-self: start; }
 .lib-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .lib-name code {

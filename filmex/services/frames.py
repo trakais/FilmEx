@@ -121,10 +121,20 @@ class Frame:
     unmatched_jpeg: bool = False  # JPEG-only frame in a folder that has raw frames
     preview: str | None = None  # image file to build the thumbnail from
     bytes: int = 0
+    positives: list[str] = field(default_factory=list)  # developed copies of this frame (DSC0001-positive.jpg)
 
     @property
     def files(self) -> list[str]:
         return [*self.images, *self.companions]
+
+    @property
+    def scan_image(self) -> str | None:
+        """The scan itself (raw or lab JPEG), never a developed positive: the
+        file whose capture time and pixel size describe the frame."""
+        for name in self.images:
+            if name not in self.positives:
+                return name
+        return self.preview
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -193,6 +203,7 @@ def list_frames(folder: Path | str) -> FrameListing:
                 frame.companions.append(entry.name)
             frame.bytes += size
 
+    _attach_positives(by_key)
     frames: list[Frame] = []
     for frame in by_key.values():
         if not frame.images:
@@ -201,9 +212,10 @@ def list_frames(folder: Path | str) -> FrameListing:
             continue
         frame.images.sort(key=_sort_key)
         frame.companions.sort(key=_sort_key)
+        frame.positives.sort(key=_sort_key)
         frame.kinds = sorted({k for k in (source_kind_for(n) for n in frame.images) if k})
         frame.has_raw = any(os.path.splitext(n)[1].lower() in RAW_EXTS for n in frame.images)
-        frame.preview = _preview_for(frame.images)
+        frame.preview = _preview_for(frame.images, positives=frame.positives)
         frames.append(frame)
 
     frames.sort(key=lambda f: f.display_key.lower())
@@ -255,10 +267,49 @@ def _sort_key(name: str) -> str:
     return display_name(name).lower()
 
 
-def _preview_for(images: Iterable[str]) -> str | None:
-    def rank(name: str) -> int:
+def _preview_for(images: Iterable[str], *, positives: Iterable[str] = ()) -> str | None:
+    """A developed positive first (it shows the picture, not the negative),
+    then the cheapest file to decode."""
+    developed = set(positives)
+
+    def rank(name: str) -> tuple[int, int]:
         ext = os.path.splitext(name)[1].lower()
-        return _PREVIEW_PRIORITY.index(ext) if ext in _PREVIEW_PRIORITY else 99
+        return (0 if name in developed else 1, _PREVIEW_PRIORITY.index(ext) if ext in _PREVIEW_PRIORITY else 99)
 
     ranked = sorted(images, key=rank)
     return ranked[0] if ranked else None
+
+
+_POSITIVE_SEPARATORS = "-_ "
+
+
+def _attach_positives(by_key: dict[str, Frame]) -> None:
+    """A JPEG or TIFF whose stem is a raw frame's stem plus a separator and a
+    word (``DSC0001-positive.jpg`` beside ``DSC0001.ARW``) is a developed
+    copy of that frame, not a frame of its own: it joins the raw frame as a
+    positive. Only raw stems in the same folder count, so a lab's own
+    ``000012.jpg`` or a ``DSC0001-2.ARW`` second exposure is never swallowed."""
+    raw_keys = {key for key, frame in by_key.items() if any(os.path.splitext(n)[1].lower() in RAW_EXTS for n in frame.images)}
+    if not raw_keys:
+        return
+    for key in list(by_key):
+        frame = by_key[key]
+        if key in raw_keys or not frame.images:
+            continue
+        base = _positive_base(key, raw_keys)
+        if base is None:
+            continue
+        target = by_key[base]
+        target.images.extend(frame.images)
+        target.positives.extend(frame.images)
+        target.companions.extend(frame.companions)
+        target.bytes += frame.bytes
+        del by_key[key]
+
+
+def _positive_base(key: str, raw_keys: set[str]) -> str | None:
+    """The longest raw stem that ``key`` extends with a separator and more."""
+    for i in range(len(key) - 2, 0, -1):
+        if key[i] in _POSITIVE_SEPARATORS and key[i + 1] not in _POSITIVE_SEPARATORS and key[:i] in raw_keys:
+            return key[:i]
+    return None

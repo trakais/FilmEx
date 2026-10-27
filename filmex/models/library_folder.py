@@ -26,4 +26,6 @@ class LibraryFolderRow(SQLModel, table=True):
     camera_display: str | None = None
     last_applied_at: str | None = None
     is_flat_year: bool = False
+    rendition: str | None = None  # this folder is the RAW/JPG… rendition of the roll above it
+    renditions_json: str = "[]"  # a roll kept as renditions: its rendition rows
     scanned_at: str

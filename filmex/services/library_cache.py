@@ -40,6 +40,8 @@ def replace(session: Session, root: str, rows: list[LibraryFolder]) -> str:
                 camera_display=row.camera_display,
                 last_applied_at=row.last_applied_at,
                 is_flat_year=row.is_flat_year,
+                rendition=row.rendition,
+                renditions_json=json.dumps(row.renditions),
                 scanned_at=scanned_at,
             )
         )
@@ -53,6 +55,7 @@ def rows_for(session: Session, root: str) -> list[dict[str, Any]]:
     for row in rows:
         data = row.model_dump()
         data["kinds"] = json.loads(data.pop("kinds_json") or "{}")
+        data["renditions"] = json.loads(data.pop("renditions_json") or "[]")
         data.pop("root", None)
         out.append(data)
     out.sort(

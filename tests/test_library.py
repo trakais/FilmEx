@@ -277,15 +277,19 @@ def test_rolls_kept_in_subfolders_are_listed_as_rolls(tmp_path: Path, make_jpeg)
     make_jpeg("b.jpg", long_edge=64, folder=year / "2026-05-01-mixed" / "extra")
 
     rows = {row.display_name: row for row in lib.scan_library(root)}
-    assert "2026-04-16-Fed2-Fuji" not in rows and "2026-04-21-lab" not in rows
-    assert rows["2026-04-16-Fed2-Fuji/JPG"].depth == 3
-    assert rows["2026-04-16-Fed2-Fuji/JPG"].parent == "2026"
-    assert rows["2026-04-16-Fed2-Fuji/JPG"].name == "JPG"
-    assert rows["2026-04-16-Fed2-Fuji/RAW"].image_count == 1
+    # JPG and RAW are renditions of one roll: one row, the renditions inside it.
+    fuji = rows["2026-04-16-Fed2-Fuji"]
+    assert fuji.depth == 2 and fuji.image_count == 2 and fuji.status == lib.UNTAGGED
+    assert [r["rendition"] for r in fuji.renditions] == ["JPG", "RAW"]
+    assert fuji.renditions[0]["display_name"] == "2026-04-16-Fed2-Fuji/JPG" and fuji.renditions[0]["depth"] == 3
+    assert "2026-04-16-Fed2-Fuji/JPG" not in rows
+    # A lab order holding one subfolder per roll is a container, not a roll.
+    assert "2026-04-21-lab" not in rows
     assert rows["2026-04-21-lab/00424645-Praktica"].status == lib.UNTAGGED
+    assert rows["2026-04-21-lab/00424645-Praktica"].rendition is None
     assert "2026-04-21-lab/empty-sub" not in rows
     assert rows["2026-05-01-mixed"].image_count == 1 and rows["2026-05-01-mixed/extra"].image_count == 1
-    assert lib.summarize(list(rows.values()))["untagged"] == 6
+    assert lib.summarize(list(rows.values()))["untagged"] == 5
 
 
 def test_library_folder_details_for_a_nested_roll(client, tmp_path: Path, make_jpeg):

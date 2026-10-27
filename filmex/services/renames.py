@@ -141,6 +141,9 @@ def propose(
         if row.depth > 2:
             proposals.append(_skip(row, "inside another folder; rename it by hand"))
             continue
+        if row.renditions:
+            proposals.append(_skip(row, "kept as RAW/JPG renditions; rename it by hand"))
+            continue
         if row.status == lib.EMPTY:
             proposals.append(_skip(row, "no images"))
             continue

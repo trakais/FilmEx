@@ -1011,7 +1011,23 @@ function formatValue(v) {
   return escapeHtml(v);
 }
 
+// Developed positives in the open folder (DSC0001-positive.jpg beside
+// DSC0001.ARW): already pictures, so their thumbnails are never inverted.
+function positiveFiles() {
+  const folder = state.folder;
+  if (folder._positivesFor !== folder.listing) {
+    folder._positivesFor = folder.listing;
+    folder.positives = new Set((folder.listing?.frames || []).flatMap(f => f.positives || []));
+  }
+  return folder.positives;
+}
+
+function isPositiveFile(folder, name) {
+  return folder === state.folder.path && positiveFiles().has(name);
+}
+
 function buildThumbnailUrl(folder, name, invert = state.previewInvert) {
+  if (invert && isPositiveFile(folder, name)) invert = false;
   const params = new URLSearchParams({ folder, name, invert: invert ? "true" : "false" });
   return `/api/files/thumbnail?${params.toString()}`;
 }
@@ -1859,6 +1875,37 @@ function libraryStatusPill(row) {
 
 
 function renderLibraryRow(row) {
+  if (row.renditions?.length) return renderLibraryRoll(row);
+  return renderLibraryFolderRow(row);
+}
+
+// A roll kept as RAW and JPG renditions: the roll's row carries the combined
+// status and gear; one slimmer row per rendition carries the actions, since
+// each rendition is tagged on its own (same gear, its own scan source).
+function renderLibraryRoll(row) {
+  const frag = document.createDocumentFragment();
+  const head = document.createElement("div");
+  head.className = `lib-row lib-roll ${row.status}`;
+  head.dataset.path = row.path;
+  const meta = [row.film_display, row.camera_display].filter(Boolean).join(" · ");
+  head.innerHTML = `
+    ${libraryStatusPill(row)}
+    <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))} · ${row.renditions.length} renditions</span></span>
+    <span class="lib-meta" title="${escapeHtml(meta)}">${escapeHtml(meta || "")}</span>
+    <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
+    <span class="lib-actions"><span></span><button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button></span>
+  `;
+  head.querySelector("[data-act=reveal]").addEventListener("click", () => onLibraryAction("reveal", row));
+  frag.appendChild(head);
+  for (const part of row.renditions) {
+    const el = renderLibraryFolderRow({ ...part, display_name: part.rendition });
+    el.classList.add("lib-rendition");
+    frag.appendChild(el);
+  }
+  return frag;
+}
+
+function renderLibraryFolderRow(row) {
   const el = document.createElement("div");
   el.className = `lib-row ${row.status}`;
   el.dataset.path = row.path;
@@ -2169,12 +2216,14 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     folder.scanFiles = new Map((scan.files || []).map(f => [f.name, f]));
     folder.manifest = manifest;
     folder.inLibrary = folderIsInLibrary(path);
+    const seed = !manifest && listing.rendition ? await siblingSeed(listing.sibling_renditions || []) : null;
+    if (folder.path !== path) return;
     // Inside the library, tagging part of a roll, or without a library: keep.
     // A new folder outside the library goes in the way the last one did.
     const keep = folder.inLibrary || !hasLibrary() || (onlyFiles && onlyFiles.length);
     folder.destination = keep ? "keep" : (state.settings.import_mode === "move" ? "move" : "copy");
     refreshThumbSet();
-    folder.rolls = firstRolls(listing, manifest, onlyFiles);
+    folder.rolls = firstRolls(listing, manifest, onlyFiles, seed);
     pushRecentFolder(path);
     saveStickyState();
     renderFolder();
@@ -2194,17 +2243,38 @@ function folderIsInLibrary(path) {
 
 // The folder opens as one roll: every frame, or only the requested files.
 // A manifest from an earlier tagging fills the roll's values.
-function firstRolls(listing, manifest, onlyFiles) {
+function firstRolls(listing, manifest, onlyFiles, seed = null) {
   if (!listing.frames.length) return [];
   let keys = listing.frames.map(f => f.key);
   if (onlyFiles && onlyFiles.length) {
     const wanted = new Set(onlyFiles);
     keys = listing.frames.filter(f => f.images.some(n => wanted.has(n))).map(f => f.key);
   }
+  if (!manifest && seed) {
+    // Another rendition of this roll is tagged: same camera, lens, film,
+    // date and place; the scan source is this rendition's own to pick.
+    const { tagging } = taggingFromManifest(seed.manifest, []);
+    Object.assign(tagging, { scan_provider_id: "", scan_method_id: "", file_keywords: {}, file_lens_ids: {} });
+    renderFolderBanner(`Gear, film and date filled from the ${seed.from} rendition of this roll. Pick the scan provider and method for these files.`, "ok");
+    return [newRoll(keys, tagging)];
+  }
   if (!manifest) return [newRoll(keys)];
   const { tagging, unresolved } = taggingFromManifest(manifest, listing.frames.flatMap(f => f.images));
   if (unresolved.length) renderFolderBanner(`Loaded the roll's manifest. Could not match: ${unresolved.join(", ")}.`, "warn");
   return [newRoll(keys, tagging)];
+}
+
+// The first tagged sibling rendition's manifest, to seed an untagged one.
+async function siblingSeed(paths) {
+  for (const sibling of paths) {
+    try {
+      const res = await api(`/api/manifest?${new URLSearchParams({ folder: sibling })}`);
+      if (res.manifest) return { manifest: res.manifest, from: baseName(sibling) };
+    } catch {
+      // no manifest there; try the next rendition
+    }
+  }
+  return null;
 }
 
 // ----- thumbnails -----
@@ -2213,7 +2283,8 @@ function refreshThumbSet() {
   const folder = state.folder;
   folder.thumbs = new Set();
   for (const [name, file] of folder.scanFiles) {
-    if (state.previewInvert ? file.has_inverted_preview : file.has_thumbnail) folder.thumbs.add(name);
+    const inverted = state.previewInvert && !isPositiveFile(folder.path, name);
+    if (inverted ? file.has_inverted_preview : file.has_thumbnail) folder.thumbs.add(name);
   }
 }
 
@@ -2325,6 +2396,8 @@ function renderFolderSummary() {
     summaryItem("Frames", `${frames.length}`),
     summaryItem("Files", `${images} image${images === 1 ? "" : "s"} · ${humanBytes(bytes)}`),
   ];
+  const positives = frames.filter(f => f.positives?.length).length;
+  if (positives) parts.push(summaryItem("Positives", `${positives} frame${positives === 1 ? "" : "s"} with a developed copy`));
   if (listing.has_raw) parts.push(summaryItem("Pairs", unmatched ? `${unmatched} JPEG${unmatched === 1 ? "" : "s"} without raw` : "raw + JPEG"));
   if (listing.other_files.length) parts.push(summaryItem("Stays behind", `${listing.other_files.length} other file${listing.other_files.length === 1 ? "" : "s"}`));
   el.innerHTML = parts.join("");
@@ -2366,7 +2439,8 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
       ? `<img src="${escapeHtml(buildThumbnailUrl(folder, frame.preview, invert))}" alt="" loading="lazy" />`
       : `<span class="sheet-thumb-placeholder">${escapeHtml(frame.display_key)}</span>`;
     const stamp = index !== null && multi ? `<span class="sheet-roll-tag">R${index + 1}</span>` : "";
-    const badge = frame.unmatched_jpeg ? `<span class="sheet-badge warn">jpg only</span>`
+    const badge = frame.positives?.length ? `<span class="sheet-badge ok" title="${escapeHtml(frame.positives.join("\n"))}">positive</span>`
+      : frame.unmatched_jpeg ? `<span class="sheet-badge warn">jpg only</span>`
       : frame.has_raw && frame.images.length > 1 ? `<span class="sheet-badge">pair</span>` : "";
     const cut = cutAt ? cutAt(frame.key) : null;
     if (cut) cell.classList.add(`cut-${cut.strength}`);
@@ -3164,6 +3238,7 @@ function folderPlacement() {
   const root = (state.settings?.library_root || "").replace(/\/+$/, "");
   const path = state.folder.path;
   if (!root || !path.startsWith(root + "/")) return "outside";
+  if (state.folder.listing?.rendition) return "roll";
   return path.slice(root.length + 1).split("/").length === 2 ? "roll" : "nested";
 }
 

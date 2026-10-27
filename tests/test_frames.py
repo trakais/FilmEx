@@ -136,3 +136,46 @@ def test_tag_view_scan_endpoint_skips_appledouble_files(client, tmp_path: Path, 
     res = client.post("/api/folder/scan", json={"folder": str(folder)})
     assert res.status_code == 200, res.text
     assert [f["name"] for f in res.json()["files"]] == ["DSC0001.jpg"]
+
+
+def test_developed_positives_join_their_raw_frame(tmp_path: Path):
+    folder = tmp_path / "roll"
+    _touch(folder, "DSC0001.ARW", 10)
+    _touch(folder, "DSC0001.xmp", 1)
+    _touch(folder, "DSC0001-positive.jpg", 3)
+    _touch(folder, "DSC0002.ARW", 10)
+    _touch(folder, "DSC0002.JPG", 3)  # camera JPEG, same stem
+    _touch(folder, "DSC0002_pos.tif", 5)
+    _touch(folder, "DSC0003.ARW", 10)
+    _touch(folder, "DSC0003-2.ARW", 10)  # a second exposure, its own frame
+    _touch(folder, "lab_001.jpg", 3)  # the lab's own file: unmatched, stays separate
+
+    listing = fr.list_frames(folder)
+    by_key = {f.key: f for f in listing.frames}
+    assert sorted(by_key) == ["DSC0001", "DSC0002", "DSC0003", "DSC0003-2", "lab_001"]
+
+    one = by_key["DSC0001"]
+    assert one.positives == ["DSC0001-positive.jpg"]
+    assert sorted(one.images) == ["DSC0001-positive.jpg", "DSC0001.ARW"] and one.companions == ["DSC0001.xmp"]
+    assert one.preview == "DSC0001-positive.jpg"  # the picture, not the negative
+    assert one.scan_image == "DSC0001.ARW"  # but times and sizes come from the scan
+    assert one.has_raw and not one.unmatched_jpeg and one.bytes == 14
+
+    two = by_key["DSC0002"]
+    assert two.positives == ["DSC0002_pos.tif"]
+    assert two.preview == "DSC0002_pos.tif"
+    assert sorted(two.images) == ["DSC0002.ARW", "DSC0002.JPG", "DSC0002_pos.tif"]
+
+    assert by_key["DSC0003-2"].has_raw and not by_key["DSC0003-2"].positives
+    assert by_key["lab_001"].unmatched_jpeg
+    assert listing.to_dict()["frames"][0]["positives"] == ["DSC0001-positive.jpg"]
+
+
+def test_positives_need_a_raw_in_the_same_folder(tmp_path: Path):
+    folder = tmp_path / "jpegs"
+    _touch(folder, "DSC0001.jpg", 3)
+    _touch(folder, "DSC0001-positive.jpg", 3)
+    listing = fr.list_frames(folder)
+    assert [f.key for f in listing.frames] == ["DSC0001", "DSC0001-positive"]
+    assert not any(f.positives for f in listing.frames)
+
