@@ -1,12 +1,12 @@
 """Unified Provider entity plus the two coarse method enums.
 
-A single Provider row carries one or more `kinds` values. BFS offers both
-"development" and "scan"; "Home" is development-only; "Self" is scan-only.
+A single Provider row carries one or more `kinds` values. A lab usually offers
+both "development" and "scan"; "Home" is development-only; "Self" is scan-only.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Column, JSON
+from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
 
 from filmex.models._base import new_uuid

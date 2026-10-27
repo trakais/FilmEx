@@ -37,16 +37,15 @@ These are settled. Do not reopen them in later sessions.
   (`2026-05-14-Fed2-Gold`). Overridable in settings.
 - **Import copies by default**; the source is left alone until verification
   passes. Deleting the source is a separate explicit action.
-- **Hosting**: the repo lives on the user's Forgejo at git.dodies.lv; GitHub
-  is a possible later mirror; Codeberg is ruled out. Forgejo has no hosted
+- **Hosting**: the repo lives on the author's own Forgejo instance, with a
+  public mirror on GitHub; Codeberg is ruled out. Forgejo has no hosted
   macOS runners, so releases are built locally with
   `packaging/build-macos.sh`. The Actions workflow is optional and only
   runs on a GitHub mirror or a self-hosted runner on the user's Mac.
 
 ## 1. What the real library looks like
 
-Observed on the user's NAS share `/Volumes/homes/normis/Photos/Filma` (SMB,
-likely Synology). These facts shaped the design; re-check them if the share
+Observed on the user's NAS share (`<share>/Photos/Filma` over SMB). These facts shaped the design; re-check them if the share
 changes.
 
 - Layout is `<root>/<year>/<roll folder>`. 44 folders at depth <= 2.

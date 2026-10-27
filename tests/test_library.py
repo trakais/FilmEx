@@ -269,33 +269,33 @@ def test_rolls_kept_in_subfolders_are_listed_as_rolls(tmp_path: Path, make_jpeg)
     make_jpeg("R1-004A.JPG", long_edge=64, folder=year / "2026-04-16-Fed2-Fuji" / "JPG")
     make_jpeg("DSC09040.jpg", long_edge=64, folder=year / "2026-04-16-Fed2-Fuji" / "RAW")
     (year / "2026-04-16-Fed2-Fuji" / "notes.txt").write_text("lab order")
-    make_jpeg("004246440001.jpg", long_edge=64, folder=year / "2026-04-21-bfs" / "00424644-opjaZiepis")
-    make_jpeg("004246450001.jpg", long_edge=64, folder=year / "2026-04-21-bfs" / "00424645-Praktica")
-    (year / "2026-04-21-bfs" / "empty-sub").mkdir()
+    make_jpeg("004246440001.jpg", long_edge=64, folder=year / "2026-04-21-lab" / "00424644-Portra")
+    make_jpeg("004246450001.jpg", long_edge=64, folder=year / "2026-04-21-lab" / "00424645-Praktica")
+    (year / "2026-04-21-lab" / "empty-sub").mkdir()
     # A roll with its own images keeps its row even if a subfolder holds more.
     make_jpeg("a.jpg", long_edge=64, folder=year / "2026-05-01-mixed")
     make_jpeg("b.jpg", long_edge=64, folder=year / "2026-05-01-mixed" / "extra")
 
     rows = {row.display_name: row for row in lib.scan_library(root)}
-    assert "2026-04-16-Fed2-Fuji" not in rows and "2026-04-21-bfs" not in rows
+    assert "2026-04-16-Fed2-Fuji" not in rows and "2026-04-21-lab" not in rows
     assert rows["2026-04-16-Fed2-Fuji/JPG"].depth == 3
     assert rows["2026-04-16-Fed2-Fuji/JPG"].parent == "2026"
     assert rows["2026-04-16-Fed2-Fuji/JPG"].name == "JPG"
     assert rows["2026-04-16-Fed2-Fuji/RAW"].image_count == 1
-    assert rows["2026-04-21-bfs/00424645-Praktica"].status == lib.UNTAGGED
-    assert "2026-04-21-bfs/empty-sub" not in rows
+    assert rows["2026-04-21-lab/00424645-Praktica"].status == lib.UNTAGGED
+    assert "2026-04-21-lab/empty-sub" not in rows
     assert rows["2026-05-01-mixed"].image_count == 1 and rows["2026-05-01-mixed/extra"].image_count == 1
     assert lib.summarize(list(rows.values()))["untagged"] == 6
 
 
 def test_library_folder_details_for_a_nested_roll(client, tmp_path: Path, make_jpeg):
     root = tmp_path / "Filma"
-    roll = root / "2026" / "2026-04-21-bfs" / "00424645-Praktica"
+    roll = root / "2026" / "2026-04-21-lab" / "00424645-Praktica"
     make_jpeg("004246450001.jpg", long_edge=64, folder=roll)
     client.patch("/api/settings", json={"library_root": str(root)})
     data = client.get("/api/library/folder", params={"path": str(roll)}).json()
     assert data["depth"] == 3 and data["parent"] == "2026"
-    assert data["display_name"] == "2026-04-21-bfs/00424645-Praktica"
+    assert data["display_name"] == "2026-04-21-lab/00424645-Praktica"
     assert data["untagged_files"] == ["004246450001.jpg"]
     nested_rename = client.post("/api/naming/propose", json={}).json()["proposals"]
     assert nested_rename[0]["status"] == "skipped" and "inside another folder" in nested_rename[0]["reason"]

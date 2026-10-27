@@ -5,8 +5,8 @@ the analog camera, lens and film they came from, before the scans go into
 Lightroom or any other DAM. It is local-first: ExifTool runs on your
 machine, your folders stay where they are, nothing leaves the computer.
 
-![FilmEx overview](docs/screenshots/filmex-overview.webp)
-_Main tagging workflow_
+![FilmEx library view](docs/screenshots/filmex-library.webp)
+_The Library: every roll by year, with its status, film and camera_
 
 ## Install
 

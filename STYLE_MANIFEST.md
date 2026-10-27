@@ -8,7 +8,7 @@ component inventory. It is the transfer spec for the theme's tone, tokens,
 layout posture, and interaction cues.
 
 The current FilmEx theme is defined in
-[filmex/static/style-rangefinder.css](/Users/normis/projects/filmex/filmex/static/style-rangefinder.css:1).
+[filmex/static/style-rangefinder.css](filmex/static/style-rangefinder.css).
 
 ## Style Concept
 

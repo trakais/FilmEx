@@ -33,10 +33,17 @@ venv/
 .DS_Store
 Thumbs.db
 
-# SQLite runtime sidecars
+# SQLite runtime sidecars and backups
 *.sqlite-shm
 *.sqlite-wal
 *.sqlite-journal
+*.bak
+*.bak-*
+
+# Test and tool output
+.coverage
+htmlcov/
+*.log
 
 # Packaging outputs
 build/
