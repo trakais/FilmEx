@@ -146,7 +146,7 @@ def metadata_dry_run(
     req: DryRunRequest,
     session: Session = Depends(get_session),
 ) -> DryRunResponse:
-    plan = _tagging_plan(req, session)
+    plan = _tagging_plan(req, session, roll_id=req.as_roll)
     diffs = [
         FileDiff(
             name=name,
@@ -350,9 +350,9 @@ def _open_with_default_app(path: Path) -> None:
 # ---- internals ----
 
 
-def _tagging_plan(req: DryRunRequest, session: Session) -> tg.TaggingPlan:
+def _tagging_plan(req: DryRunRequest, session: Session, *, roll_id: str | None = None) -> tg.TaggingPlan:
     try:
-        return tg.plan_tagging(req, session)
+        return tg.plan_tagging(req, session, roll_id=roll_id)
     except tg.TaggingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

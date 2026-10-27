@@ -39,6 +39,10 @@ class RollTagging(BaseModel):
     roll_notes: str | None = None
     place: str | None = None
     replace_managed_metadata: bool = False
+    # Per-file overrides keyed by file name; the names are the same in the
+    # folder the roll ends up in, so the apply there validates them.
+    file_keywords: dict[str, list[str]] = Field(default_factory=dict)
+    file_lens_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class RollIn(BaseModel):

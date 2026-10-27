@@ -40,12 +40,12 @@
   <header class="top">
     <div class="brand">FilmEx</div>
     <nav class="view-nav" aria-label="Views">
-      <button type="button" class="view-tab" data-view="library">Library</button>
-      <button type="button" class="view-tab" data-view="inbox">Inbox</button>
-      <button type="button" class="view-tab active" data-view="workflow">Tag</button>
+      <button type="button" class="view-tab hidden" data-view="library">Library</button>
+      <button type="button" class="view-tab hidden folder-tab" data-view="folder"></button>
     </nav>
     <div class="status" id="status">
       <span id="exiftool-status" class="pill warn hidden">checking exiftool…</span>
+      <button id="open-folder" class="secondary open-folder" type="button">Open folder…</button>
       <div class="theme-switch" role="group" aria-label="Theme">
         <button id="theme-dark" type="button" class="theme-chip" aria-pressed="true">Graphite</button>
         <button id="theme-paper" type="button" class="theme-chip" aria-pressed="false">Paper</button>
@@ -54,15 +54,46 @@
     </div>
   </header>
 
+  <!-- Home: shown until a library folder is set. One way in, nothing else. -->
+  <main id="home-view" class="hidden">
+    <section class="home">
+      <div class="home-drop" id="home-drop">
+        <svg class="home-drop-glyph" viewBox="0 0 48 36" aria-hidden="true" focusable="false">
+          <rect x="4" y="8" width="40" height="22" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
+          <g fill="currentColor"><rect x="7" y="3" width="4" height="3"/><rect x="16" y="3" width="4" height="3"/><rect x="25" y="3" width="4" height="3"/><rect x="34" y="3" width="4" height="3"/>
+          <rect x="7" y="32" width="4" height="3"/><rect x="16" y="32" width="4" height="3"/><rect x="25" y="32" width="4" height="3"/><rect x="34" y="32" width="4" height="3"/></g>
+        </svg>
+        <div class="home-drop-title">Drop a folder of scans</div>
+        <button id="home-open" class="primary" type="button">Open folder…</button>
+        <input id="home-path" class="home-path" type="text" placeholder="or paste a path and press Enter" autocomplete="off" spellcheck="false" />
+      </div>
+      <section id="home-recent" class="home-recent hidden">
+        <h2>Recent</h2>
+        <div id="home-recent-list" class="lib-list"></div>
+      </section>
+      <div class="home-library">
+        <span>Already have a library?</span>
+        <button id="home-choose-library" class="action-link" type="button">Choose its folder</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Library: home once a library folder is set. -->
   <main id="library-view" class="hidden">
     <section class="library-head">
-      <h2>Library</h2>
+      <h2>Library <span id="library-root-name" class="library-root-name" title=""></span></h2>
       <div class="library-toolbar">
-        <code id="library-root-path" class="library-root-path"></code>
         <input id="library-filter" class="library-filter" type="search" placeholder="Filter rolls…" autocomplete="off" />
-        <button id="library-choose-root" class="secondary" type="button">Choose root…</button>
-        <button id="library-normalize" class="secondary" type="button">Normalize names…</button>
-        <button id="library-rescan" class="secondary" type="button">Rescan</button>
+        <div class="menu-anchor">
+          <button id="library-menu-btn" class="icon-btn" type="button" aria-label="Library actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+          <div id="library-menu" class="menu hidden" role="menu">
+            <button type="button" class="menu-item" role="menuitem" data-menu="rescan">Rescan</button>
+            <button type="button" class="menu-item" role="menuitem" data-menu="normalize">Normalize names…</button>
+            <button type="button" class="menu-item" role="menuitem" data-menu="reveal">Reveal in Finder</button>
+            <div class="menu-sep"></div>
+            <button type="button" class="menu-item" role="menuitem" data-menu="choose-root">Choose library folder…</button>
+          </div>
+        </div>
       </div>
     </section>
     <div id="library-banner" class="summary hidden"></div>
@@ -90,193 +121,59 @@
     <div id="library-groups" class="library-groups"></div>
   </main>
 
-  <!-- Inbox view: a folder of fresh scans (or a mixed library folder) cut
-       into rolls on a contact sheet, then imported into the library or
-       split in place. -->
-  <main id="inbox-view" class="hidden">
-    <section class="inbox-head">
-      <h2>Inbox</h2>
-      <div class="folder-row">
-        <input id="inbox-folder" type="text" placeholder="/Users/you/Scans/inbox — a folder with one or more rolls" autocomplete="off" list="folder-history" />
-        <button id="inbox-browse" class="secondary" type="button">Browse…</button>
-        <button id="inbox-load" class="secondary" type="button">Load</button>
+  <!-- Folder: one open folder, its frames cut into rolls, tagged, and
+       kept, copied or moved. Replaces the old Tag and Inbox views. -->
+  <main id="folder-view" class="hidden">
+    <section class="folder-head">
+      <div class="folder-title">
+        <h2 id="folder-name" class="folder-name"></h2>
+        <span id="folder-status" class="folder-status"></span>
       </div>
-      <div id="inbox-summary" class="summary readout hidden"></div>
-      <div id="inbox-banner" class="summary hidden"></div>
+      <div id="folder-summary" class="summary readout hidden"></div>
+      <div id="folder-banner" class="summary hidden"></div>
     </section>
 
-    <section id="inbox-sheet-section" class="hidden">
-      <h2>Contact sheet</h2>
+    <section id="sheet-section" class="hidden">
+      <h2>Frames</h2>
       <div class="sheet-toolbar">
         <span id="sheet-selection" class="lib-sub"></span>
         <button id="sheet-unmatched" class="secondary hidden" type="button" data-mode="exclude"></button>
-        <button id="sheet-thumbs" class="secondary" type="button">Thumbnails</button>
+        <button id="sheet-invert" class="action-link" type="button" aria-pressed="false">Invert</button>
         <button id="sheet-cut" class="secondary" type="button" disabled title="Start a new roll at the selected frame">Cut here</button>
         <button id="sheet-new-roll" class="secondary" type="button" disabled>New roll from selection</button>
-        <button id="sheet-leave-out" class="secondary" type="button" disabled title="Keep the selected frames in the source folder">Leave out</button>
+        <button id="sheet-leave-out" class="secondary" type="button" disabled title="Keep the selected frames out of every roll">Leave out</button>
         <button id="sheet-clear" class="action-link hidden" type="button">Clear selection</button>
       </div>
       <div id="contact-sheet" class="contact-sheet"></div>
     </section>
 
-    <section id="inbox-rolls-section" class="hidden">
-      <h2>Rolls</h2>
-      <div id="inbox-rolls" class="roll-cards"></div>
+    <section id="rolls-section" class="hidden">
+      <h2 id="rolls-heading">Roll</h2>
+      <div id="roll-cards" class="roll-cards"></div>
     </section>
 
-    <section id="inbox-actions" class="actions-section hidden">
-      <div class="actions-left">
-        <label class="inbox-dest">Destination
-          <select id="inbox-destination">
-            <option value="import-copy">Library · copy</option>
-            <option value="import-move">Library · move</option>
-            <option value="split">Split in place</option>
-          </select>
-        </label>
-        <span id="inbox-dest-hint" class="lib-sub"></span>
+    <section id="folder-actions" class="folder-actions hidden">
+      <div class="folder-actions-left">
+        <div class="segmented" id="destination" role="radiogroup" aria-label="Destination">
+          <button type="button" class="segment" data-dest="keep" role="radio" aria-checked="false">Keep here</button>
+          <button type="button" class="segment" data-dest="copy" role="radio" aria-checked="false">Copy to library</button>
+          <button type="button" class="segment" data-dest="move" role="radio" aria-checked="false">Move to library</button>
+        </div>
+        <span id="destination-hint" class="lib-sub"></span>
       </div>
-      <div class="actions-right">
-        <button id="inbox-undo" class="secondary hidden" type="button">Undo last batch</button>
-        <button id="inbox-run" class="danger" type="button" disabled>Import</button>
+      <div class="folder-actions-right">
+        <button id="folder-undo" class="secondary hidden" type="button">Undo last batch</button>
+        <button id="folder-run" class="danger" type="button" disabled>Write</button>
       </div>
     </section>
-    <section id="inbox-progress" class="summary hidden"></section>
-    <section id="inbox-result" class="apply-section hidden">
+    <section id="folder-progress" class="summary hidden"></section>
+    <section id="folder-result" class="apply-section hidden">
       <h2>Done</h2>
-      <div id="inbox-result-body"></div>
+      <div id="folder-result-body"></div>
     </section>
   </main>
 
-  <main id="workflow-view">
-    <!-- Step 1: Folder -->
-    <section class="folder-section">
-      <h2>1. Folder (Single film roll)</h2>
-      <div class="folder-row">
-        <input
-          id="folder-input"
-          type="text"
-          placeholder="/Users/you/Photos/Film/Processed/2026/2026-04-17_R001_FED2_Gold200"
-          autocomplete="off"
-          list="folder-history"
-        />
-        <datalist id="folder-history"></datalist>
-        <button id="browse-btn" class="secondary">Browse…</button>
-      </div>
-      <div id="scan-summary" class="summary readout hidden"></div>
-      <div id="manifest-summary" class="summary hidden"></div>
-    </section>
-
-    <!-- Contact sheet of the folder: a look at the roll before tagging, and
-         the way into a split when two rolls landed in one scan. -->
-    <section id="tag-sheet-section" class="hidden">
-      <h2>Frames <span id="tag-sheet-count" class="lib-sub"></span><button id="tag-sheet-split" class="action-link" type="button">Split into rolls…</button></h2>
-      <div id="tag-sheet" class="contact-sheet compact"></div>
-    </section>
-
-    <!-- Step 2: Three tiles -->
-    <section class="tiles-section">
-      <h2>2. Gear</h2>
-      <div class="tile-row">
-        <div class="tile camera-tile" id="tile-camera" data-kind="camera">
-          <div class="tile-label">Camera</div>
-          <div class="tile-content">Pick a camera</div>
-        </div>
-        <div class="tile lens-tile" id="tile-lens" data-kind="lens">
-          <div class="tile-label">Main lens</div>
-          <div class="tile-content">Pick a main lens</div>
-        </div>
-        <div class="tile film-tile" id="tile-film" data-kind="film">
-          <div class="tile-label">Film</div>
-          <div class="tile-content">Pick a film</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Step 3: Advanced -->
-    <section class="advanced-section">
-      <button id="advanced-toggle" class="disclosure" aria-expanded="false">
-        <span class="chevron">▸</span> Advanced
-      </button>
-      <div id="advanced-body" class="advanced-body hidden">
-        <div class="field-grid">
-          <label>
-            <span>Development provider</span>
-            <select id="adv-dev-provider" data-field="development_provider_id">
-              <option value="">(none)</option>
-            </select>
-          </label>
-          <label>
-            <span>Development method</span>
-            <select id="adv-dev-method" data-field="development_method_id">
-              <option value="">(none)</option>
-            </select>
-          </label>
-          <label>
-            <span>Scan provider</span>
-            <select id="adv-scan-provider" data-field="scan_provider_id">
-              <option value="">(none)</option>
-            </select>
-          </label>
-          <label>
-            <span>Scan method</span>
-            <select id="adv-scan-method" data-field="scan_method_id">
-              <option value="">(none)</option>
-            </select>
-          </label>
-          <label>
-            <span>Roll date <span id="roll-date-hint" class="date-hint hidden"></span></span>
-            <input id="adv-roll-date" type="date" data-field="roll_date" />
-          </label>
-          <label class="checkbox-field">
-            <span>Existing FilmEx metadata</span>
-            <span class="checkbox-row">
-              <input id="adv-replace-managed" type="checkbox" data-field="replace_managed_metadata" />
-              <span>Replace instead of merge</span>
-            </span>
-            <span class="field-help">Clears old FilmEx camera, film, provider, roll, date, and notes fields before writing.</span>
-          </label>
-          <label>
-            <span>Place / title</span>
-            <input id="adv-place" type="text" data-field="place" placeholder="Jāņos, Mexico, Laivas…" />
-            <span class="field-help">Stored in the manifest; available to the folder name template as {place}.</span>
-          </label>
-          <label class="full">
-            <span>Roll notes</span>
-            <input id="adv-roll-notes" type="text" data-field="roll_notes" />
-          </label>
-        </div>
-      </div>
-    </section>
-
-    <!-- Step 4: Dry run -->
-    <section class="actions-section">
-      <div class="actions-left">
-        <button id="dry-run-btn" class="primary" disabled>Preview</button>
-        <button id="create-previews-btn" class="secondary" disabled>Create thumbnails</button>
-        <button id="preview-invert-toggle" type="button" class="action-link" aria-pressed="false">Invert thumbnails: off</button>
-      </div>
-      <div class="actions-right">
-        <button id="apply-btn" class="danger" disabled>Apply</button>
-      </div>
-    </section>
-    <section id="preview-status" class="summary hidden"></section>
-    <section id="preview-stale-summary" class="summary hidden"></section>
-
-    <!-- Apply result sits ABOVE the diff so the user sees the outcome
-         immediately under the buttons rather than having to scroll past the
-         (often long) preview. Hidden until the first apply completes. -->
-    <section id="apply-section" class="apply-section hidden">
-      <h2>Applied</h2>
-      <div id="apply-body"></div>
-    </section>
-
-    <section id="diff-section" class="diff-section hidden">
-      <h2>Preview</h2>
-      <div id="diff-body"></div>
-    </section>
-  </main>
-
-  <!-- Settings view: swaps with #workflow-view when the gear button is clicked. -->
+  <!-- Settings: preferences first, then the gear catalogue. -->
   <main id="settings-view" class="hidden">
     <div class="settings-head">
       <button id="settings-back" class="secondary">← Back</button>
@@ -288,15 +185,54 @@
     </div>
 
     <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
-      <button class="settings-tab active" role="tab" data-tab="camera" aria-selected="true">Cameras</button>
+      <button class="settings-tab active" role="tab" data-tab="general" aria-selected="true">Preferences</button>
+      <span class="settings-tab-group" aria-hidden="true">Gear</span>
+      <button class="settings-tab" role="tab" data-tab="camera" aria-selected="false">Cameras</button>
       <button class="settings-tab" role="tab" data-tab="lens" aria-selected="false">Lenses</button>
       <button class="settings-tab" role="tab" data-tab="film-brand" aria-selected="false">Film brands</button>
       <button class="settings-tab" role="tab" data-tab="film" aria-selected="false">Film stocks</button>
       <button class="settings-tab" role="tab" data-tab="provider" aria-selected="false">Providers</button>
       <button class="settings-tab" role="tab" data-tab="dev-method" aria-selected="false">Development</button>
       <button class="settings-tab" role="tab" data-tab="scan-method" aria-selected="false">Scanning</button>
-      <button class="settings-tab" role="tab" data-tab="general" aria-selected="false">General</button>
     </nav>
+
+    <section class="settings-section" data-kind="general">
+      <div class="settings-section-head">
+        <h3>Preferences</h3>
+      </div>
+      <form id="general-settings-form" class="field-grid general-settings" autocomplete="off">
+        <label class="full">
+          <span>Library folder</span>
+          <span class="folder-row">
+            <input type="text" name="library_root" placeholder="/Volumes/homes/you/Photos/Film" />
+            <button type="button" class="secondary" id="general-library-browse">Browse…</button>
+          </span>
+          <span class="field-help">The top folder of your film library, with year folders inside.</span>
+        </label>
+        <label>
+          <span>Roll folder name template</span>
+          <input type="text" name="naming_template" />
+          <span class="field-help">Tokens: {date} {year} {month} {camera} {film} {lens} {place} {roll}</span>
+          <span class="field-help">Example: <span id="naming-template-example" class="template-example"></span></span>
+        </label>
+        <label class="checkbox-field">
+          <span>Place suffix</span>
+          <span class="checkbox-row">
+            <input type="checkbox" name="naming_place_suffix" />
+            <span>Append -{place} when a place is set</span>
+          </span>
+        </label>
+        <label class="full">
+          <span>ExifTool</span>
+          <input type="text" name="exiftool_path" placeholder="Leave empty to auto-detect" />
+          <span class="field-help" id="general-exiftool-status">Checking…</span>
+        </label>
+        <div class="full general-settings-actions">
+          <span id="general-settings-status" class="field-help"></span>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </section>
 
     <section class="settings-section" data-kind="camera">
       <div class="settings-section-head">
@@ -354,51 +290,6 @@
       <div class="settings-list"></div>
     </section>
 
-    <section class="settings-section" data-kind="general">
-      <div class="settings-section-head">
-        <h3>General</h3>
-      </div>
-      <form id="general-settings-form" class="field-grid general-settings" autocomplete="off">
-        <label class="full">
-          <span>Library root</span>
-          <span class="folder-row">
-            <input type="text" name="library_root" placeholder="/Volumes/homes/you/Photos/Film" />
-            <button type="button" class="secondary" id="general-library-browse">Browse…</button>
-          </span>
-          <span class="field-help">Top folder of your film library, with year folders inside. Used by the Library view.</span>
-        </label>
-        <label class="full">
-          <span>ExifTool</span>
-          <input type="text" name="exiftool_path" placeholder="Leave empty to auto-detect" />
-          <span class="field-help" id="general-exiftool-status">Checking…</span>
-        </label>
-        <label>
-          <span>Roll folder name template</span>
-          <input type="text" name="naming_template" />
-          <span class="field-help">Tokens: {date} {year} {month} {camera} {film} {lens} {place} {roll}</span>
-          <span class="field-help">Example: <span id="naming-template-example" class="template-example"></span></span>
-        </label>
-        <label class="checkbox-field">
-          <span>Place suffix</span>
-          <span class="checkbox-row">
-            <input type="checkbox" name="naming_place_suffix" />
-            <span>Append -{place} when a place is set</span>
-          </span>
-        </label>
-        <label>
-          <span>Import into library</span>
-          <select name="import_mode">
-            <option value="copy">Copy files, keep the source</option>
-            <option value="move">Move files</option>
-          </select>
-        </label>
-        <div class="full general-settings-actions">
-          <span id="general-settings-status" class="field-help"></span>
-          <button type="submit" class="primary">Save</button>
-        </div>
-      </form>
-    </section>
-
   </main>
 
   <!-- Settings entity form (right-side panel for add/edit). -->
@@ -424,16 +315,18 @@
     <input id="picker-search" type="search" placeholder="Search…" />
     <div id="picker-grid" class="picker-grid"></div>
     <div class="picker-foot">
+      <button id="picker-new" class="secondary" type="button">+ New</button>
       <button id="picker-show-all" class="secondary hidden">Show all (ignore mount)</button>
     </div>
   </aside>
   <div id="picker-backdrop" class="backdrop hidden"></div>
 
-  <!-- In-page dialog (replaces alert / confirm) -->
+  <!-- In-page dialog (replaces alert / confirm / prompt) -->
   <div id="dialog-backdrop" class="backdrop hidden"></div>
   <div id="dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
     <h3 id="dialog-title">FilmEx</h3>
     <pre id="dialog-message" class="dialog-message"></pre>
+    <input id="dialog-input" class="dialog-input hidden" type="text" autocomplete="off" spellcheck="false" />
     <div class="dialog-foot">
       <button id="dialog-cancel" class="secondary">Cancel</button>
       <button id="dialog-ok" class="primary">OK</button>

@@ -142,3 +142,32 @@ def test_import_without_root_is_a_plan_error(client, tmp_path: Path, make_jpeg):
     make_jpeg("a.jpg", long_edge=64, folder=folder)
     res = client.post("/api/import/plan", json={"folder": str(folder), "rolls": [{"name": "r", "frames": ["a"]}]})
     assert res.status_code == 400 and "library root" in res.text
+
+
+def test_dry_run_can_preview_a_roll_under_its_future_name(client, tree):
+    _, mixed, _, _, _ = tree
+    res = client.post("/api/metadata/dry-run", json={"folder": str(mixed), "files": ["lab_001.jpg"], "as_roll": "2026-04-09-Lab"})
+    assert res.status_code == 200, res.text
+    hierarchical = next(c for c in res.json()["diffs"][0]["changes"] if c["tag"] == "HierarchicalSubject")
+    assert "Roll|2026-04-09-Lab" in hierarchical["after"]
+    assert res.json()["roll_id"] == "2026-04-09-Lab"
+
+
+def test_roll_drafts_carry_per_file_overrides_into_the_new_folder(client, tree, fake_exiftool):
+    root, mixed, _, cam, film = tree
+    lens = client.get("/api/lenses").json()[0]
+    body = {
+        "folder": str(mixed),
+        "rolls": [{
+            "name": "2026-04-01-Fed2-Gold",
+            "frames": ["DSC0001", "DSC0002"],
+            "tagging": {"camera_id": cam["id"], "film_stock_id": film["id"],
+                        "file_keywords": {"DSC0001.JPG": ["Anna"]}, "file_lens_ids": {"DSC0002.JPG": lens["id"]}},
+        }],
+    }
+    events = _ndjson(client.post("/api/folder/split/apply", json=body))
+    done = next(e for e in events if e["type"] == "done")
+    assert not done["errors"], done
+    manifest = mf.read_manifest(root / "2026" / "2026-04-01-Fed2-Gold")
+    assert manifest["file_overrides"]["DSC0001.JPG"]["extra_keywords"] == ["Anna"]
+    assert manifest["file_overrides"]["DSC0002.JPG"]["lens_snapshot"]["id"] == lens["id"]

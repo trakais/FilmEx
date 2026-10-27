@@ -65,6 +65,10 @@ class DryRunRequest(BaseModel):
     # folder scan). None means every supported file in the folder. Used by
     # the Library view's "tag remaining" action.
     files: Optional[list[str]] = None
+    # Dry run only: preview the files as if the folder were named this, so a
+    # roll about to be split out or imported shows the Roll keyword it will
+    # actually get. Ignored by apply, which always writes the folder's name.
+    as_roll: Optional[str] = None
 
 
 class TagChangeOut(BaseModel):

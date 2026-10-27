@@ -467,6 +467,36 @@ Ideas noted, not done: reconnect to a running import after a page reload
 (the job log supports it, the Inbox view does not use it yet); a frame
 count hint ("36 of 36") per roll card; drag-and-drop between roll cards.
 
+## UI restructure (2026-10-27)
+
+From a conceptual review of the four users (one roll in place; many rolls
+into a new library; a seasoned library user importing a card; a pro
+splitting big scan sessions):
+
+- [x] Folder-first start. Home (no library yet): drop zone, Open folder,
+      recent folders, "choose its folder". Library is home once a library
+      exists, with Open folder in the header.
+- [x] One Folder screen replaces the Tag and Inbox views: contact sheet,
+      one roll card per roll (the folder starts as one), gear tiles, date
+      and place, a More expander for providers and notes, a Changes
+      expander with the dry run and per-file overrides.
+- [x] Destination control at the end: Keep here / Copy to library / Move
+      to library, preselected by where the folder is, with one red action
+      whose label says what will happen. "Split in place" is Keep here
+      with two or more rolls.
+- [x] Add gear from inside the picker.
+- [x] Settings: Preferences first, then Gear; import mode moved to the
+      Folder screen; library actions behind a menu.
+- [ ] Cut suggestions for the pro user: time gaps as suggested cuts with a
+      frames-per-roll rhythm, the seam frames shown side by side, filename
+      counter resets and aspect changes as near-certain cuts, keyboard.
+
+Server additions: `as_roll` on the dry run (preview the Roll keyword under
+the folder name a roll is about to get), per-file overrides on roll
+drafts. Verified in a browser on scratch folders: first run through to a
+write, copy to library and undo, split in place and undo, add a camera
+from the picker, tag-remaining subset, settings groups, paper theme.
+
 ## Cross-cutting rules
 
 File operations:

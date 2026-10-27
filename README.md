@@ -24,43 +24,35 @@ replaced-extension form like `photo.xmp`.
 
 For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
 
-## Main Workflow
+## How it works
 
-![Film roll selection](docs/screenshots/filmex-roll-selection.webp)
-_Film roll and stock selection_
+Open a folder of scans: drop it on the window, press Open folder, or pick
+it from the recent list. Its frames appear on a contact sheet as one roll.
+Pick the camera, lens and film, check the date, and press Write. That tags
+the files where they are and leaves a `roll_manifest.json` beside them.
 
-1. Choose one folder containing a single film roll.
-2. Scan the folder.
-3. Pick camera, main lens, and film.
-4. Add optional development / scan info.
-5. Optionally create previews if the folder does not already have thumbnails.
-6. Preview the metadata changes and add optional per-file lens overrides or keywords.
-7. Add optional roll notes.
-8. Apply the changes.
+The same screen covers the rest:
 
-## Library, naming and inbox
-
-Beyond tagging one folder at a time, FilmEx can manage the library itself.
-Set the library root in Settings ▸ General (the top folder with the year
-folders inside).
-
-- **Library** lists every roll folder by year with its status (tagged,
-  partial, untagged, or unsorted for loose files in a year folder), counts,
-  film and camera, and offers Open, Tag remaining, Split and Reveal. The
-  index is cached, so it opens even when the share is unmounted.
-- **Normalize names** proposes a folder name for every tagged roll from the
-  template in Settings ▸ General (default `{date}-{camera}-{film}`, using
-  each camera's and film's short name), shows the full old/new list with
-  conflicts, renames in place, updates the manifest and the `Roll|` keyword
-  on every tagged file, and can undo the batch.
-- **Inbox** takes a folder of fresh scans, shows every frame on a contact
-  sheet, and lets you cut it into rolls: select a frame and press "Cut
-  here", or build a roll from a selection. Each roll gets its gear, film,
-  date and a folder name from the template. Then either import the rolls
-  into `<root>/<year>/<name>` (copy or move; every file is read back and
-  verified before a source is ever deleted, and each new folder is tagged
-  on the spot) or split them in place next to the source folder. The plan
-  is shown before anything runs, and the last batch can be undone.
+- **More than one roll in the folder.** Select the first frame of the next
+  roll and press "Cut here", or build a roll from a selection. Each roll
+  gets its own gear, film, date and folder name from the template. "Keep
+  here" then splits the folder into one folder per roll.
+- **A library.** Choose a library folder once (the top folder with year
+  folders inside). The Library becomes the start screen: every roll by
+  year with its status, counts, film and camera, with Tag, Tag remaining,
+  Open and Reveal on each row. The index is cached, so it opens even when
+  the share is unmounted.
+- **Importing.** With a library set, a folder opened from anywhere else
+  defaults to "Copy to library" or "Move to library". Rolls land in
+  `<root>/<year>/<name>`, every file is read back and verified before a
+  source is ever deleted, and each new folder is tagged on the spot. The
+  plan is shown before anything runs, and the last batch can be undone.
+- **Changes** on a roll card shows exactly what will be written to each
+  file, with a per-file lens override and extra keywords.
+- **Normalize names** (Library menu) proposes a folder name for every
+  tagged roll from the template in Settings ▸ Preferences, renames in
+  place, updates the manifest and the `Roll|` keyword on every tagged
+  file, and can undo the batch.
 
 Raw files and their JPEGs, sidecars and `.thm` thumbnails always travel
 together. Files that belong to no frame, such as notes, stay behind.
@@ -99,7 +91,7 @@ Pick one:
 The desktop app keeps its database in the per-user data directory
 (`~/Library/Application Support/FilmEx` on macOS). A source checkout keeps
 using `data/`. `FILMEX_DATA_DIR` overrides both. ExifTool is found on `PATH`,
-in the usual Homebrew locations, or at the path set in Settings ▸ General.
+in the usual Homebrew locations, or at the path set in Settings ▸ Preferences.
 
 ### Building the app
 

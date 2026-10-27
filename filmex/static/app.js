@@ -1,61 +1,52 @@
-// FilmEx — minimal vanilla JS controller.
+// FilmEx — vanilla JS controller.
 //
-// State lives on the `state` object; rendering is imperative. The browser
-// side does not need to be clever — it's a thin veneer over the FastAPI
-// endpoints, which own the real logic.
+// Three screens: Home (until a library folder is set), Library, and the
+// Folder screen, which is where any folder of scans is cut into rolls,
+// tagged, and kept where it is or copied or moved into the library. State
+// lives on `state`; rendering is imperative. The browser side is a thin
+// veneer over the FastAPI endpoints, which own the real logic.
 
 const DEFAULT_PAGE_TITLE = document.title;
 
 const state = {
-  settings: null,  // server-side settings cache (`/api/settings`)
-  view: "workflow",
+  settings: null,          // server-side settings cache (`/api/settings`)
+  view: "home",
   viewInitialised: false,
-  library: null,          // last `/api/library` payload
+  viewBeforeSettings: null,
+  library: null,           // last `/api/library` payload
   libraryFilter: "",
-  naming: null,           // last `/api/naming/propose` payload
+  naming: null,            // last `/api/naming/propose` payload
   namingLastOperation: null,
   libraryRescanning: false,
-  fileSubset: null,       // { folder, files } when tagging only part of a roll
-  tagFrames: null,        // /api/folder/frames payload for the Tag view's sheet
-  inbox: {                // Inbox view: contact sheet and roll drafts
-    folder: "",
-    listing: null,
-    frames: [],
-    indexByKey: null,
-    thumbs: new Set(),
-    thumbJob: false,
-    rolls: [],
-    selection: new Set(),
-    anchor: null,
-    destination: null,    // "import-copy" | "import-move" | "split"
-    running: false,
-    lastOperation: null,
-    result: null,
-  },
-  folder: "",
   theme: "dark",
-  scan: null,
+  previewInvert: false,
+  // Last used gear and processing fields: the defaults for a new roll.
   camera: null,
   lens: null,
   film: null,
-  previewInvert: false,
-  lastDryRunResult: null,
-  previewStale: false,
-  previewBuildController: null,
-  previewBuildJobId: null,
-  fileKeywords: {},
-  fileLensOverrides: {},
-  fileKeywordEditorOpen: {},
   advanced: {
     development_provider_id: "",
     development_method_id: "",
     scan_provider_id: "",
     scan_method_id: "",
-    roll_notes: "",
-    roll_date: "",
-    place: "",
-    replace_managed_metadata: false,
-    roll_date_source: "",  // "suggested" | "user" — controls the "from file creation" hint
+  },
+  folder: {                // the open Folder screen
+    path: "",
+    listing: null,         // `/api/folder/frames`
+    frames: [],
+    indexByKey: null,
+    scanFiles: new Map(),  // name → `/api/folder/scan` file (thumbnail flags)
+    thumbs: new Set(),     // image files with a thumbnail for the current invert mode
+    thumbJob: false,
+    manifest: null,        // existing roll manifest, if any
+    inLibrary: false,
+    rolls: [],
+    selection: new Set(),
+    anchor: null,
+    destination: null,     // "keep" | "copy" | "move"
+    running: false,
+    lastOperation: null,
+    result: null,
   },
   // Caches of entity lists
   cameras: [],
@@ -102,6 +93,7 @@ async function flushSettingsPatch() {
   }
 }
 
+
 async function loadSettings() {
   state.settings = await api("/api/settings");
   await migrateLegacyLocalStorage();
@@ -111,13 +103,10 @@ async function loadSettings() {
   state.camera = sel.camera || null;
   state.lens = sel.lens || null;
   state.film = sel.film || null;
-  state.folder = s.last_folder || "";
   state.previewInvert = !!s.preview_invert;
   applyTheme(s.theme, { persist: false });
 }
 
-// One-time import of state written by builds that used localStorage, then
-// clean those keys up so this never runs twice.
 async function migrateLegacyLocalStorage() {
   let patch = {};
   try {
@@ -159,9 +148,12 @@ async function migrateLegacyLocalStorage() {
   }
 }
 
+
+// The last used gear and processing fields become the defaults of the next
+// roll, wherever it is opened.
 function saveStickyState() {
   queueSettingsPatch({
-    last_folder: state.folder || "",
+    last_folder: state.folder.path || "",
     preview_invert: !!state.previewInvert,
     last_selection: {
       camera: state.camera,
@@ -170,6 +162,14 @@ function saveStickyState() {
       advanced: state.advanced,
     },
   });
+}
+
+function rememberGear(tagging) {
+  state.camera = tagging.camera || null;
+  state.lens = tagging.lens || null;
+  state.film = tagging.film || null;
+  for (const key of Object.keys(state.advanced)) state.advanced[key] = tagging[key] || "";
+  saveStickyState();
 }
 
 function recentFolders() {
@@ -216,26 +216,33 @@ function renderThemeSwitch() {
   paperBtn.setAttribute("aria-pressed", String(!isDark));
 }
 
+
 // ---------- In-page dialogs ----------
 //
-// Replaces window.alert/confirm. Browsers offer to suppress repeated native
-// dialogs (after which `confirm` silently returns false), and the desktop
-// shell should never pop a WebKit sheet over the app.
+// One dialog element serves alert, confirm and prompt. With `input`, the
+// promise resolves with the typed text, or null when dismissed.
 
-function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabel = null } = {}) {
+function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabel = null, input = null } = {}) {
   return new Promise((resolve) => {
     const dialog = document.getElementById("dialog");
     const backdrop = document.getElementById("dialog-backdrop");
     const okBtn = document.getElementById("dialog-ok");
     const cancelBtn = document.getElementById("dialog-cancel");
+    const field = document.getElementById("dialog-input");
     document.getElementById("dialog-title").textContent = title;
     document.getElementById("dialog-message").textContent = message;
     okBtn.textContent = okLabel;
     cancelBtn.textContent = cancelLabel || "Cancel";
     cancelBtn.classList.toggle("hidden", !cancelLabel);
+    field.classList.toggle("hidden", !input);
+    if (input) {
+      field.value = input.value || "";
+      field.placeholder = input.placeholder || "";
+    }
     const previouslyFocused = document.activeElement;
 
-    const finish = (value) => { cleanup(); resolve(value); };
+    const result = (ok) => (input ? (ok ? field.value.trim() : null) : ok);
+    const finish = (ok) => { cleanup(); resolve(result(ok)); };
     const onOk = () => finish(true);
     const onCancel = () => finish(false);
     const onKey = (e) => {
@@ -258,7 +265,7 @@ function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabe
     document.addEventListener("keydown", onKey);
     dialog.classList.remove("hidden");
     backdrop.classList.remove("hidden");
-    okBtn.focus();
+    (input ? field : okBtn).focus();
   });
 }
 
@@ -268,6 +275,11 @@ function notify(message, title = "FilmEx") {
 
 function ask(message, { title = "Confirm", okLabel = "Continue", cancelLabel = "Cancel" } = {}) {
   return showDialog({ title, message, okLabel, cancelLabel });
+}
+
+
+function askText(message, { title = "FilmEx", okLabel = "Open", placeholder = "", value = "" } = {}) {
+  return showDialog({ title, message, okLabel, cancelLabel: "Cancel", input: { placeholder, value } });
 }
 
 // ---------- Desktop shell bridge ----------
@@ -283,17 +295,11 @@ window.filmexDesktop = {
   // Absolute paths of the items dropped on the window, folder or files.
   onDrop(paths) {
     const path = (paths || [])[0];
-    if (path) acceptDroppedFolder(path);
+    if (path) void openFolder(path);
   },
 };
 
-function acceptDroppedFolder(path) {
-  const input = document.getElementById("folder-input");
-  input.value = path;
-  state.folder = path;
-  saveStickyState();
-  onScan();
-}
+
 
 // ---------- API ----------
 
@@ -310,6 +316,7 @@ async function responseError(res) {
   const detail = await res.text().catch(() => res.statusText);
   return new Error(`${res.status} ${res.statusText}: ${detail}`);
 }
+
 
 // ---------- Jobs ----------
 //
@@ -342,6 +349,7 @@ async function runJob(url, { body, method = "POST", signal, onStart, onEvent } =
 // Read an NDJSON response line by line, calling `onEvent` for each object as
 // it arrives so progress can render live. Exceptions thrown by `onEvent`
 // abort the read and propagate to the caller.
+
 async function readNdjson(res, onEvent) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -371,6 +379,7 @@ async function cancelJob(jobId) {
   }
 }
 
+
 // ---------- Initial load ----------
 
 async function init() {
@@ -386,12 +395,19 @@ async function init() {
 
 // Marked on <body data-ready> so the desktop shell's smoke check can tell
 // that settings and entity lists loaded through the authenticated API.
+
+
+// Marked on <body data-ready> so the desktop shell's smoke check can tell
+// that settings and entity lists loaded through the authenticated API.
 async function initInner() {
   await loadSettings();
-
   await refreshExifToolStatus();
+  await loadEntityCaches();
+  renderHeader();
+  chooseStartView();
+}
 
-  // Load all entity caches in parallel
+async function loadEntityCaches() {
   const [cams, lenses, films, brands, providers, devM, scanM] = await Promise.all([
     api("/api/cameras"),
     api("/api/lenses"),
@@ -408,21 +424,11 @@ async function initInner() {
   state.providers = providers;
   state.devMethods = devM;
   state.scanMethods = scanM;
-
-  populateAdvancedSelects();
-  renderPreviewInvertToggle();
-  renderTiles();
-  renderFolderInput();
-  renderRecentFolders();
-  updateActionButtons();
-
   // Re-resolve sticky entity snapshots against the fresh DB (IDs might have
   // changed if seeds were edited); drop stale ones.
   if (state.camera && !cams.find(c => c.id === state.camera.id)) state.camera = null;
   if (state.lens && !lenses.find(l => l.id === state.lens.id)) state.lens = null;
   if (state.film && !films.find(f => f.id === state.film.id)) state.film = null;
-  renderTiles();
-  chooseStartView();
 }
 
 async function refreshExifToolStatus() {
@@ -444,21 +450,86 @@ async function refreshExifToolStatus() {
   }
 }
 
-// ---------- Folder ----------
 
-function renderFolderInput() {
-  const input = document.getElementById("folder-input");
-  input.value = state.folder || "";
+// ---------- Views and header ----------
+
+const VIEW_IDS = { home: "home-view", library: "library-view", folder: "folder-view", settings: "settings-view" };
+
+function showView(name) {
+  const next = VIEW_IDS[name] ? name : "home";
+  for (const [key, id] of Object.entries(VIEW_IDS)) {
+    document.getElementById(id).classList.toggle("hidden", key !== next);
+  }
+  state.view = next;
+  renderHeader();
 }
 
-function renderRecentFolders() {
-  const dl = document.getElementById("folder-history");
-  dl.innerHTML = "";
-  for (const path of recentFolders()) {
-    const opt = document.createElement("option");
-    opt.value = path;
-    dl.appendChild(opt);
+function hasLibrary() {
+  return !!(state.settings && state.settings.library_root);
+}
+
+// Tabs appear only for places that exist: Library once a root is set, the
+// folder once one is open. "Open folder" is always there.
+function renderHeader() {
+  const libraryTab = document.querySelector('.view-tab[data-view="library"]');
+  const folderTab = document.querySelector('.view-tab[data-view="folder"]');
+  libraryTab.classList.toggle("hidden", !hasLibrary());
+  libraryTab.classList.toggle("active", state.view === "library");
+  const open = !!state.folder.path;
+  folderTab.classList.toggle("hidden", !open);
+  folderTab.classList.toggle("active", state.view === "folder");
+  if (open) {
+    folderTab.textContent = baseName(state.folder.path);
+    folderTab.title = state.folder.path;
   }
+}
+
+function chooseStartView() {
+  if (state.viewInitialised) return;
+  state.viewInitialised = true;
+  if (hasLibrary()) {
+    showView("library");
+    void loadLibrary({ rescan: true });
+  } else {
+    showHome();
+  }
+}
+
+function baseName(path) {
+  return (path || "").replace(/\/+$/, "").split("/").pop() || path;
+}
+
+function setPageTitleProgress(label, current, total) {
+  document.title = `${DEFAULT_PAGE_TITLE} (${label}: ${current}/${total})`;
+}
+
+function resetPageTitle() {
+  document.title = DEFAULT_PAGE_TITLE;
+}
+
+
+// ---------- Home ----------
+
+function showHome() {
+  showView("home");
+  renderHome();
+}
+
+function renderHome() {
+  const recent = recentFolders();
+  const section = document.getElementById("home-recent");
+  const list = document.getElementById("home-recent-list");
+  section.classList.toggle("hidden", !recent.length);
+  list.innerHTML = "";
+  for (const path of recent.slice(0, 8)) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "home-recent-row";
+    row.innerHTML = `<code>${escapeHtml(baseName(path))}</code><span class="lib-sub">${escapeHtml(path)}</span>`;
+    row.addEventListener("click", () => void openFolder(path));
+    list.appendChild(row);
+  }
+  document.getElementById("home-path").value = "";
 }
 
 // Native folder dialog. Inside the desktop shell pywebview exposes a JS API
@@ -475,255 +546,30 @@ async function pickFolder() {
   return res.folder;
 }
 
-async function onBrowse() {
-  const btn = document.getElementById("browse-btn");
-  btn.disabled = true;
+
+async function onOpenFolder() {
+  try {
+    const folder = await pickFolder();
+    if (folder) await openFolder(folder);
+  } catch (err) {
+    await notify(`Could not open folder picker: ${err.message || err}`);
+  }
+}
+
+async function chooseLibraryFolder() {
   try {
     const folder = await pickFolder();
     if (!folder) return;
-    const input = document.getElementById("folder-input");
-    input.value = folder;
-    state.folder = folder;
-    saveStickyState();
-    onScan();
-  } catch (err) {
-    await notify(`Could not open folder picker: ${err.message || err}`);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function onScan() {
-  const input = document.getElementById("folder-input");
-  const folder = input.value.trim();
-  if (!folder) return;
-  clearScanOutput();
-  clearPreviewStatus();
-  clearManifestSummary();
-  state.tagFrames = null;
-  document.getElementById("tag-sheet-section").classList.add("hidden");
-  if (state.fileSubset && state.fileSubset.folder !== folder) state.fileSubset = null;
-  state.folder = folder;
-  try {
-    const scan = await api("/api/folder/scan", {
-      method: "POST",
-      body: JSON.stringify({ folder }),
-    });
-    state.scan = scan;
-    applySuggestedRollDate(scan.suggested_roll_date);
-    resetPerFileKeywordState();
-    pushRecentFolder(folder);
-    renderRecentFolders();
-    renderScanSummary();
-    saveStickyState();
-    updateActionButtons();
-    void loadTagSheet();
-    void maybeLoadManifestPrefill(scan).then(() => {
-      saveStickyState();
-      updateActionButtons();
-    });
+    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify({ library_root: folder }) });
+    renderHeader();
+    await openLibrary();
   } catch (e) {
-    state.scan = null;
-    clearPreviewStatus();
-    const summary = document.getElementById("scan-summary");
-    summary.classList.remove("hidden");
-    summary.innerHTML = `<span class="pill bad">Scan failed</span> <span>${escapeHtml(e.message)}</span>`;
-    updateActionButtons();
+    await notify(`Could not set the library folder: ${e.message}`);
   }
 }
 
-// Feather-ish refresh-cw: 3/4 arc + single arrow head. Sized to match the
-// summary-value text height; strokes pick up currentColor so hover can
-// flip it yellow. Used as the rescan affordance next to the file count.
-const REFRESH_ICON_SVG =
-  '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<polyline points="23 4 23 10 17 10"/>' +
-    '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>' +
-  '</svg>';
+// ---------- Gear labels ----------
 
-function renderScanSummary() {
-  const el = document.getElementById("scan-summary");
-  if (!state.scan) { el.classList.add("hidden"); return; }
-  el.classList.remove("hidden");
-  const count = state.scan.files.length;
-  const sourceLabel = scanSourceKindLabel(state.scan.source_kind);
-  const tierLabel = scanTierLabel(state.scan.source_kind, state.scan.scan_tier);
-  const filesValue = `${count} image${count === 1 ? "" : "s"}`;
-  // Files item is hand-built so the count + rescan icon sit in the same
-  // flex line, right where the eye lands to check "did my new files land?".
-  const filesMarkup =
-    `<span class="summary-item">` +
-      `<span class="summary-label">Files</span>` +
-      `<span class="summary-value summary-value--accent">${escapeHtml(filesValue)}</span>` +
-      `<button id="scan-refresh-btn" type="button" class="summary-refresh" aria-label="Rescan folder" title="Rescan folder">${REFRESH_ICON_SVG}</button>` +
-    `</span>`;
-  const parts = [
-    filesMarkup,
-    renderScanSummaryItem("Source", sourceLabel),
-  ];
-  if (tierLabel) {
-    parts.push(renderScanSummaryItem("Resolution", tierLabel));
-  }
-  parts.push(renderScanSummaryItem("Folder", state.scan.roll_id, "summary-code"));
-  const subset = activeFileSubset();
-  if (subset) {
-    parts.push(
-      `<span class="summary-item">` +
-        `<span class="summary-label">Tagging</span>` +
-        `<span class="summary-value summary-value--accent">${subset.length} of ${count} files</span>` +
-        `<button id="subset-clear-btn" type="button" class="summary-refresh" aria-label="Tag all files instead" title="Tag all files instead">✕</button>` +
-      `</span>`
-    );
-  }
-  el.innerHTML = parts.join("");
-  const refreshBtn = document.getElementById("scan-refresh-btn");
-  if (refreshBtn) refreshBtn.addEventListener("click", onScan);
-  const subsetBtn = document.getElementById("subset-clear-btn");
-  if (subsetBtn) subsetBtn.addEventListener("click", clearFileSubset);
-}
-
-function renderScanSummaryItem(label, value, valueClass = "") {
-  const classes = ["summary-value"];
-  if (valueClass) classes.push(valueClass);
-  return `<span class="summary-item"><span class="summary-label">${escapeHtml(label)}</span><span class="${classes.join(" ")}">${escapeHtml(value)}</span></span>`;
-}
-
-function scanSourceKindLabel(kind) {
-  switch (kind) {
-    case "camera_scan_raw":
-      return "Camera-scanned raw files";
-    case "positive_master_tiff":
-      return "High-resolution TIFF masters";
-    case "lab_scan_jpeg":
-      return "Lab scan JPEGs";
-    default:
-      return kind || "Unknown";
-  }
-}
-
-function scanTierLabel(sourceKind, tier) {
-  if (sourceKind === "camera_scan_raw" || sourceKind === "positive_master_tiff") {
-    return "";
-  }
-  switch (tier) {
-    case "high-res":
-      return "High resolution";
-    case "standard":
-      return "Standard resolution";
-    default:
-      return tier || "";
-  }
-}
-
-function renderManifestSummary(message, level = "warn") {
-  const el = document.getElementById("manifest-summary");
-  if (!message) {
-    el.classList.add("hidden");
-    el.innerHTML = "";
-    return;
-  }
-  el.classList.remove("hidden");
-  el.innerHTML = `<span class="pill ${escapeHtml(level)}">${level === "ok" ? "Manifest loaded" : "Manifest note"}</span><span>${escapeHtml(message)}</span>`;
-}
-
-function clearManifestSummary() {
-  renderManifestSummary("");
-}
-
-function renderPreviewStatus(message, level = "warn") {
-  const el = document.getElementById("preview-status");
-  if (!message) {
-    el.classList.add("hidden");
-    el.innerHTML = "";
-    return;
-  }
-  el.classList.remove("hidden");
-  el.innerHTML = `<span class="pill ${escapeHtml(level)}">${level === "ok" ? "Previews ready" : "Preview note"}</span><span>${escapeHtml(message)}</span>`;
-}
-
-function clearPreviewStatus() {
-  renderPreviewStatus("");
-}
-
-function renderPreviewStaleSummary() {
-  const el = document.getElementById("preview-stale-summary");
-  if (!state.lastDryRunResult || !state.previewStale) {
-    el.classList.add("hidden");
-    el.innerHTML = "";
-    return;
-  }
-  el.classList.remove("hidden");
-  el.innerHTML = `<span class="pill warn">Preview stale</span><span>Preview is out of date. Refresh before applying.</span>`;
-}
-
-function renderDryRunButton() {
-  const btn = document.getElementById("dry-run-btn");
-  btn.textContent = state.previewStale ? "Preview changes" : "Preview";
-}
-
-function markPreviewFresh() {
-  state.previewStale = false;
-  renderPreviewStaleSummary();
-  renderDryRunButton();
-}
-
-function markPreviewStale() {
-  if (!state.lastDryRunResult) return;
-  state.previewStale = true;
-  renderPreviewStaleSummary();
-  renderDryRunButton();
-  updateActionButtons();
-}
-
-function renderPreviewInvertToggle() {
-  const btn = document.getElementById("preview-invert-toggle");
-  btn.setAttribute("aria-pressed", state.previewInvert ? "true" : "false");
-  btn.textContent = `Invert thumbnails: ${state.previewInvert ? "on" : "off"}`;
-}
-
-function setPageTitleProgress(label, current, total) {
-  document.title = `${DEFAULT_PAGE_TITLE} (${label}: ${current}/${total})`;
-}
-
-function resetPageTitle() {
-  document.title = DEFAULT_PAGE_TITLE;
-}
-
-function fileHasPreview(file) {
-  if (!file) return false;
-  return state.previewInvert ? !!file.has_inverted_preview : !!file.has_thumbnail;
-}
-
-function missingPreviewCount() {
-  return (state.scan?.files || []).filter(file => !fileHasPreview(file)).length;
-}
-
-function renderCreatePreviewsButton() {
-  const btn = document.getElementById("create-previews-btn");
-  const missing = missingPreviewCount();
-  if (state.previewBuildController) {
-    btn.classList.remove("hidden");
-    btn.disabled = false;
-    btn.textContent = btn.dataset.progressText || "Stop";
-    return;
-  }
-  if (!state.scan || missing === 0) {
-    btn.classList.add("hidden");
-    btn.disabled = true;
-    btn.textContent = "Create thumbnails";
-    delete btn.dataset.progressText;
-    return;
-  }
-  btn.classList.remove("hidden");
-  btn.disabled = false;
-  btn.textContent = missing === (state.scan.files || []).length ? "Create thumbnails" : "Create missing thumbnails";
-  delete btn.dataset.progressText;
-}
-
-// ---------- Tiles ----------
-
-// Keep in sync with the Settings form options. Stored values stay lowercase
-// kebab for URL/DB safety; these labels are only for display.
 const CAMERA_TYPE_LABELS = {
   slr: "SLR",
   rangefinder: "Rangefinder",
@@ -754,74 +600,9 @@ const ISO_BADGE_KIND = {
 };
 const isoBadgeKind = (t) => ISO_BADGE_KIND[t] || "color";
 
-function renderTiles() {
-  const tileCamera = document.getElementById("tile-camera");
-  const tileLens = document.getElementById("tile-lens");
-  const tileFilm = document.getElementById("tile-film");
 
-  renderTile(tileCamera, state.camera, "Pick a camera (optional)", c => ({
-    title: c.display_name,
-    sub: cameraTypeLabel(c.camera_type) || c.mount || "",
-  }));
-  renderTile(tileLens, state.lens, "Pick a main lens (optional)", l => ({
-    title: l.display_name,
-    sub: [l.focal_length_mm && `${l.focal_length_mm}mm`, l.max_aperture && `f/${l.max_aperture}`, l.mount]
-      .filter(Boolean).join(" · "),
-  }));
-  renderTile(tileFilm, state.film, "Pick a film (optional)", f => ({
-    title: f.display_name,
-    sub: `ISO ${f.box_speed_iso} · ${filmTypeLabel(f.film_type)}`,
-  }));
-  tileFilm.querySelector(".tile-canister")?.remove();
-  if (state.film) {
-    const [c1, c2] = filmBrandColors(state.film.brand);
-    tileFilm.style.setProperty("--brand-c1", c1);
-    tileFilm.style.setProperty("--brand-c2", c2);
-    tileFilm.insertAdjacentHTML("beforeend", canisterSvg("tile-canister"));
-  }
-}
-
-function renderTile(el, entity, placeholder, toCopy) {
-  const content = el.querySelector(".tile-content");
-  content.className = "tile-content" + (entity ? "" : " empty");
-  // Always tear down the clear button — re-added below only when selected.
-  el.querySelector(".tile-clear")?.remove();
-  if (!entity) {
-    content.textContent = placeholder;
-    el.querySelector(".tile-sub")?.remove();
-    el.classList.remove("selected");
-    return;
-  }
-  const copy = toCopy(entity);
-  content.textContent = copy.title;
-  let sub = el.querySelector(".tile-sub");
-  if (!sub) {
-    sub = document.createElement("div");
-    sub.className = "tile-sub";
-    el.appendChild(sub);
-  }
-  sub.textContent = copy.sub || "";
-  el.classList.add("selected");
-
-  // Tiny ✕ in the corner so the user can blank a slot without re-opening the
-  // picker — useful when only one or two of camera/lens/film are known.
-  // stopPropagation so the click doesn't fall through to the tile and
-  // immediately reopen the picker.
-  const clear = document.createElement("button");
-  clear.type = "button";
-  clear.className = "tile-clear";
-  clear.setAttribute("aria-label", `Clear ${el.dataset.kind}`);
-  clear.title = "Clear";
-  clear.textContent = "✕";
-  clear.addEventListener("click", (e) => {
-    e.stopPropagation();
-    clearTile(el.dataset.kind);
-  });
-  el.appendChild(clear);
-}
-
-// Gear rules shared by the Tag view and the Inbox roll cards. `gear` is
-// { camera, lens, film }; both return a new object.
+// Gear rules shared by every roll card. `gear` is { camera, lens, film };
+// both return a new object.
 //
 // Picking a camera: a fixed-lens camera brings its own lens, and a lens on
 // another mount is dropped (the lens picker's "Show all" can still force one).
@@ -836,51 +617,28 @@ function withGear(gear, kind, item) {
 }
 
 // Clearing a slot: clearing a fixed-lens camera takes its built-in lens too.
+
+
+// Clearing a slot: clearing a fixed-lens camera takes its built-in lens too.
 function withoutGear(gear, kind) {
   const next = { ...gear, [kind]: null };
   if (kind === "camera" && gear.lens && state.cameras.some(c => c.fixed_lens_id === gear.lens.id)) next.lens = null;
   return next;
 }
 
-function tagGear() {
-  return { camera: state.camera, lens: state.lens, film: state.film };
-}
-
-function setTagGear(gear) {
-  state.camera = gear.camera;
-  state.lens = gear.lens;
-  state.film = gear.film;
-}
-
-function clearTile(kind) {
-  if (kind === "camera") state.fileLensOverrides = {};
-  setTagGear(withoutGear(tagGear(), kind));
-  markPreviewStale();
-  saveStickyState();
-  renderTiles();
-  updateActionButtons();
-}
 
 // ---------- Picker ----------
+//
+// The picker writes into a target: a roll card's gear. `camera()` scopes the
+// lens list; `set(kind, item)` takes the choice.
 
 let activePickerKind = null;
+let pickerTarget = null;
 
-// The picker writes into a target: the Tag view's state by default, or a
-// roll draft on the Inbox view. `camera()` scopes the lens list.
-const tagPickerTarget = {
-  camera: () => state.camera,
-  set(kind, item) {
-    if (kind === "camera") state.fileLensOverrides = {};
-    setTagGear(withGear(tagGear(), kind, item));
-    markPreviewStale();
-    saveStickyState();
-    renderTiles();
-    updateActionButtons();
-  },
-};
-let pickerTarget = tagPickerTarget;
+const PICKER_NEW_LABEL = { camera: "+ New camera…", lens: "+ New lens…", film: "+ New film…" };
+const PICKER_FORM_KIND = { camera: "camera", lens: "lens", film: "film" };
 
-function openPicker(kind, target = tagPickerTarget) {
+function openPicker(kind, target) {
   activePickerKind = kind;
   pickerTarget = target;
   const panel = document.getElementById("picker-panel");
@@ -890,10 +648,11 @@ function openPicker(kind, target = tagPickerTarget) {
   const showAll = document.getElementById("picker-show-all");
   const search = document.getElementById("picker-search");
 
-  title.textContent = { camera: "Pick a camera", lens: "Pick a main lens", film: "Pick a film" }[kind];
+  title.textContent = { camera: "Pick a camera", lens: "Pick a lens", film: "Pick a film" }[kind];
   search.value = "";
   delete grid.dataset.showAll;
   showAll.classList.toggle("hidden", kind !== "lens");
+  document.getElementById("picker-new").textContent = PICKER_NEW_LABEL[kind];
 
   grid.className = "picker-grid" + (kind === "film" ? " film-grid" : "");
 
@@ -968,6 +727,19 @@ async function renderPickerGrid() {
 // the `film_brand` DB rows (editable under Settings → Film brands). Brands
 // without a palette, or stocks whose brand row is missing, fall back to a
 // neutral pair so the strip still appears but doesn't misrepresent.
+
+
+// Add gear without a trip to Settings: the same form opens over the page
+// and the saved row becomes the picker's choice.
+function addFromPicker() {
+  const kind = activePickerKind;
+  const target = pickerTarget;
+  closePicker();
+  openSettingsForm(PICKER_FORM_KIND[kind], null, {
+    onSaved: (row) => target && target.set(kind, row),
+  });
+}
+
 const FILM_BRAND_FALLBACK = ["#3a4050", "#2a3040"];
 
 function filmBrandColors(brand) {
@@ -984,6 +756,7 @@ function filmBrandColors(brand) {
 // A 35 mm cassette, front view: metal cap, dark body, the brand's label
 // band and accent stripe (from --brand-c1/--brand-c2 on the parent), and a
 // shared shading gradient that rounds the body. Pure SVG, no dependencies.
+
 function canisterSvg(extraClass = "canister") {
   return (
     `<svg class="${extraClass}" viewBox="0 0 24 36" aria-hidden="true" focusable="false">` +
@@ -1080,6 +853,7 @@ function renderPickerTile(item, kind) {
 // Case-insensitive mount comparison. AGENTS.md says lens.mount must exactly
 // match a camera's mount, but we normalize anyway so stray whitespace or
 // mixed-case DB edits don't wrongly clear a valid pairing.
+
 function lensMountMatchesCamera(lens, camera) {
   if (!lens || !camera) return false;
   const lm = (lens.mount || "").trim().toLowerCase();
@@ -1088,96 +862,35 @@ function lensMountMatchesCamera(lens, camera) {
   return lm === cm;
 }
 
+
 function selectFromPicker(item) {
-  pickerTarget.set(activePickerKind, item);
+  if (pickerTarget) pickerTarget.set(activePickerKind, item);
   closePicker();
 }
 
-// ---------- Advanced ----------
+// ---------- Manifest values ----------
+//
+// A folder that was tagged before carries a manifest; its snapshots become
+// the first roll's values, matched back to the current gear lists.
 
-function populateAdvancedSelects() {
-  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
-  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
-
-  fillSelect("adv-dev-provider", devProviders, state.advanced.development_provider_id);
-  fillSelect("adv-dev-method", state.devMethods, state.advanced.development_method_id);
-  fillSelect("adv-scan-provider", scanProviders, state.advanced.scan_provider_id);
-  fillSelect("adv-scan-method", state.scanMethods, state.advanced.scan_method_id);
-  document.getElementById("adv-roll-notes").value = state.advanced.roll_notes || "";
-  document.getElementById("adv-place").value = state.advanced.place || "";
-  document.getElementById("adv-replace-managed").checked = !!state.advanced.replace_managed_metadata;
-  renderRollDate();
-}
-
-function applySuggestedRollDate(suggested) {
-  // Pre-fill the date field with the scanner's creation date on every scan,
-  // *unless* the user has manually typed one (user > suggestion).
-  if (!suggested) return;
-  if (state.advanced.roll_date && state.advanced.roll_date_source === "user") return;
-  state.advanced.roll_date = suggested;
-  state.advanced.roll_date_source = "suggested";
-  renderRollDate();
-}
-
-async function maybeLoadManifestPrefill(scan) {
-  try {
-    const params = new URLSearchParams({ folder: state.folder });
-    const res = await api(`/api/manifest?${params.toString()}`);
-    applyManifestPrefill(res.manifest, scan);
-  } catch (e) {
-    if (String(e.message || "").startsWith("404 ")) return;
-    renderManifestSummary(`Could not load existing roll manifest: ${e.message}`, "bad");
-  }
-}
-
-function applyManifestPrefill(manifest, scan) {
+function taggingFromManifest(manifest, imageNames) {
   const unresolved = [];
-  state.camera = resolveCameraFromManifest(manifest.analog_camera_snapshot, unresolved);
-  state.lens = resolveLensFromManifest(manifest.analog_lens_snapshot, unresolved);
-  state.film = resolveFilmFromManifest(manifest.film_stock_snapshot, unresolved);
-  state.advanced.development_provider_id = resolveNamedEntityId(
-    state.providers,
-    manifest.development_provider_snapshot,
-    unresolved,
-    "development provider"
-  );
-  state.advanced.development_method_id = resolveNamedEntityId(
-    state.devMethods,
-    manifest.development_method_snapshot,
-    unresolved,
-    "development method"
-  );
-  state.advanced.scan_provider_id = resolveNamedEntityId(
-    state.providers,
-    manifest.scan_provider_snapshot,
-    unresolved,
-    "scan provider"
-  );
-  state.advanced.scan_method_id = resolveNamedEntityId(
-    state.scanMethods,
-    manifest.scan_method_snapshot,
-    unresolved,
-    "scan method"
-  );
-  state.fileKeywords = fileKeywordsFromManifest(manifest.file_overrides, scan.files);
-  state.fileLensOverrides = fileLensOverridesFromManifest(manifest.file_overrides, scan.files, unresolved);
-  state.fileKeywordEditorOpen = {};
-
-  const manifestRollDate = (manifest.capture_date_value || "").trim();
-  if (manifestRollDate) {
-    state.advanced.roll_date = manifestRollDate;
-    state.advanced.roll_date_source = "manifest";
-  }
-  state.advanced.roll_notes = (manifest.notes || "").trim();
-  state.advanced.place = (manifest.place || "").trim();
-
-  populateAdvancedSelects();
-  renderTiles();
-
-  const msg = unresolved.length
-    ? `Loaded existing roll manifest. Could not match: ${unresolved.join(", ")}.`
-    : "Loaded existing roll manifest values for this folder.";
-  renderManifestSummary(msg, unresolved.length ? "warn" : "ok");
+  const tagging = defaultTagging();
+  tagging.camera = resolveCameraFromManifest(manifest.analog_camera_snapshot, unresolved);
+  tagging.lens = resolveLensFromManifest(manifest.analog_lens_snapshot, unresolved);
+  tagging.film = resolveFilmFromManifest(manifest.film_stock_snapshot, unresolved);
+  tagging.development_provider_id = resolveNamedEntityId(state.providers, manifest.development_provider_snapshot, unresolved, "development provider");
+  tagging.development_method_id = resolveNamedEntityId(state.devMethods, manifest.development_method_snapshot, unresolved, "development method");
+  tagging.scan_provider_id = resolveNamedEntityId(state.providers, manifest.scan_provider_snapshot, unresolved, "scan provider");
+  tagging.scan_method_id = resolveNamedEntityId(state.scanMethods, manifest.scan_method_snapshot, unresolved, "scan method");
+  const files = imageNames.map(name => ({ name }));
+  tagging.file_keywords = fileKeywordsFromManifest(manifest.file_overrides, files);
+  tagging.file_lens_ids = fileLensOverridesFromManifest(manifest.file_overrides, files, unresolved);
+  const date = (manifest.capture_date_value || "").trim();
+  if (date) tagging.roll_date = date;
+  tagging.roll_notes = (manifest.notes || "").trim();
+  tagging.place = (manifest.place || "").trim();
+  return { tagging, unresolved };
 }
 
 function resolveCameraFromManifest(snapshot, unresolved) {
@@ -1261,341 +974,8 @@ function compareCaseInsensitive(a, b) {
   return ((a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase());
 }
 
-function renderRollDate() {
-  const input = document.getElementById("adv-roll-date");
-  const hint = document.getElementById("roll-date-hint");
-  input.value = state.advanced.roll_date || "";
-  if (state.advanced.roll_date && state.advanced.roll_date_source === "suggested") {
-    hint.textContent = "from file creation";
-    hint.classList.remove("hidden");
-  } else {
-    hint.textContent = "";
-    hint.classList.add("hidden");
-  }
-}
-
-function fillSelect(id, items, selectedId) {
-  const el = document.getElementById(id);
-  // Keep the existing "(none)" option at index 0
-  while (el.options.length > 1) el.remove(1);
-  for (const item of items) {
-    const opt = document.createElement("option");
-    opt.value = item.id;
-    opt.textContent = item.display_name || item.name;
-    if (item.id === selectedId) opt.selected = true;
-    el.appendChild(opt);
-  }
-}
-
-function readAdvanced() {
-  return {
-    development_provider_id: document.getElementById("adv-dev-provider").value || null,
-    development_method_id: document.getElementById("adv-dev-method").value || null,
-    scan_provider_id: document.getElementById("adv-scan-provider").value || null,
-    scan_method_id: document.getElementById("adv-scan-method").value || null,
-    roll_date: document.getElementById("adv-roll-date").value || null,
-    roll_notes: document.getElementById("adv-roll-notes").value.trim() || null,
-    place: document.getElementById("adv-place").value.trim() || null,
-    replace_managed_metadata: !!document.getElementById("adv-replace-managed").checked,
-  };
-}
-
-// ---------- Dry run / Apply ----------
-
-function buildRequestBody() {
-  const files = activeFileSubset();
-  return {
-    folder: state.folder,
-    files: files || undefined,
-    camera_id: state.camera?.id,
-    lens_id: state.lens?.id || null,
-    film_stock_id: state.film?.id,
-    file_keywords: buildPerFileKeywordPayload(),
-    file_lens_ids: { ...state.fileLensOverrides },
-    ...readAdvanced(),
-  };
-}
-
-function updateActionButtons() {
-  // Camera/lens/film are all optional — at minimum we still write Roll|<id>
-  // and any extras/dev/scan keywords, which is useful even with no gear set.
-  const ready = !!(state.folder && state.scan);
-  const busy = !!state.previewBuildController;
-  renderCreatePreviewsButton();
-  renderDryRunButton();
-  renderPreviewStaleSummary();
-  document.getElementById("dry-run-btn").disabled = !ready || busy;
-  document.getElementById("apply-btn").disabled = !ready || busy || !state.lastDryRunResult || state.previewStale;
-  document.getElementById("preview-invert-toggle").disabled = !ready || busy;
-}
-
-async function onDryRun() {
-  try {
-    const res = await api("/api/metadata/dry-run", {
-      method: "POST",
-      body: JSON.stringify(buildRequestBody()),
-    });
-    state.lastDryRunResult = res;
-    markPreviewFresh();
-    renderDiff(res);
-    updateActionButtons();
-  } catch (e) {
-    await notify(`Dry-run failed:\n${e.message}`);
-  }
-}
-
-async function onCreatePreviews() {
-  if (!state.folder || !state.scan) return;
-  if (state.previewBuildController) {
-    state.previewBuildController.abort();
-    void cancelJob(state.previewBuildJobId);
-    return;
-  }
-  const btn = document.getElementById("create-previews-btn");
-  clearPreviewStatus();
-  const controller = new AbortController();
-  state.previewBuildController = controller;
-  btn.dataset.progressText = "Stop";
-  updateActionButtons();
-  let total = missingPreviewCount();
-  let processed = 0;
-  let created = 0;
-  let failed = 0;
-  try {
-    const done = await runJob("/api/previews/create/stream", {
-      body: { folder: state.folder, invert: state.previewInvert },
-      signal: controller.signal,
-      onStart: (ev) => {
-        state.previewBuildJobId = ev.job_id || null;
-        total = ev.total;
-        btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
-        renderCreatePreviewsButton();
-      },
-      onEvent: (ev) => {
-        if (ev.type !== "progress") return;
-        processed += 1;
-        if (ev.status === "created" || ev.status === "reused") {
-          created += 1;
-          markPreviewFilesAvailable([ev.file]);
-          if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
-        } else if (ev.status === "failed") {
-          failed += 1;
-        }
-        btn.dataset.progressText = total ? `Stop ${processed}/${total}` : "Stop";
-        renderCreatePreviewsButton();
-      },
-    });
-    const cancelled = !!done?.cancelled;
-    failed = done?.failed?.length ?? failed;
-    created = done?.created_files?.length ?? created;
-    const parts = [];
-    if (created) parts.push(`${created} ready`);
-    if (failed) parts.push(`${failed} failed`);
-    renderPreviewStatus(
-      parts.length
-        ? `Previews: ${parts.join(", ")}${cancelled ? ", cancelled early" : ""}.`
-        : cancelled
-          ? "Preview creation cancelled."
-          : "No previewable files were missing.",
-      failed || cancelled ? "warn" : "ok"
-    );
-    if (done?.created_files?.length) markPreviewFilesAvailable(done.created_files);
-    if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
-  } catch (e) {
-    if (e.name === "AbortError") {
-      const parts = [];
-      if (created) parts.push(`${created} ready`);
-      if (failed) parts.push(`${failed} failed`);
-      renderPreviewStatus(
-        parts.length ? `Preview creation stopped: ${parts.join(", ")}.` : "Preview creation stopped.",
-        "warn"
-      );
-    } else {
-      renderPreviewStatus(`Could not create thumbnails: ${e.message}`, "bad");
-    }
-  } finally {
-    state.previewBuildController = null;
-    state.previewBuildJobId = null;
-    delete btn.dataset.progressText;
-    updateActionButtons();
-  }
-}
-
-function markPreviewFilesAvailable(fileNames) {
-  const ready = new Set(fileNames);
-  for (const file of state.scan?.files || []) {
-    if (ready.has(file.name)) {
-      if (state.previewInvert) {
-        file.has_inverted_preview = true;
-      } else {
-        file.has_thumbnail = true;
-      }
-    }
-  }
-  renderTagSheet();
-}
-
-function renderDiff(result) {
-  const section = document.getElementById("diff-section");
-  const body = document.getElementById("diff-body");
-  section.classList.remove("hidden");
-  body.innerHTML = "";
-  const scanFilesByName = new Map((state.scan?.files || []).map(file => [file.name, file]));
-  for (const file of result.diffs) {
-    const frag = document.createElement("div");
-    frag.className = "diff-file";
-    const scanFile = scanFilesByName.get(file.name);
-    const hasThumbnail = fileHasPreview(scanFile);
-    const thumbUrl = hasThumbnail
-      ? buildThumbnailUrl(state.folder, file.name, state.previewInvert)
-      : "";
-    const keywordValue = state.fileKeywords[file.name] || "";
-    const lensOverrideValue = state.fileLensOverrides[file.name] || "";
-    const editorOpen = !!state.fileKeywordEditorOpen[file.name];
-    const lensOptions = lensOverrideOptions(lensOverrideValue);
-    frag.innerHTML = `
-      ${hasThumbnail ? `
-        <button type="button" class="diff-thumb-link" aria-label="Open source file">
-          <img class="diff-thumb" src="${escapeHtml(thumbUrl)}" alt="" loading="lazy" />
-        </button>
-      ` : ""}
-      <div class="diff-file-main">
-        <div class="diff-file-header">
-          <div class="diff-file-name">${escapeHtml(file.name)}</div>
-          <div class="diff-file-controls">
-            <select class="diff-file-lens-select" aria-label="Lens override for this frame">
-              ${lensOptions}
-            </select>
-            <button type="button" class="diff-add-keyword-link">${editorOpen ? "hide keywords" : "+ keywords"}</button>
-          </div>
-        </div>
-        <div class="diff-file-keyword-editor${editorOpen ? "" : " hidden"}">
-          <input
-            type="text"
-            class="diff-file-keyword-input"
-            value="${escapeHtml(keywordValue)}"
-            placeholder="extra keywords, comma-separated"
-          />
-          <div class="diff-file-keyword-hint">Merged with auto keywords, duplicates skipped.</div>
-        </div>
-      </div>
-    `;
-    const changes = document.createElement("div");
-    changes.className = "diff-changes";
-    for (const ch of file.changes) {
-      const row = document.createElement("div");
-      row.className = "diff-row";
-      row.innerHTML = `
-        <span class="diff-tag">${escapeHtml(ch.tag)}</span>
-        <span class="diff-action ${ch.action}">${ch.action}</span>
-        <span class="diff-value">${formatValue(ch.after)}</span>
-      `;
-      changes.appendChild(row);
-    }
-    frag.querySelector(".diff-file-main").appendChild(changes);
-    frag.querySelector(".diff-thumb-link")?.addEventListener("click", () => openSourceFile(file.name));
-    frag.querySelector(".diff-add-keyword-link").addEventListener("click", () => {
-      state.fileKeywordEditorOpen[file.name] = !state.fileKeywordEditorOpen[file.name];
-      renderDiff(result);
-    });
-    const input = frag.querySelector(".diff-file-keyword-input");
-    if (input) {
-      input.addEventListener("input", (e) => {
-        state.fileKeywords[file.name] = e.target.value;
-        markPreviewStale();
-      });
-    }
-    const lensSelect = frag.querySelector(".diff-file-lens-select");
-    if (lensSelect) {
-      lensSelect.addEventListener("change", (e) => {
-        if (e.target.value) {
-          state.fileLensOverrides[file.name] = e.target.value;
-        } else {
-          delete state.fileLensOverrides[file.name];
-        }
-        markPreviewStale();
-      });
-    }
-    body.appendChild(frag);
-  }
-}
-
-async function onApply() {
-  if (!(await ask("Write metadata to all files in this folder?", { okLabel: "Write metadata" }))) return;
-  const btn = document.getElementById("apply-btn");
-  const dryBtn = document.getElementById("dry-run-btn");
-  btn.disabled = true;
-  dryBtn.disabled = true;
-  btn.textContent = "Applying…";
-  try {
-    // Progress per file, so the button can show `3/12` live on a slow NAS.
-    let total = 0;
-    const done = await runJob("/api/metadata/apply/stream", {
-      body: buildRequestBody(),
-      onStart: (ev) => {
-        total = ev.total;
-        btn.textContent = `Applying… 0/${total}`;
-        setPageTitleProgress("Applying", 0, total);
-      },
-      onEvent: () => {
-        const n = Number(btn.dataset.n || 0) + 1;
-        btn.dataset.n = String(n);
-        btn.textContent = `Applying… ${n}/${total}`;
-        setPageTitleProgress("Applying", n, total);
-      },
-    });
-    state.fileSubset = null;
-    renderScanSummary();
-    renderApplyResult(done);
-    if (state.settings && state.settings.library_root) void loadLibrary({ rescan: true });
-  } catch (e) {
-    await notify(`Apply failed:\n${e.message}`);
-  } finally {
-    delete btn.dataset.n;
-    btn.textContent = "Apply";
-    resetPageTitle();
-    updateActionButtons();
-  }
-}
-
-function renderApplyResult(res) {
-  const section = document.getElementById("apply-section");
-  const body = document.getElementById("apply-body");
-  section.classList.remove("hidden");
-  body.innerHTML = `
-    <div>Wrote ${res.applied_files.length} file${res.applied_files.length === 1 ? "" : "s"}.</div>
-    <div style="margin-top: 6px; font-size: 12px; color: var(--muted);">
-      Manifest: <code>${escapeHtml(res.manifest_path)}</code>
-    </div>
-    ${res.errors.length
-      ? `<div class="pill bad" style="margin-top: 10px;">${res.errors.length} error(s)</div>
-         <pre style="white-space: pre-wrap; color: var(--danger); font-size: 12px;">${escapeHtml(res.errors.join("\n"))}</pre>`
-      : ""
-    }
-    ${res.cancelled ? `<div class="pill warn" style="margin-top: 10px;">Stopped early</div>` : ""}
-    ${state.settings && state.settings.library_root
-      ? `<div class="apply-actions"><button type="button" class="secondary" id="apply-back-library">Back to Library</button></div>`
-      : ""}
-  `;
-  document.getElementById("apply-back-library")?.addEventListener("click", () => void openLibrary());
-}
 
 // ---------- Helpers ----------
-
-function clearScanOutput() {
-  state.lastDryRunResult = null;
-  state.previewStale = false;
-  renderPreviewStaleSummary();
-  renderDryRunButton();
-  const diffSection = document.getElementById("diff-section");
-  const diffBody = document.getElementById("diff-body");
-  const applySection = document.getElementById("apply-section");
-  const applyBody = document.getElementById("apply-body");
-  diffSection.classList.add("hidden");
-  diffBody.innerHTML = "";
-  applySection.classList.add("hidden");
-  applyBody.innerHTML = "";
-}
 
 function escapeHtml(s) {
   if (s == null) return "";
@@ -1613,15 +993,6 @@ function formatValue(v) {
 function buildThumbnailUrl(folder, name, invert = state.previewInvert) {
   const params = new URLSearchParams({ folder, name, invert: invert ? "true" : "false" });
   return `/api/files/thumbnail?${params.toString()}`;
-}
-
-function buildPerFileKeywordPayload() {
-  const out = {};
-  for (const [name, raw] of Object.entries(state.fileKeywords || {})) {
-    const keywords = raw.split(",").map(s => s.trim()).filter(Boolean);
-    if (keywords.length) out[name] = keywords;
-  }
-  return out;
 }
 
 function fileKeywordsFromManifest(fileOverrides, files) {
@@ -1648,45 +1019,80 @@ function fileLensOverridesFromManifest(fileOverrides, files, unresolved) {
   return out;
 }
 
-function resetPerFileKeywordState() {
-  state.fileKeywords = {};
-  state.fileLensOverrides = {};
-  state.fileKeywordEditorOpen = {};
+
+function keywordPayload(byFile) {
+  const out = {};
+  for (const [name, raw] of Object.entries(byFile || {})) {
+    const keywords = String(raw).split(",").map(s => s.trim()).filter(Boolean);
+    if (keywords.length) out[name] = keywords;
+  }
+  return out;
 }
 
-function lensOverrideOptions(selectedId) {
+function compatibleLensOptions(camera) {
+  if (camera?.fixed_lens_id) return state.lenses.filter(l => l.id === camera.fixed_lens_id);
+  if (camera?.mount) return state.lenses.filter(l => !l.mount || l.mount === camera.mount);
+  return state.lenses;
+}
+
+function lensOverrideOptions(camera, selectedId) {
   const options = ['<option value="">(main lens)</option>'];
-  for (const lens of compatibleLensOptions()) {
-    options.push(
-      `<option value="${escapeHtml(lens.id)}" ${lens.id === selectedId ? "selected" : ""}>${escapeHtml(lens.display_name)}</option>`
-    );
+  for (const lens of compatibleLensOptions(camera)) {
+    options.push(`<option value="${escapeHtml(lens.id)}" ${lens.id === selectedId ? "selected" : ""}>${escapeHtml(lens.display_name)}</option>`);
   }
   return options.join("");
 }
 
-function compatibleLensOptions() {
-  if (state.camera?.fixed_lens_id) {
-    return state.lenses.filter(l => l.id === state.camera.fixed_lens_id);
-  }
-  if (state.camera?.mount) {
-    return state.lenses.filter(l => !l.mount || l.mount === state.camera.mount);
-  }
-  return state.lenses;
-}
-
 async function openSourceFile(name) {
   try {
-    const params = new URLSearchParams({ folder: state.folder, name });
+    const params = new URLSearchParams({ folder: state.folder.path, name });
     await api(`/api/files/open?${params.toString()}`, { method: "POST" });
   } catch (e) {
     await notify(`Could not open file:\n${e.message}`);
   }
 }
 
+async function revealFolder(path) {
+  const bridge = window.pywebview && window.pywebview.api;
+  try {
+    if (bridge && typeof bridge.reveal_path === "function") {
+      await bridge.reveal_path(path);
+    } else {
+      await api("/api/folder/reveal", { method: "POST", body: JSON.stringify({ folder: path }) });
+    }
+  } catch (e) {
+    renderLibraryBanner(`Could not reveal the folder: ${e.message}`, "bad");
+  }
+}
+
+// Hand a library folder to the Tag view, optionally restricted to a subset
+// of its files (the untagged remainder of a partially tagged roll).
+
+
+function formatStamp(iso, { dateOnly = false } = {}) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return dateOnly ? date : `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+
+function humanBytes(n) {
+  if (!n && n !== 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(n);
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
+  return i === 0 ? `${value} B` : `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+// ----- Tag view: read-only sheet -----
+
+
 // ---------- Settings ----------
 
-// Single config table keyed by UI "kind" — drives list rendering, form
-// rendering, and the REST endpoints. Adding a new entity type = one entry here.
 const SETTINGS_KINDS = {
   camera: {
     label: "Camera",
@@ -1795,8 +1201,9 @@ const settingsState = {
   activeTab: null,
 };
 
+
 const SETTINGS_TAB_STORAGE_KEY = "filmex.settingsTab";
-const DEFAULT_SETTINGS_TAB = "camera";
+const DEFAULT_SETTINGS_TAB = "general";
 
 function setActiveSettingsTab(tab) {
   const tabs = Array.from(document.querySelectorAll(".settings-tab"));
@@ -1818,8 +1225,9 @@ function setActiveSettingsTab(tab) {
   }
 }
 
+
 async function openSettings() {
-  state.viewBeforeSettings = state.view === "settings" ? "workflow" : state.view;
+  state.viewBeforeSettings = state.view === "settings" ? null : state.view;
   showView("settings");
   let remembered = null;
   try {
@@ -1831,33 +1239,456 @@ async function openSettings() {
   await Promise.all([refreshAllSettingsLists(), renderGeneralSettings()]);
 }
 
-// ---------- Views ----------
-
-const VIEW_IDS = { library: "library-view", inbox: "inbox-view", workflow: "workflow-view", settings: "settings-view" };
-
-function showView(name) {
-  const next = VIEW_IDS[name] ? name : "workflow";
-  for (const [key, id] of Object.entries(VIEW_IDS)) {
-    document.getElementById(id).classList.toggle("hidden", key !== next);
-  }
-  for (const tab of document.querySelectorAll(".view-tab")) {
-    tab.classList.toggle("active", tab.dataset.view === next);
-  }
-  state.view = next;
-}
-
-function chooseStartView() {
-  if (state.viewInitialised) return;
-  state.viewInitialised = true;
-  if (state.settings && state.settings.library_root) {
-    showView("library");
-    void loadLibrary({ rescan: true });
-  } else {
-    showView("workflow");
+async function closeSettings() {
+  await loadEntityCaches();
+  const back = state.viewBeforeSettings || (hasLibrary() ? "library" : "home");
+  if (back === "home") showHome();
+  else if (back === "library") await openLibrary();
+  else {
+    showView(back);
+    if (back === "folder") renderRollCards();
   }
 }
 
-// ---------- Library view ----------
+const DEFAULT_NAMING_TEMPLATE = "{date}-{camera}-{film}";
+
+const TEMPLATE_TOKENS = ["date", "year", "month", "camera", "film", "lens", "place", "roll"];
+const TEMPLATE_SAMPLE = { date: "2026-05-14", year: "2026", month: "05", camera: "Fed2", film: "Gold", lens: "Industar-50", place: "Jāņos", roll: "01" };
+
+// Client-side preview of the folder name template; the server's
+// services/naming.py is the real renderer, this only mirrors it for feedback.
+function renderTemplateExample() {
+  const form = document.getElementById("general-settings-form");
+  const out = document.getElementById("naming-template-example");
+  if (!form || !out) return;
+  const template = form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE;
+  const tokens = Array.from(template.matchAll(/\{([a-z_]+)\}/g)).map((m) => m[1]);
+  const unknown = tokens.filter((t) => !TEMPLATE_TOKENS.includes(t));
+  if (!tokens.length || unknown.length || /[/\\:*?"<>|]/.test(template)) {
+    out.textContent = unknown.length ? `unknown token {${unknown[0]}}` : "template needs at least one token and no / \\ : * ? \" < > |";
+    out.classList.add("bad");
+    return;
+  }
+  let example = template;
+  if (form.elements.naming_place_suffix.checked && !template.includes("{place}")) example += "-{place}";
+  example = example.replace(/\{([a-z_]+)\}/g, (_, t) => TEMPLATE_SAMPLE[t] || "");
+  out.textContent = example.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+  out.classList.remove("bad");
+}
+
+
+async function renderGeneralSettings() {
+  const form = document.getElementById("general-settings-form");
+  if (!form) return;
+  const s = state.settings || (state.settings = await api("/api/settings"));
+  form.elements.library_root.value = s.library_root || "";
+  form.elements.exiftool_path.value = s.exiftool_path || "";
+  form.elements.naming_template.value = s.naming_template || DEFAULT_NAMING_TEMPLATE;
+  form.elements.naming_place_suffix.checked = !!s.naming_place_suffix;
+  document.getElementById("general-settings-status").textContent = "";
+  renderTemplateExample();
+  await renderExifToolDetection();
+}
+
+async function renderExifToolDetection() {
+  const el = document.getElementById("general-exiftool-status");
+  if (!el) return;
+  try {
+    const h = await api("/api/health");
+    if (h.exiftool_available) {
+      const version = h.exiftool_version ? ` v${h.exiftool_version}` : "";
+      el.textContent = `Using ${h.exiftool_path}${version} (${h.exiftool_source}).`;
+      el.classList.remove("bad");
+    } else {
+      el.textContent = "Not found. Install ExifTool or enter the path to its executable.";
+      el.classList.add("bad");
+    }
+  } catch {
+    el.textContent = "Could not check ExifTool.";
+    el.classList.add("bad");
+  }
+}
+
+
+async function submitGeneralSettings(e) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const status = document.getElementById("general-settings-status");
+  const patch = {
+    library_root: form.elements.library_root.value.trim() || null,
+    exiftool_path: form.elements.exiftool_path.value.trim() || null,
+    naming_template: form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE,
+    naming_place_suffix: form.elements.naming_place_suffix.checked,
+  };
+  try {
+    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
+    status.textContent = "Saved.";
+    status.classList.remove("bad");
+    renderHeader();
+    await Promise.all([renderExifToolDetection(), refreshExifToolStatus()]);
+  } catch (err) {
+    status.textContent = err.message;
+    status.classList.add("bad");
+  }
+}
+
+async function onBrowseLibraryRoot() {
+  const btn = document.getElementById("general-library-browse");
+  btn.disabled = true;
+  try {
+    const folder = await pickFolder();
+    if (folder) document.getElementById("general-settings-form").elements.library_root.value = folder;
+  } catch (err) {
+    document.getElementById("general-settings-status").textContent = `Could not open folder picker: ${err.message || err}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refreshAllSettingsLists() {
+  await Promise.all([
+    ...Object.keys(SETTINGS_KINDS).map(refreshSettingsList),
+    refreshCameraMounts(),
+  ]);
+}
+
+async function refreshCameraMounts() {
+  settingsState.cameraMounts = await api("/api/camera-mounts");
+}
+
+async function refreshSettingsList(kind) {
+  const cfg = SETTINGS_KINDS[kind];
+  const url = `${cfg.endpoint}?include_archived=${settingsState.showArchived}`;
+  const rows = await api(url);
+  settingsState.rowsByKind[kind] = rows;
+  syncMainEntityCache(kind, rows);
+  renderSettingsList(kind);
+}
+
+
+function syncMainEntityCache(kind, rows) {
+  const target = { camera: "cameras", lens: "lenses", "film-brand": "brands", film: "films",
+                   provider: "providers", "dev-method": "devMethods", "scan-method": "scanMethods" }[kind];
+  if (target) state[target] = rows;
+  if (state.folder.listing) renderRollCards();
+}
+
+function renderSettingsList(kind) {
+  const cfg = SETTINGS_KINDS[kind];
+  const container = document.querySelector(`.settings-section[data-kind="${kind}"] .settings-list`);
+  const rows = settingsState.rowsByKind[kind] || [];
+  container.innerHTML = "";
+
+  if (!rows.length) {
+    container.innerHTML = `<div class="settings-group-label" style="color: var(--muted)">No entries yet. Click "Add" to create one.</div>`;
+    return;
+  }
+
+  const groups = groupRows(rows, cfg.groupBy);
+  for (const [groupName, groupRows] of groups) {
+    if (groupName) {
+      const label = document.createElement("div");
+      label.className = "settings-group-label";
+      label.textContent = groupName;
+      container.appendChild(label);
+    }
+    for (const row of groupRows) {
+      container.appendChild(renderSettingsRow(kind, row, cfg));
+    }
+  }
+}
+
+function groupRows(rows, groupBy) {
+  // Sort alpha by primary key or name. Favorites no longer jump to the top
+  // so toggling a star in Settings does not make the row leap around.
+  const sorted = [...rows].sort((a, b) => {
+    const aKey = a.display_name || a.name || "";
+    const bKey = b.display_name || b.name || "";
+    return aKey.localeCompare(bKey);
+  });
+  if (!groupBy) return [["", sorted]];
+  const map = new Map();
+  for (const row of sorted) {
+    const key = row[groupBy] || "—";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function renderSettingsRow(kind, row, cfg) {
+  const el = document.createElement("div");
+  el.className = "settings-row" + (row.archived ? " archived" : "");
+  const primary = row[cfg.primary] || row.name || "";
+  const sub = cfg.sub(row);
+  const hasFavorite = "favorite" in row;
+  const hasArchive = "archived" in row;
+  el.innerHTML = `
+    <div class="settings-row-name">
+      ${escapeHtml(primary)}
+      ${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}
+    </div>
+    ${hasFavorite ? `<button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite">★</button>` : ""}
+    <button class="settings-row-edit">Edit</button>
+    ${hasArchive ? `<button class="settings-row-archive">${row.archived ? "Unarchive" : "Archive"}</button>` : ""}
+  `;
+  el.querySelector(".settings-row-star")?.addEventListener("click", () => toggleFavorite(kind, row));
+  el.querySelector(".settings-row-edit").addEventListener("click", () => openSettingsForm(kind, row));
+  el.querySelector(".settings-row-archive")?.addEventListener("click", () => toggleArchive(kind, row));
+  return el;
+}
+
+async function toggleFavorite(kind, row) {
+  const cfg = SETTINGS_KINDS[kind];
+  await api(`${cfg.endpoint}/${row.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ favorite: !row.favorite }),
+  });
+  await refreshSettingsList(kind);
+}
+
+async function toggleArchive(kind, row) {
+  const cfg = SETTINGS_KINDS[kind];
+  const action = row.archived ? "unarchive" : "archive";
+  await api(`${cfg.endpoint}/${row.id}/${action}`, { method: "POST" });
+  await refreshSettingsList(kind);
+}
+
+// ---- Settings form panel (add + edit) ----
+
+
+let settingsFormCtx = null;  // { kind, row, onSaved } — row is null for "add"
+
+function openSettingsForm(kind, row, { onSaved = null } = {}) {
+  const cfg = SETTINGS_KINDS[kind];
+  settingsFormCtx = { kind, row, onSaved };
+  document.getElementById("settings-form-title").textContent =
+    row ? `Edit ${cfg.label.toLowerCase()}` : `Add ${cfg.label.toLowerCase()}`;
+
+  const form = document.getElementById("settings-form");
+  form.innerHTML = cfg.fields
+    .filter(f => row || !f.editOnly)
+    .map(f => renderFormField(f, row))
+    .join("") +
+    `<div class="settings-form-error" id="settings-form-error"></div>`;
+
+  document.getElementById("settings-form-panel").classList.remove("hidden");
+  document.getElementById("settings-form-backdrop").classList.remove("hidden");
+
+  // Two-way sync for color-hex dual inputs. The text input is the form field
+  // (name=...) so submit reads from it; the picker just mirrors.
+  form.querySelectorAll(".color-hex-row").forEach(row => {
+    const picker = row.querySelector(".color-hex-picker");
+    const text = row.querySelector(".color-hex-text");
+    if (!picker || !text) return;
+    picker.addEventListener("input", () => { text.value = picker.value; });
+    text.addEventListener("input", () => {
+      if (/^#([0-9a-fA-F]{6})$/.test(text.value)) picker.value = text.value;
+    });
+  });
+  form.querySelector("input, select")?.focus();
+}
+
+function closeSettingsForm() {
+  document.getElementById("settings-form-panel").classList.add("hidden");
+  document.getElementById("settings-form-backdrop").classList.add("hidden");
+  settingsFormCtx = null;
+}
+
+function renderFormField(f, row) {
+  const value = row ? (row[f.name] ?? "") : "";
+  const help = f.help ? `<span style="color: var(--muted); font-size: 11px;">${escapeHtml(f.help)}</span>` : "";
+
+  if (f.type === "select") {
+    const opts = f.options.map(opt => {
+      const [v, label] = typeof opt === "string" ? [opt, opt || "(none)"] : [opt.value, opt.label];
+      return `<option value="${escapeHtml(v)}" ${value === v ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "kinds") {
+    const kinds = Array.isArray(value) ? value : [];
+    return `
+      <label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span>
+        <div class="kinds-group">
+          <label><input type="checkbox" name="kinds[]" value="development" ${kinds.includes("development") ? "checked" : ""}/>Development</label>
+          <label><input type="checkbox" name="kinds[]" value="scan" ${kinds.includes("scan") ? "checked" : ""}/>Scan</label>
+        </div>
+      </label>`;
+  }
+
+  if (f.type === "lens-ref") {
+    const lenses = settingsState.rowsByKind.lens || [];
+    const opts = ['<option value="">(none)</option>'].concat(
+      lenses.map(l =>
+        `<option value="${escapeHtml(l.id)}" ${value === l.id ? "selected" : ""}>${escapeHtml(l.display_name)}</option>`
+      )
+    ).join("");
+    return `<label><span>${escapeHtml(f.label)}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "brand-ref") {
+    const brands = settingsState.rowsByKind["film-brand"] || [];
+    const current = typeof value === "string" ? value.trim() : "";
+    // Match by case-insensitive name so a stock loaded with brand "kodak"
+    // still highlights the "Kodak" row in the picker.
+    const matched = brands.find(b => (b.name || "").toLowerCase() === current.toLowerCase());
+    const baseOption = brands.length
+      ? '<option value="">(select brand)</option>'
+      : '<option value="">(add a film brand first)</option>';
+    const opts = [baseOption].concat(
+      brands.map(b =>
+        `<option value="${escapeHtml(b.name)}" ${matched && b.id === matched.id ? "selected" : ""}>${escapeHtml(b.name)}</option>`
+      )
+    ).join("");
+    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "color-hex") {
+    // Dual input: a native color picker and a text input, kept in sync via
+    // oninput handlers. Text is the source of truth so the user can paste a
+    // literal `#bb9d70` from a design doc; the picker just scrubs. Blank
+    // text == no color (falls back to neutral tile).
+    const hex = (value || "").toString();
+    const pickerVal = /^#([0-9a-f]{6})$/i.test(hex) ? hex : "#888888";
+    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
+    return `<label><span>${escapeHtml(f.label)}</span>
+      <div class="color-hex-row">
+        <input type="color" class="color-hex-picker" value="${escapeHtml(pickerVal)}" aria-label="${escapeHtml(f.label)} picker" />
+        <input type="text" name="${f.name}" class="color-hex-text" value="${escapeHtml(hex)}" ${placeholder} />
+      </div>${help}</label>`;
+  }
+
+  if (f.type === "camera-mount") {
+    const mounts = [...settingsState.cameraMounts];
+    const current = typeof value === "string" ? value.trim() : "";
+    if (current && !mounts.includes(current)) mounts.unshift(current);
+    const baseOption = mounts.length
+      ? '<option value="">(select mount)</option>'
+      : '<option value="">(add a camera with a mount first)</option>';
+    const opts = [baseOption].concat(
+      mounts.map(m =>
+        `<option value="${escapeHtml(m)}" ${current === m ? "selected" : ""}>${escapeHtml(m)}</option>`
+      )
+    ).join("");
+    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
+  }
+
+  if (f.type === "camera-mount-entry") {
+    const mounts = [...settingsState.cameraMounts].sort((a, b) => a.localeCompare(b));
+    const current = typeof value === "string" ? value.trim() : "";
+    const listId = `mount-suggestions-${settingsFormCtx?.kind || "camera"}`;
+    const options = mounts.map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
+    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
+    return `<label><span>${escapeHtml(f.label)}</span>
+      <input type="text" name="${f.name}" value="${escapeHtml(current)}" list="${listId}" ${placeholder} autocapitalize="off" autocomplete="off" spellcheck="false" />
+      <datalist id="${listId}">${options}</datalist>${help}</label>`;
+  }
+
+  const type = f.type === "number" ? "number" : "text";
+  const step = f.step ? `step="${f.step}"` : "";
+  const min = f.min != null ? `min="${f.min}"` : "";
+  const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
+  return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span>
+    <input type="${type}" name="${f.name}" value="${escapeHtml(value)}" ${step} ${min} ${placeholder} />${help}</label>`;
+}
+
+
+async function submitSettingsForm() {
+  if (!settingsFormCtx) return;
+  const { kind, row, onSaved } = settingsFormCtx;
+  const cfg = SETTINGS_KINDS[kind];
+  const errorEl = document.getElementById("settings-form-error");
+  errorEl.textContent = "";
+
+  const form = document.getElementById("settings-form");
+  const payload = {};
+  const activeFields = cfg.fields.filter(f => row || !f.editOnly);
+  for (const f of activeFields) {
+    if (f.type === "kinds") {
+      payload[f.name] = [...form.querySelectorAll('input[name="kinds[]"]:checked')].map(el => el.value);
+    } else {
+      const raw = form.querySelector(`[name="${f.name}"]`).value;
+      if (raw === "") {
+        payload[f.name] = null;  // Pydantic Optional handles this
+      } else if (f.type === "number") {
+        payload[f.name] = Number(raw);
+      } else {
+        payload[f.name] = raw;
+      }
+    }
+    if (f.required && (payload[f.name] === null || payload[f.name] === "" ||
+        (Array.isArray(payload[f.name]) && payload[f.name].length === 0))) {
+      errorEl.textContent = `${f.label} is required`;
+      return;
+    }
+  }
+
+  if (kind === "camera") {
+    const originalMount = payload.mount;
+    const normalizedMount = normalizeMountText(originalMount);
+    if (normalizedMount !== originalMount) payload.mount = normalizedMount;
+    const exactMount = canonicalMountMatch(payload.mount);
+    if (exactMount) {
+      payload.mount = exactMount;
+    } else {
+      const suggestion = similarMountSuggestion(payload.mount);
+      if (suggestion && suggestion !== payload.mount) {
+        const ok = await ask(`Mount "${payload.mount}" is very close to existing mount "${suggestion}". Save as a new mount anyway?`, { okLabel: "Save as new mount" });
+        if (!ok) {
+          errorEl.textContent = `Use existing mount "${suggestion}" or type a different new mount`;
+          return;
+        }
+      }
+    }
+  }
+
+  let saved;
+  try {
+    saved = row
+      ? await api(`${cfg.endpoint}/${row.id}`, { method: "PATCH", body: JSON.stringify(payload) })
+      : await api(cfg.endpoint, { method: "POST", body: JSON.stringify(payload) });
+  } catch (err) {
+    errorEl.textContent = err.message || String(err);
+    return;
+  }
+
+  closeSettingsForm();
+  await refreshSettingsList(kind);
+  if (kind === "film-brand") await refreshSettingsList("film");
+  if (kind === "camera") await refreshCameraMounts();
+  if (onSaved && saved) onSaved(saved);
+}
+
+function normalizeMountText(value) {
+  if (value == null) return null;
+  const cleaned = String(value).trim().replace(/\s+/g, " ");
+  return cleaned || null;
+}
+
+function mountKey(value) {
+  return normalizeMountText(value)?.toLowerCase() || "";
+}
+
+function mountLooseKey(value) {
+  return mountKey(value).replace(/[\s-]+/g, "");
+}
+
+function canonicalMountMatch(value) {
+  const needle = mountKey(value);
+  if (!needle) return null;
+  return settingsState.cameraMounts.find(m => mountKey(m) === needle) || null;
+}
+
+function similarMountSuggestion(value) {
+  const needle = mountLooseKey(value);
+  if (!needle) return null;
+  return settingsState.cameraMounts.find(m => mountLooseKey(m) === needle) || null;
+}
+
+
+// ---------- Library ----------
 
 async function openLibrary() {
   showView("library");
@@ -1880,22 +1711,20 @@ async function loadLibrary({ rescan = false } = {}) {
 async function rescanLibrary() {
   if (state.libraryRescanning) return;
   state.libraryRescanning = true;
-  const btn = document.getElementById("library-rescan");
-  btn.disabled = true;
-  btn.textContent = "Rescanning…";
+  const name = document.getElementById("library-root-name");
+  const label = name.textContent;
   try {
     await runJob("/api/library/rescan", {
       body: {},
-      onEvent: (ev) => { btn.textContent = `Rescanning… ${ev.scanned}`; },
+      onEvent: (ev) => { name.textContent = `${label} · scanning ${ev.scanned}…`; },
     });
     state.library = await api("/api/library");
     renderLibrary();
   } catch (e) {
+    name.textContent = label;
     renderLibraryBanner(`Rescan failed: ${e.message}`, "bad");
   } finally {
     state.libraryRescanning = false;
-    btn.disabled = false;
-    btn.textContent = "Rescan";
   }
 }
 
@@ -1906,33 +1735,31 @@ function renderLibraryBanner(message, level = "warn") {
   el.innerHTML = `<span class="pill ${level}">${level === "bad" ? "Problem" : "Note"}</span> <span>${escapeHtml(message)}</span>`;
 }
 
+
 function renderLibrary() {
   const lib = state.library;
-  const rootEl = document.getElementById("library-root-path");
+  const rootEl = document.getElementById("library-root-name");
   const groupsEl = document.getElementById("library-groups");
   const summaryEl = document.getElementById("library-summary");
-  const rescanBtn = document.getElementById("library-rescan");
   renderLibraryBanner("");
 
   if (!lib || !lib.root) {
-    rootEl.textContent = "no library root";
-    rescanBtn.disabled = true;
+    rootEl.textContent = "";
     summaryEl.classList.add("hidden");
     groupsEl.innerHTML = `
       <div class="library-empty">
-        <div>No library root set. Point FilmEx at the top folder of your film library, the one with the year folders inside.</div>
-        <button type="button" class="primary" id="library-empty-choose">Choose library root…</button>
+        <div>Point FilmEx at the top folder of your film library, the one with the year folders inside.</div>
+        <button type="button" class="primary" id="library-empty-choose">Choose library folder…</button>
       </div>`;
-    document.getElementById("library-empty-choose").addEventListener("click", onChooseLibraryRoot);
+    document.getElementById("library-empty-choose").addEventListener("click", () => void chooseLibraryFolder());
     return;
   }
 
-  rootEl.textContent = lib.root;
+  rootEl.textContent = baseName(lib.root);
   rootEl.title = lib.root;
-  rescanBtn.disabled = !lib.reachable || state.libraryRescanning;
   if (!lib.reachable) {
     renderLibraryBanner(
-      `Library root is not reachable right now (NAS unmounted?). Showing cached results` +
+      `Library folder is not reachable right now (NAS unmounted?). Showing cached results` +
       (lib.scanned_at ? ` from ${formatStamp(lib.scanned_at)}.` : "."),
       "warn"
     );
@@ -1941,11 +1768,11 @@ function renderLibrary() {
   const s = lib.summary || {};
   summaryEl.classList.remove("hidden");
   summaryEl.innerHTML = [
-    renderScanSummaryItem("Rolls", String(lib.folders.length)),
-    renderScanSummaryItem("Tagged", String(s.tagged || 0)),
-    renderScanSummaryItem("Partial", String(s.partial || 0)),
-    renderScanSummaryItem("Untagged", String(s.untagged || 0)),
-    lib.scanned_at ? renderScanSummaryItem("Scanned", formatStamp(lib.scanned_at)) : "",
+    summaryItem("Rolls", String(lib.folders.length)),
+    summaryItem("Tagged", String(s.tagged || 0)),
+    summaryItem("Partial", String(s.partial || 0)),
+    summaryItem("Untagged", String(s.untagged || 0)),
+    lib.scanned_at ? summaryItem("Scanned", formatStamp(lib.scanned_at)) : "",
   ].join("");
 
   const needle = (state.libraryFilter || "").trim().toLowerCase();
@@ -1976,8 +1803,15 @@ function renderLibrary() {
   if (!keys.length) {
     groupsEl.innerHTML = needle
       ? `<div class="library-empty">No rolls match “${escapeHtml(needle)}”.</div>`
-      : `<div class="library-empty">No folders with images found under this root yet.</div>`;
+      : `<div class="library-empty"><div>No folders with images under this library yet.</div><button type="button" class="primary" id="library-empty-open">Open folder…</button></div>`;
+    document.getElementById("library-empty-open")?.addEventListener("click", () => void onOpenFolder());
   }
+}
+
+function summaryItem(label, value, valueClass = "") {
+  const classes = ["summary-value"];
+  if (valueClass) classes.push(valueClass);
+  return `<span class="summary-item"><span class="summary-label">${escapeHtml(label)}</span><span class="${classes.join(" ")}">${escapeHtml(value)}</span></span>`;
 }
 
 const KIND_SHORT = { camera_scan_raw: "raw", lab_scan_jpeg: "jpg", positive_master_tiff: "tif", other: "other" };
@@ -1997,6 +1831,7 @@ function libraryStatusPill(row) {
   return `<span class="pill ${cls} lib-status">${escapeHtml(row.status)}</span>`;
 }
 
+
 function renderLibraryRow(row) {
   const el = document.createElement("div");
   el.className = `lib-row ${row.status}`;
@@ -2007,12 +1842,8 @@ function renderLibraryRow(row) {
     actions.push(`<button type="button" class="primary" data-act="remaining">Tag remaining ${row.untagged_count}</button>`);
   } else if (row.status === "untagged") {
     actions.push(`<button type="button" class="primary" data-act="open">Tag</button>`);
-  }
-  if (row.status !== "untagged") {
+  } else {
     actions.push(`<button type="button" class="secondary" data-act="open">Open</button>`);
-  }
-  if (row.image_count > 1) {
-    actions.push(`<button type="button" class="secondary" data-act="split" title="Cut this folder into per-roll folders">Split…</button>`);
   }
   actions.push(`<button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button>`);
   el.innerHTML = `
@@ -2033,61 +1864,32 @@ async function onLibraryAction(action, row) {
     await revealFolder(row.path);
     return;
   }
-  if (action === "split") {
-    await openInbox({ folder: row.path, destination: "split" });
-    return;
-  }
   if (action === "remaining") {
     try {
       const details = await api(`/api/library/folder?${new URLSearchParams({ path: row.path })}`);
-      await openFolderInTagView(row.path, details.untagged_files);
+      await openFolder(row.path, { onlyFiles: details.untagged_files });
     } catch (e) {
       renderLibraryBanner(`Could not read the folder: ${e.message}`, "bad");
     }
     return;
   }
-  await openFolderInTagView(row.path, null);
+  await openFolder(row.path);
 }
 
-async function revealFolder(path) {
-  const bridge = window.pywebview && window.pywebview.api;
-  try {
-    if (bridge && typeof bridge.reveal_path === "function") {
-      await bridge.reveal_path(path);
-    } else {
-      await api("/api/folder/reveal", { method: "POST", body: JSON.stringify({ folder: path }) });
-    }
-  } catch (e) {
-    renderLibraryBanner(`Could not reveal the folder: ${e.message}`, "bad");
-  }
+function toggleLibraryMenu(open) {
+  const menu = document.getElementById("library-menu");
+  const btn = document.getElementById("library-menu-btn");
+  const show = open === undefined ? menu.classList.contains("hidden") : open;
+  menu.classList.toggle("hidden", !show);
+  btn.setAttribute("aria-expanded", String(show));
 }
 
-// Hand a library folder to the Tag view, optionally restricted to a subset
-// of its files (the untagged remainder of a partially tagged roll).
-async function openFolderInTagView(path, files) {
-  state.folder = path;
-  state.fileSubset = null;
-  renderFolderInput();
-  showView("workflow");
-  await onScan();
-  if (files && files.length && state.scan) {
-    state.fileSubset = { folder: path, files: files.slice() };
-    renderScanSummary();
-  }
-}
-
-function activeFileSubset() {
-  const subset = state.fileSubset;
-  if (!subset || subset.folder !== state.folder || !state.scan) return null;
-  return subset.files;
-}
-
-function clearFileSubset() {
-  state.fileSubset = null;
-  state.lastDryRunResult = null;
-  renderScanSummary();
-  clearScanOutput();
-  updateActionButtons();
+async function onLibraryMenu(item) {
+  toggleLibraryMenu(false);
+  if (item === "rescan") await rescanLibrary();
+  else if (item === "normalize") await openNamingPanel();
+  else if (item === "reveal" && state.library?.root) await revealFolder(state.library.root);
+  else if (item === "choose-root") await chooseLibraryFolder();
 }
 
 // ---------- Library: normalize folder names ----------
@@ -2220,522 +2022,32 @@ async function undoLastRename() {
   }
 }
 
-async function onChooseLibraryRoot() {
-  try {
-    const folder = await pickFolder();
-    if (!folder) return;
-    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify({ library_root: folder }) });
-    await loadLibrary({ rescan: true });
-  } catch (e) {
-    renderLibraryBanner(`Could not set the library root: ${e.message}`, "bad");
-  }
-}
 
-function formatStamp(iso, { dateOnly = false } = {}) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, "0");
-  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return dateOnly ? date : `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// ---------- Settings: General tab ----------
-
-const DEFAULT_NAMING_TEMPLATE = "{date}-{camera}-{film}";
-
-const TEMPLATE_TOKENS = ["date", "year", "month", "camera", "film", "lens", "place", "roll"];
-const TEMPLATE_SAMPLE = { date: "2026-05-14", year: "2026", month: "05", camera: "Fed2", film: "Gold", lens: "Industar-50", place: "Jāņos", roll: "01" };
-
-// Client-side preview of the folder name template; the server's
-// services/naming.py is the real renderer, this only mirrors it for feedback.
-function renderTemplateExample() {
-  const form = document.getElementById("general-settings-form");
-  const out = document.getElementById("naming-template-example");
-  if (!form || !out) return;
-  const template = form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE;
-  const tokens = Array.from(template.matchAll(/\{([a-z_]+)\}/g)).map((m) => m[1]);
-  const unknown = tokens.filter((t) => !TEMPLATE_TOKENS.includes(t));
-  if (!tokens.length || unknown.length || /[/\\:*?"<>|]/.test(template)) {
-    out.textContent = unknown.length ? `unknown token {${unknown[0]}}` : "template needs at least one token and no / \\ : * ? \" < > |";
-    out.classList.add("bad");
-    return;
-  }
-  let example = template;
-  if (form.elements.naming_place_suffix.checked && !template.includes("{place}")) example += "-{place}";
-  example = example.replace(/\{([a-z_]+)\}/g, (_, t) => TEMPLATE_SAMPLE[t] || "");
-  out.textContent = example.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
-  out.classList.remove("bad");
-}
-
-async function renderGeneralSettings() {
-  const form = document.getElementById("general-settings-form");
-  if (!form) return;
-  const s = state.settings || (state.settings = await api("/api/settings"));
-  form.elements.library_root.value = s.library_root || "";
-  form.elements.exiftool_path.value = s.exiftool_path || "";
-  form.elements.naming_template.value = s.naming_template || DEFAULT_NAMING_TEMPLATE;
-  form.elements.naming_place_suffix.checked = !!s.naming_place_suffix;
-  form.elements.import_mode.value = s.import_mode || "copy";
-  document.getElementById("general-settings-status").textContent = "";
-  renderTemplateExample();
-  await renderExifToolDetection();
-}
-
-async function renderExifToolDetection() {
-  const el = document.getElementById("general-exiftool-status");
-  if (!el) return;
-  try {
-    const h = await api("/api/health");
-    if (h.exiftool_available) {
-      const version = h.exiftool_version ? ` v${h.exiftool_version}` : "";
-      el.textContent = `Using ${h.exiftool_path}${version} (${h.exiftool_source}).`;
-      el.classList.remove("bad");
-    } else {
-      el.textContent = "Not found. Install ExifTool or enter the path to its executable.";
-      el.classList.add("bad");
-    }
-  } catch {
-    el.textContent = "Could not check ExifTool.";
-    el.classList.add("bad");
-  }
-}
-
-async function submitGeneralSettings(e) {
-  e.preventDefault();
-  const form = e.currentTarget;
-  const status = document.getElementById("general-settings-status");
-  const patch = {
-    library_root: form.elements.library_root.value.trim() || null,
-    exiftool_path: form.elements.exiftool_path.value.trim() || null,
-    naming_template: form.elements.naming_template.value.trim() || DEFAULT_NAMING_TEMPLATE,
-    naming_place_suffix: form.elements.naming_place_suffix.checked,
-    import_mode: form.elements.import_mode.value,
-  };
-  try {
-    state.settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify(patch) });
-    status.textContent = "Saved.";
-    status.classList.remove("bad");
-    await Promise.all([renderExifToolDetection(), refreshExifToolStatus()]);
-  } catch (err) {
-    status.textContent = err.message;
-    status.classList.add("bad");
-  }
-}
-
-async function onBrowseLibraryRoot() {
-  const btn = document.getElementById("general-library-browse");
-  btn.disabled = true;
-  try {
-    const folder = await pickFolder();
-    if (folder) document.getElementById("general-settings-form").elements.library_root.value = folder;
-  } catch (err) {
-    document.getElementById("general-settings-status").textContent = `Could not open folder picker: ${err.message || err}`;
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function closeSettings() {
-  const back = state.viewBeforeSettings || "workflow";
-  showView(back);
-  // Refresh main-flow entity caches in case the user edited/archived anything.
-  init();
-  if (back === "library") void loadLibrary({ rescan: false });
-}
-
-async function refreshAllSettingsLists() {
-  await Promise.all([
-    ...Object.keys(SETTINGS_KINDS).map(refreshSettingsList),
-    refreshCameraMounts(),
-  ]);
-}
-
-async function refreshCameraMounts() {
-  settingsState.cameraMounts = await api("/api/camera-mounts");
-}
-
-async function refreshSettingsList(kind) {
-  const cfg = SETTINGS_KINDS[kind];
-  const url = `${cfg.endpoint}?include_archived=${settingsState.showArchived}`;
-  const rows = await api(url);
-  settingsState.rowsByKind[kind] = rows;
-  syncMainEntityCache(kind, rows);
-  renderSettingsList(kind);
-}
-
-function syncMainEntityCache(kind, rows) {
-  if (kind === "camera") {
-    state.cameras = rows;
-    renderTiles();
-    return;
-  }
-  if (kind === "lens") {
-    state.lenses = rows;
-    renderTiles();
-    return;
-  }
-  if (kind === "film-brand") {
-    state.brands = rows;
-    renderTiles();
-    return;
-  }
-  if (kind === "film") {
-    state.films = rows;
-    renderTiles();
-    return;
-  }
-  if (kind === "provider") {
-    state.providers = rows;
-    populateAdvancedSelects();
-    return;
-  }
-  if (kind === "dev-method") {
-    state.devMethods = rows;
-    populateAdvancedSelects();
-    return;
-  }
-  if (kind === "scan-method") {
-    state.scanMethods = rows;
-    populateAdvancedSelects();
-  }
-}
-
-function renderSettingsList(kind) {
-  const cfg = SETTINGS_KINDS[kind];
-  const container = document.querySelector(`.settings-section[data-kind="${kind}"] .settings-list`);
-  const rows = settingsState.rowsByKind[kind] || [];
-  container.innerHTML = "";
-
-  if (!rows.length) {
-    container.innerHTML = `<div class="settings-group-label" style="color: var(--muted)">No entries yet. Click "Add" to create one.</div>`;
-    return;
-  }
-
-  const groups = groupRows(rows, cfg.groupBy);
-  for (const [groupName, groupRows] of groups) {
-    if (groupName) {
-      const label = document.createElement("div");
-      label.className = "settings-group-label";
-      label.textContent = groupName;
-      container.appendChild(label);
-    }
-    for (const row of groupRows) {
-      container.appendChild(renderSettingsRow(kind, row, cfg));
-    }
-  }
-}
-
-function groupRows(rows, groupBy) {
-  // Sort alpha by primary key or name. Favorites no longer jump to the top
-  // so toggling a star in Settings does not make the row leap around.
-  const sorted = [...rows].sort((a, b) => {
-    const aKey = a.display_name || a.name || "";
-    const bKey = b.display_name || b.name || "";
-    return aKey.localeCompare(bKey);
-  });
-  if (!groupBy) return [["", sorted]];
-  const map = new Map();
-  for (const row of sorted) {
-    const key = row[groupBy] || "—";
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(row);
-  }
-  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-}
-
-function renderSettingsRow(kind, row, cfg) {
-  const el = document.createElement("div");
-  el.className = "settings-row" + (row.archived ? " archived" : "");
-  const primary = row[cfg.primary] || row.name || "";
-  const sub = cfg.sub(row);
-  const hasFavorite = "favorite" in row;
-  const hasArchive = "archived" in row;
-  el.innerHTML = `
-    <div class="settings-row-name">
-      ${escapeHtml(primary)}
-      ${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}
-    </div>
-    ${hasFavorite ? `<button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite">★</button>` : ""}
-    <button class="settings-row-edit">Edit</button>
-    ${hasArchive ? `<button class="settings-row-archive">${row.archived ? "Unarchive" : "Archive"}</button>` : ""}
-  `;
-  el.querySelector(".settings-row-star")?.addEventListener("click", () => toggleFavorite(kind, row));
-  el.querySelector(".settings-row-edit").addEventListener("click", () => openSettingsForm(kind, row));
-  el.querySelector(".settings-row-archive")?.addEventListener("click", () => toggleArchive(kind, row));
-  return el;
-}
-
-async function toggleFavorite(kind, row) {
-  const cfg = SETTINGS_KINDS[kind];
-  await api(`${cfg.endpoint}/${row.id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ favorite: !row.favorite }),
-  });
-  await refreshSettingsList(kind);
-}
-
-async function toggleArchive(kind, row) {
-  const cfg = SETTINGS_KINDS[kind];
-  const action = row.archived ? "unarchive" : "archive";
-  await api(`${cfg.endpoint}/${row.id}/${action}`, { method: "POST" });
-  await refreshSettingsList(kind);
-}
-
-// ---- Settings form panel (add + edit) ----
-
-let settingsFormCtx = null;  // { kind, row } — row is null for "add"
-
-function openSettingsForm(kind, row) {
-  const cfg = SETTINGS_KINDS[kind];
-  settingsFormCtx = { kind, row };
-  document.getElementById("settings-form-title").textContent =
-    row ? `Edit ${cfg.label.toLowerCase()}` : `Add ${cfg.label.toLowerCase()}`;
-
-  const form = document.getElementById("settings-form");
-  form.innerHTML = cfg.fields
-    .filter(f => row || !f.editOnly)
-    .map(f => renderFormField(f, row))
-    .join("") +
-    `<div class="settings-form-error" id="settings-form-error"></div>`;
-
-  document.getElementById("settings-form-panel").classList.remove("hidden");
-  document.getElementById("settings-form-backdrop").classList.remove("hidden");
-
-  // Two-way sync for color-hex dual inputs. The text input is the form field
-  // (name=...) so submit reads from it; the picker just mirrors.
-  form.querySelectorAll(".color-hex-row").forEach(row => {
-    const picker = row.querySelector(".color-hex-picker");
-    const text = row.querySelector(".color-hex-text");
-    if (!picker || !text) return;
-    picker.addEventListener("input", () => { text.value = picker.value; });
-    text.addEventListener("input", () => {
-      if (/^#([0-9a-fA-F]{6})$/.test(text.value)) picker.value = text.value;
-    });
-  });
-}
-
-function closeSettingsForm() {
-  document.getElementById("settings-form-panel").classList.add("hidden");
-  document.getElementById("settings-form-backdrop").classList.add("hidden");
-  settingsFormCtx = null;
-}
-
-function renderFormField(f, row) {
-  const value = row ? (row[f.name] ?? "") : "";
-  const help = f.help ? `<span style="color: var(--muted); font-size: 11px;">${escapeHtml(f.help)}</span>` : "";
-
-  if (f.type === "select") {
-    const opts = f.options.map(opt => {
-      const [v, label] = typeof opt === "string" ? [opt, opt || "(none)"] : [opt.value, opt.label];
-      return `<option value="${escapeHtml(v)}" ${value === v ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    }).join("");
-    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
-  }
-
-  if (f.type === "kinds") {
-    const kinds = Array.isArray(value) ? value : [];
-    return `
-      <label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span>
-        <div class="kinds-group">
-          <label><input type="checkbox" name="kinds[]" value="development" ${kinds.includes("development") ? "checked" : ""}/>Development</label>
-          <label><input type="checkbox" name="kinds[]" value="scan" ${kinds.includes("scan") ? "checked" : ""}/>Scan</label>
-        </div>
-      </label>`;
-  }
-
-  if (f.type === "lens-ref") {
-    const lenses = settingsState.rowsByKind.lens || [];
-    const opts = ['<option value="">(none)</option>'].concat(
-      lenses.map(l =>
-        `<option value="${escapeHtml(l.id)}" ${value === l.id ? "selected" : ""}>${escapeHtml(l.display_name)}</option>`
-      )
-    ).join("");
-    return `<label><span>${escapeHtml(f.label)}</span><select name="${f.name}">${opts}</select>${help}</label>`;
-  }
-
-  if (f.type === "brand-ref") {
-    const brands = settingsState.rowsByKind["film-brand"] || [];
-    const current = typeof value === "string" ? value.trim() : "";
-    // Match by case-insensitive name so a stock loaded with brand "kodak"
-    // still highlights the "Kodak" row in the picker.
-    const matched = brands.find(b => (b.name || "").toLowerCase() === current.toLowerCase());
-    const baseOption = brands.length
-      ? '<option value="">(select brand)</option>'
-      : '<option value="">(add a film brand first)</option>';
-    const opts = [baseOption].concat(
-      brands.map(b =>
-        `<option value="${escapeHtml(b.name)}" ${matched && b.id === matched.id ? "selected" : ""}>${escapeHtml(b.name)}</option>`
-      )
-    ).join("");
-    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
-  }
-
-  if (f.type === "color-hex") {
-    // Dual input: a native color picker and a text input, kept in sync via
-    // oninput handlers. Text is the source of truth so the user can paste a
-    // literal `#bb9d70` from a design doc; the picker just scrubs. Blank
-    // text == no color (falls back to neutral tile).
-    const hex = (value || "").toString();
-    const pickerVal = /^#([0-9a-f]{6})$/i.test(hex) ? hex : "#888888";
-    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
-    return `<label><span>${escapeHtml(f.label)}</span>
-      <div class="color-hex-row">
-        <input type="color" class="color-hex-picker" value="${escapeHtml(pickerVal)}" aria-label="${escapeHtml(f.label)} picker" />
-        <input type="text" name="${f.name}" class="color-hex-text" value="${escapeHtml(hex)}" ${placeholder} />
-      </div>${help}</label>`;
-  }
-
-  if (f.type === "camera-mount") {
-    const mounts = [...settingsState.cameraMounts];
-    const current = typeof value === "string" ? value.trim() : "";
-    if (current && !mounts.includes(current)) mounts.unshift(current);
-    const baseOption = mounts.length
-      ? '<option value="">(select mount)</option>'
-      : '<option value="">(add a camera with a mount first)</option>';
-    const opts = [baseOption].concat(
-      mounts.map(m =>
-        `<option value="${escapeHtml(m)}" ${current === m ? "selected" : ""}>${escapeHtml(m)}</option>`
-      )
-    ).join("");
-    return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span><select name="${f.name}">${opts}</select>${help}</label>`;
-  }
-
-  if (f.type === "camera-mount-entry") {
-    const mounts = [...settingsState.cameraMounts].sort((a, b) => a.localeCompare(b));
-    const current = typeof value === "string" ? value.trim() : "";
-    const listId = `mount-suggestions-${settingsFormCtx?.kind || "camera"}`;
-    const options = mounts.map(m => `<option value="${escapeHtml(m)}"></option>`).join("");
-    const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
-    return `<label><span>${escapeHtml(f.label)}</span>
-      <input type="text" name="${f.name}" value="${escapeHtml(current)}" list="${listId}" ${placeholder} autocapitalize="off" autocomplete="off" spellcheck="false" />
-      <datalist id="${listId}">${options}</datalist>${help}</label>`;
-  }
-
-  const type = f.type === "number" ? "number" : "text";
-  const step = f.step ? `step="${f.step}"` : "";
-  const min = f.min != null ? `min="${f.min}"` : "";
-  const placeholder = f.placeholder ? `placeholder="${escapeHtml(f.placeholder)}"` : "";
-  return `<label><span>${escapeHtml(f.label)}${f.required ? " *" : ""}</span>
-    <input type="${type}" name="${f.name}" value="${escapeHtml(value)}" ${step} ${min} ${placeholder} />${help}</label>`;
-}
-
-async function submitSettingsForm() {
-  if (!settingsFormCtx) return;
-  const { kind, row } = settingsFormCtx;
-  const cfg = SETTINGS_KINDS[kind];
-  const errorEl = document.getElementById("settings-form-error");
-  errorEl.textContent = "";
-
-  const form = document.getElementById("settings-form");
-  const payload = {};
-  const activeFields = cfg.fields.filter(f => row || !f.editOnly);
-  for (const f of activeFields) {
-    if (f.type === "kinds") {
-      payload[f.name] = [...form.querySelectorAll('input[name="kinds[]"]:checked')].map(el => el.value);
-    } else {
-      const raw = form.querySelector(`[name="${f.name}"]`).value;
-      if (raw === "") {
-        payload[f.name] = null;  // Pydantic Optional handles this
-      } else if (f.type === "number") {
-        payload[f.name] = Number(raw);
-      } else {
-        payload[f.name] = raw;
-      }
-    }
-    if (f.required && (payload[f.name] === null || payload[f.name] === "" ||
-        (Array.isArray(payload[f.name]) && payload[f.name].length === 0))) {
-      errorEl.textContent = `${f.label} is required`;
-      return;
-    }
-  }
-
-  if (kind === "camera") {
-    const originalMount = payload.mount;
-    const normalizedMount = normalizeMountText(originalMount);
-    if (normalizedMount !== originalMount) payload.mount = normalizedMount;
-    const exactMount = canonicalMountMatch(payload.mount);
-    if (exactMount) {
-      payload.mount = exactMount;
-    } else {
-      const suggestion = similarMountSuggestion(payload.mount);
-      if (suggestion && suggestion !== payload.mount) {
-        const ok = await ask(`Mount "${payload.mount}" is very close to existing mount "${suggestion}". Save as a new mount anyway?`, { okLabel: "Save as new mount" });
-        if (!ok) {
-          errorEl.textContent = `Use existing mount "${suggestion}" or type a different new mount`;
-          return;
-        }
-      }
-    }
-  }
-
-  try {
-    if (row) {
-      await api(`${cfg.endpoint}/${row.id}`, { method: "PATCH", body: JSON.stringify(payload) });
-    } else {
-      await api(cfg.endpoint, { method: "POST", body: JSON.stringify(payload) });
-    }
-  } catch (err) {
-    errorEl.textContent = err.message || String(err);
-    return;
-  }
-
-  closeSettingsForm();
-  await refreshSettingsList(kind);
-  if (kind === "film-brand") {
-    await refreshSettingsList("film");
-  }
-}
-
-function normalizeMountText(value) {
-  if (value == null) return null;
-  const cleaned = String(value).trim().replace(/\s+/g, " ");
-  return cleaned || null;
-}
-
-function mountKey(value) {
-  return normalizeMountText(value)?.toLowerCase() || "";
-}
-
-function mountLooseKey(value) {
-  return mountKey(value).replace(/[\s-]+/g, "");
-}
-
-function canonicalMountMatch(value) {
-  const needle = mountKey(value);
-  if (!needle) return null;
-  return settingsState.cameraMounts.find(m => mountKey(m) === needle) || null;
-}
-
-function similarMountSuggestion(value) {
-  const needle = mountLooseKey(value);
-  if (!needle) return null;
-  return settingsState.cameraMounts.find(m => mountLooseKey(m) === needle) || null;
-}
-
-// ---------- Contact sheet, roll drafts, Inbox view ----------
+// ---------- Folder screen ----------
 //
 // A frame is every file sharing one basename (raw + JPEG + sidecar + .thm);
-// the server lists them in sheet order. The user cuts the sequence into
-// rolls, each with its own gear, film, date and folder name. The same
-// sheet renders read-only in the Tag view.
+// the server lists them in sheet order. The folder starts as one roll; the
+// user cuts the sequence into more, each with its own gear, film, date and
+// folder name. The destination decides what the one action does: keep the
+// rolls here (tag in place, or split into new folders when there are
+// several), or copy or move them into the library.
 
 const ROLL_HUE_COUNT = 8;
-const INBOX_NAME_DEBOUNCE_MS = 250;
+const NAME_DEBOUNCE_MS = 250;
 
-function inboxFrames() { return state.inbox.frames || []; }
+function folderFrames() { return state.folder.frames || []; }
 
 function sheetIndexOf(key) {
-  if (!state.inbox.indexByKey) {
-    state.inbox.indexByKey = new Map(inboxFrames().map((f, i) => [f.key, i]));
+  if (!state.folder.indexByKey) {
+    state.folder.indexByKey = new Map(folderFrames().map((f, i) => [f.key, i]));
   }
-  const i = state.inbox.indexByKey.get(key);
+  const i = state.folder.indexByKey.get(key);
   return i === undefined ? -1 : i;
 }
 
 function frameByKey(key) {
   const i = sheetIndexOf(key);
-  return i < 0 ? null : inboxFrames()[i];
+  return i < 0 ? null : folderFrames()[i];
 }
 
 function sortedKeys(keys) {
@@ -2743,25 +2055,32 @@ function sortedKeys(keys) {
 }
 
 function rollOf(key) {
-  return state.inbox.rolls.find(s => s.frames.includes(key)) || null;
+  return state.folder.rolls.find(r => r.frames.includes(key)) || null;
+}
+
+function rollImages(roll) {
+  return roll.frames.flatMap(k => frameByKey(k)?.images || []);
 }
 
 let rollSeq = 0;
 
+// A new roll starts from the last used gear and processing fields, so the
+// common case (same camera, next roll) needs no clicks.
 function defaultTagging() {
-  // Start from the Tag view's sticky gear so the common case (same camera,
-  // next roll) needs no clicks. The date comes from the files.
   return {
     camera: state.camera || null,
     lens: state.lens || null,
     film: state.film || null,
-    roll_date: state.inbox.listing?.suggested_roll_date || "",
+    roll_date: state.folder.listing?.suggested_roll_date || "",
     place: "",
     development_provider_id: state.advanced.development_provider_id || "",
     development_method_id: state.advanced.development_method_id || "",
     scan_provider_id: state.advanced.scan_provider_id || "",
     scan_method_id: state.advanced.scan_method_id || "",
     roll_notes: "",
+    replace_managed_metadata: false,
+    file_keywords: {},   // name → "a, b"
+    file_lens_ids: {},   // name → lens id
   };
 }
 
@@ -2773,127 +2092,150 @@ function newRoll(frames, tagging = null) {
     nameAuto: true,
     nameError: null,
     frames: sortedKeys(frames),
-    tagging: tagging ? { ...tagging } : defaultTagging(),
+    tagging: tagging ? { ...tagging, file_keywords: { ...tagging.file_keywords }, file_lens_ids: { ...tagging.file_lens_ids } } : defaultTagging(),
+    moreOpen: false,
+    changes: null,       // { diffs } from the dry run, or null
+    changesOpen: false,
+    changesStale: false,
   };
 }
 
 function normalizeRolls() {
-  const rolls = state.inbox.rolls.filter(s => s.frames.length);
+  const rolls = state.folder.rolls.filter(s => s.frames.length);
   for (const s of rolls) s.frames = sortedKeys(s.frames);
   rolls.sort((a, b) => sheetIndexOf(a.frames[0]) - sheetIndexOf(b.frames[0]));
-  state.inbox.rolls = rolls;
+  state.folder.rolls = rolls;
 }
+
 
 function unassignedKeys() {
-  const assigned = new Set(state.inbox.rolls.flatMap(s => s.frames));
-  return inboxFrames().map(f => f.key).filter(k => !assigned.has(k));
+  const assigned = new Set(state.folder.rolls.flatMap(r => r.frames));
+  return folderFrames().map(f => f.key).filter(k => !assigned.has(k));
 }
 
-// ----- opening and loading -----
+// ----- opening ------
 
-async function openInbox({ folder = null, destination = null } = {}) {
-  showView("inbox");
-  if (destination) state.inbox.destination = destination;
-  renderInboxDestination();
-  if (folder) {
-    document.getElementById("inbox-folder").value = folder;
-    await loadInboxFolder(folder);
-  } else if (!state.inbox.listing) {
-    renderInbox();
-  }
-}
-
-async function onInboxBrowse() {
+// Open a folder on the Folder screen. `onlyFiles` limits the first roll to
+// those image files (the untagged remainder of a partly tagged roll).
+async function openFolder(path, { onlyFiles = null } = {}) {
+  path = (path || "").trim().replace(/\/+$/, "");
+  if (!path) return;
+  const folder = state.folder;
+  Object.assign(folder, {
+    path, listing: null, frames: [], indexByKey: null, scanFiles: new Map(), thumbs: new Set(),
+    manifest: null, inLibrary: false, rolls: [], selection: new Set(), anchor: null,
+    destination: null, result: null,
+  });
+  showView("folder");
+  renderFolderBanner("");
+  renderFolderProgress(null);
+  renderFolderResult(null);
   try {
-    const folder = await pickFolder();
-    if (!folder) return;
-    document.getElementById("inbox-folder").value = folder;
-    await loadInboxFolder(folder);
-  } catch (e) {
-    await notify(`Could not open folder picker: ${e.message || e}`);
-  }
-}
-
-async function loadInboxFolder(folder) {
-  folder = (folder || "").trim();
-  if (!folder) return;
-  const inbox = state.inbox;
-  inbox.folder = folder;
-  inbox.listing = null;
-  inbox.frames = [];
-  inbox.indexByKey = null;
-  inbox.rolls = [];
-  inbox.selection = new Set();
-  inbox.anchor = null;
-  inbox.thumbs = new Set();
-  inbox.result = null;
-  renderInboxBanner("");
-  renderInboxProgress(null);
-  renderInboxResult(null);
-  try {
-    const [listing, scan] = await Promise.all([
-      api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`),
-      api("/api/folder/scan", { method: "POST", body: JSON.stringify({ folder }) }),
+    const [listing, scan, manifest] = await Promise.all([
+      api(`/api/folder/frames?${new URLSearchParams({ path })}`),
+      api("/api/folder/scan", { method: "POST", body: JSON.stringify({ folder: path }) }),
+      api(`/api/manifest?${new URLSearchParams({ folder: path })}`).then(r => r.manifest).catch(() => null),
     ]);
-    inbox.listing = listing;
-    inbox.frames = listing.frames;
-    inbox.indexByKey = null;
-    for (const file of scan.files || []) if (file.has_thumbnail) inbox.thumbs.add(file.name);
-    inbox.rolls = listing.frames.length ? [newRoll(listing.frames.map(f => f.key))] : [];
-    pushRecentFolder(folder);
-    renderRecentFolders();
-    renderInbox();
-    for (const roll of inbox.rolls) scheduleRollName(roll);
-    void buildInboxThumbnails();
+    if (folder.path !== path) return;
+    folder.listing = listing;
+    folder.frames = listing.frames;
+    folder.indexByKey = null;
+    folder.scanFiles = new Map((scan.files || []).map(f => [f.name, f]));
+    folder.manifest = manifest;
+    folder.inLibrary = folderIsInLibrary(path);
+    // Inside the library, tagging part of a roll, or without a library: keep.
+    // A new folder outside the library goes in the way the last one did.
+    const keep = folder.inLibrary || !hasLibrary() || (onlyFiles && onlyFiles.length);
+    folder.destination = keep ? "keep" : (state.settings.import_mode === "move" ? "move" : "copy");
+    refreshThumbSet();
+    folder.rolls = firstRolls(listing, manifest, onlyFiles);
+    pushRecentFolder(path);
+    saveStickyState();
+    renderFolder();
+    for (const roll of folder.rolls) scheduleRollName(roll);
+    void buildThumbnails();
   } catch (e) {
-    renderInboxBanner(`Could not read the folder: ${e.message}`, "bad");
-    renderInbox();
+    renderFolderBanner(`Could not read the folder: ${e.message}`, "bad");
+    renderFolder();
   }
 }
 
-async function buildInboxThumbnails() {
-  const inbox = state.inbox;
-  const folder = inbox.folder;
-  if (!folder || inbox.thumbJob) return;
-  const needed = inboxFrames().filter(f => f.preview && !inbox.thumbs.has(f.preview));
+function folderIsInLibrary(path) {
+  const root = (state.settings?.library_root || "").replace(/\/+$/, "");
+  return !!root && (path === root || path.startsWith(root + "/"));
+}
+
+// The folder opens as one roll: every frame, or only the requested files.
+// A manifest from an earlier tagging fills the roll's values.
+function firstRolls(listing, manifest, onlyFiles) {
+  if (!listing.frames.length) return [];
+  let keys = listing.frames.map(f => f.key);
+  if (onlyFiles && onlyFiles.length) {
+    const wanted = new Set(onlyFiles);
+    keys = listing.frames.filter(f => f.images.some(n => wanted.has(n))).map(f => f.key);
+  }
+  if (!manifest) return [newRoll(keys)];
+  const { tagging, unresolved } = taggingFromManifest(manifest, listing.frames.flatMap(f => f.images));
+  if (unresolved.length) renderFolderBanner(`Loaded the roll's manifest. Could not match: ${unresolved.join(", ")}.`, "warn");
+  return [newRoll(keys, tagging)];
+}
+
+// ----- thumbnails -----
+
+function refreshThumbSet() {
+  const folder = state.folder;
+  folder.thumbs = new Set();
+  for (const [name, file] of folder.scanFiles) {
+    if (state.previewInvert ? file.has_inverted_preview : file.has_thumbnail) folder.thumbs.add(name);
+  }
+}
+
+async function buildThumbnails() {
+  const folder = state.folder;
+  const path = folder.path;
+  const invert = state.previewInvert;
+  if (!path || folder.thumbJob) return;
+  const needed = folderFrames().filter(f => f.preview && !folder.thumbs.has(f.preview));
   if (!needed.length) return;
-  inbox.thumbJob = true;
-  const btn = document.getElementById("sheet-thumbs");
+  folder.thumbJob = true;
   try {
-    let processed = 0;
-    let total = needed.length;
     await runJob("/api/previews/create/stream", {
-      body: { folder, invert: false },
-      onStart: (ev) => {
-        total = ev.total || total;
-        btn.textContent = `Thumbnails 0/${total}`;
-      },
+      body: { folder: path, invert },
       onEvent: (ev) => {
-        if (inbox.folder !== folder) return;
-        processed += 1;
-        btn.textContent = `Thumbnails ${processed}/${total}`;
+        if (folder.path !== path || state.previewInvert !== invert) return;
         if (ev.status === "created" || ev.status === "reused") {
-          inbox.thumbs.add(ev.file);
+          const file = folder.scanFiles.get(ev.file);
+          if (file) file[invert ? "has_inverted_preview" : "has_thumbnail"] = true;
+          folder.thumbs.add(ev.file);
           updateSheetThumb(ev.file);
         }
       },
     });
   } catch (e) {
-    renderInboxBanner(`Thumbnails: ${e.message}`, "warn");
+    renderFolderBanner(`Thumbnails: ${e.message}`, "warn");
   } finally {
-    inbox.thumbJob = false;
-    btn.textContent = "Thumbnails";
-    btn.disabled = true;
+    folder.thumbJob = false;
+    if (folder.path === path && state.previewInvert !== invert) void buildThumbnails();
   }
+}
+
+function toggleInvert() {
+  state.previewInvert = !state.previewInvert;
+  saveStickyState();
+  refreshThumbSet();
+  renderSheet();
+  renderRollCards();
+  void buildThumbnails();
 }
 
 function updateSheetThumb(file) {
   const container = document.getElementById("contact-sheet");
-  const frame = inboxFrames().find(f => f.preview === file);
+  const frame = folderFrames().find(f => f.preview === file);
   if (!frame) return;
   const cell = container.querySelector(`.sheet-cell[data-key="${cssEscape(frame.key)}"] .sheet-thumb`);
   if (!cell) return;
-  cell.innerHTML = `<img src="${escapeHtml(buildThumbnailUrl(state.inbox.folder, file, false))}" alt="" loading="lazy" />` + cell.querySelector(".sheet-roll-tag")?.outerHTML || "";
+  const stamp = cell.querySelector(".sheet-roll-tag")?.outerHTML || "";
+  cell.innerHTML = `<img src="${escapeHtml(buildThumbnailUrl(state.folder.path, file, state.previewInvert))}" alt="" loading="lazy" />` + stamp;
 }
 
 function cssEscape(value) {
@@ -2902,58 +2244,75 @@ function cssEscape(value) {
 
 // ----- rendering -----
 
-function renderInboxBanner(message, level = "warn") {
-  const el = document.getElementById("inbox-banner");
+
+// ----- rendering -----
+
+function renderFolderBanner(message, level = "warn") {
+  const el = document.getElementById("folder-banner");
   if (!message) { el.classList.add("hidden"); el.innerHTML = ""; return; }
   el.classList.remove("hidden");
   el.innerHTML = `<span class="pill ${level}">${level === "bad" ? "Problem" : "Note"}</span> <span>${escapeHtml(message)}</span>`;
 }
 
-function renderInbox() {
-  const inbox = state.inbox;
-  const has = !!inbox.listing;
-  document.getElementById("inbox-sheet-section").classList.toggle("hidden", !has);
-  document.getElementById("inbox-rolls-section").classList.toggle("hidden", !has);
-  document.getElementById("inbox-actions").classList.toggle("hidden", !has);
-  renderInboxSummary();
+function renderFolder() {
+  const folder = state.folder;
+  const has = !!folder.listing;
+  document.getElementById("folder-name").textContent = baseName(folder.path);
+  document.getElementById("folder-name").title = folder.path;
+  renderFolderStatus();
+  document.getElementById("sheet-section").classList.toggle("hidden", !has);
+  document.getElementById("rolls-section").classList.toggle("hidden", !has);
+  document.getElementById("folder-actions").classList.toggle("hidden", !has);
+  renderFolderSummary();
+  renderHeader();
   if (!has) return;
-  renderInboxSheet();
+  renderSheet();
   renderRollCards();
-  renderInboxDestination();
+  renderDestination();
   updateSheetToolbar();
-  updateInboxRunButton();
+  updateRunButton();
 }
 
-function renderInboxSummary() {
-  const el = document.getElementById("inbox-summary");
-  const listing = state.inbox.listing;
+function renderFolderStatus() {
+  const el = document.getElementById("folder-status");
+  const folder = state.folder;
+  const parts = [];
+  if (folder.inLibrary) parts.push("in library");
+  const history = (folder.manifest?.apply_history || []).filter(h => !h.dry_run);
+  if (history.length) parts.push(`tagged ${formatStamp(history[history.length - 1].timestamp, { dateOnly: true })}`);
+  else if (folder.listing) parts.push("untagged");
+  el.textContent = parts.join(" · ");
+}
+
+function renderFolderSummary() {
+  const el = document.getElementById("folder-summary");
+  const listing = state.folder.listing;
   if (!listing) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
-  const frames = inboxFrames();
+  const frames = folderFrames();
   const images = frames.reduce((n, f) => n + f.images.length, 0);
   const bytes = frames.reduce((n, f) => n + f.bytes, 0);
   const unmatched = frames.filter(f => f.unmatched_jpeg).length;
   const parts = [
-    renderScanSummaryItem("Frames", `${frames.length}`),
-    renderScanSummaryItem("Files", `${images} image${images === 1 ? "" : "s"} · ${humanBytes(bytes)}`),
-    renderScanSummaryItem("Folder", listing.folder.split("/").filter(Boolean).pop() || listing.folder, "summary-code"),
+    summaryItem("Frames", `${frames.length}`),
+    summaryItem("Files", `${images} image${images === 1 ? "" : "s"} · ${humanBytes(bytes)}`),
   ];
-  if (listing.has_raw) parts.push(renderScanSummaryItem("Pairs", unmatched ? `${unmatched} JPEG${unmatched === 1 ? "" : "s"} without raw` : "raw + JPEG"));
-  if (listing.other_files.length) parts.push(renderScanSummaryItem("Stays behind", `${listing.other_files.length} other file${listing.other_files.length === 1 ? "" : "s"}`));
+  if (listing.has_raw) parts.push(summaryItem("Pairs", unmatched ? `${unmatched} JPEG${unmatched === 1 ? "" : "s"} without raw` : "raw + JPEG"));
+  if (listing.other_files.length) parts.push(summaryItem("Stays behind", `${listing.other_files.length} other file${listing.other_files.length === 1 ? "" : "s"}`));
   el.innerHTML = parts.join("");
 }
 
-function renderInboxSheet() {
-  const inbox = state.inbox;
+function renderSheet() {
+  const folder = state.folder;
   const rollIndexByKey = new Map();
-  inbox.rolls.forEach((roll, i) => roll.frames.forEach(k => rollIndexByKey.set(k, i)));
+  folder.rolls.forEach((roll, i) => roll.frames.forEach(k => rollIndexByKey.set(k, i)));
   renderContactSheet(document.getElementById("contact-sheet"), {
-    folder: inbox.folder,
-    frames: inboxFrames(),
-    hasThumb: (file) => inbox.thumbs.has(file),
-    invert: false,
+    folder: folder.path,
+    frames: folderFrames(),
+    hasThumb: (file) => folder.thumbs.has(file),
+    invert: state.previewInvert,
     rollIndex: (key) => (rollIndexByKey.has(key) ? rollIndexByKey.get(key) : null),
-    selection: inbox.selection,
+    selection: folder.selection,
     onClick: onSheetCellClick,
   });
 }
@@ -2990,38 +2349,39 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
   container.appendChild(frag);
 }
 
+
 function onSheetCellClick(key, ev) {
-  const inbox = state.inbox;
-  if (ev.shiftKey && inbox.anchor && sheetIndexOf(inbox.anchor) >= 0) {
-    const [a, b] = [sheetIndexOf(inbox.anchor), sheetIndexOf(key)].sort((x, y) => x - y);
-    for (let i = a; i <= b; i++) inbox.selection.add(inboxFrames()[i].key);
+  const folder = state.folder;
+  if (ev.shiftKey && folder.anchor && sheetIndexOf(folder.anchor) >= 0) {
+    const [a, b] = [sheetIndexOf(folder.anchor), sheetIndexOf(key)].sort((x, y) => x - y);
+    for (let i = a; i <= b; i++) folder.selection.add(folderFrames()[i].key);
   } else if (ev.metaKey || ev.ctrlKey) {
-    if (inbox.selection.has(key)) inbox.selection.delete(key); else inbox.selection.add(key);
-    inbox.anchor = key;
+    if (folder.selection.has(key)) folder.selection.delete(key); else folder.selection.add(key);
+    folder.anchor = key;
   } else {
-    if (inbox.selection.size === 1 && inbox.selection.has(key)) inbox.selection.clear();
-    else { inbox.selection = new Set([key]); }
-    inbox.anchor = key;
+    if (folder.selection.size === 1 && folder.selection.has(key)) folder.selection.clear();
+    else { folder.selection = new Set([key]); }
+    folder.anchor = key;
   }
-  renderInboxSheet();
+  renderSheet();
   updateSheetToolbar();
 }
 
 function updateSheetToolbar() {
-  const inbox = state.inbox;
-  const n = inbox.selection.size;
+  const folder = state.folder;
+  const n = folder.selection.size;
   const label = document.getElementById("sheet-selection");
   label.textContent = n
     ? `${n} frame${n === 1 ? "" : "s"} selected`
     : "Click a frame, shift-click for a range, ⌘-click to add.";
   document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
   document.getElementById("sheet-new-roll").disabled = n === 0;
-  document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(inbox.selection).some(k => rollOf(k));
+  document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(folder.selection).some(k => rollOf(k));
   document.getElementById("sheet-clear").classList.toggle("hidden", n === 0);
-  const thumbs = document.getElementById("sheet-thumbs");
-  const missing = inboxFrames().some(f => f.preview && !inbox.thumbs.has(f.preview));
-  thumbs.disabled = !missing || !!inbox.thumbJob;
-  const unmatched = inboxFrames().filter(f => f.unmatched_jpeg);
+  const invert = document.getElementById("sheet-invert");
+  invert.setAttribute("aria-pressed", String(!!state.previewInvert));
+  invert.textContent = state.previewInvert ? "Inverted" : "Invert";
+  const unmatched = folderFrames().filter(f => f.unmatched_jpeg);
   const toggle = document.getElementById("sheet-unmatched");
   toggle.classList.toggle("hidden", !unmatched.length);
   if (unmatched.length) {
@@ -3032,7 +2392,7 @@ function updateSheetToolbar() {
 }
 
 function firstSelectedKey() {
-  const keys = sortedKeys(Array.from(state.inbox.selection));
+  const keys = sortedKeys(Array.from(state.folder.selection));
   return keys[0] || null;
 }
 
@@ -3044,6 +2404,9 @@ function canCutBefore(key) {
 
 // ----- roll operations -----
 
+
+// ----- roll operations -----
+
 function cutBeforeSelected() {
   const key = firstSelectedKey();
   const roll = rollOf(key);
@@ -3052,60 +2415,59 @@ function cutBeforeSelected() {
   const tail = roll.frames.slice(at);
   roll.frames = roll.frames.slice(0, at);
   const next = newRoll(tail, roll.tagging);
-  next.tagging.roll_date = roll.tagging.roll_date;
-  const pos = state.inbox.rolls.indexOf(roll);
-  state.inbox.rolls.splice(pos + 1, 0, next);
-  state.inbox.selection.clear();
+  const pos = state.folder.rolls.indexOf(roll);
+  state.folder.rolls.splice(pos + 1, 0, next);
+  state.folder.selection.clear();
   afterRollsChanged([roll, next]);
 }
 
 function newRollFromSelection() {
-  const keys = sortedKeys(Array.from(state.inbox.selection));
+  const keys = sortedKeys(Array.from(state.folder.selection));
   if (!keys.length) return;
   const touched = new Set();
-  for (const roll of state.inbox.rolls) {
+  for (const roll of state.folder.rolls) {
     const before = roll.frames.length;
     roll.frames = roll.frames.filter(k => !keys.includes(k));
     if (roll.frames.length !== before) touched.add(roll);
   }
-  const template = rollOf(keys[0]) || state.inbox.rolls[0];
+  const template = rollOf(keys[0]) || state.folder.rolls[0];
   const next = newRoll(keys, template ? template.tagging : null);
-  state.inbox.rolls.push(next);
-  state.inbox.selection.clear();
+  state.folder.rolls.push(next);
+  state.folder.selection.clear();
   afterRollsChanged([...touched, next]);
 }
 
 function leaveOutSelection() {
-  const keys = new Set(state.inbox.selection);
+  const keys = new Set(state.folder.selection);
   const touched = [];
-  for (const roll of state.inbox.rolls) {
+  for (const roll of state.folder.rolls) {
     const before = roll.frames.length;
     roll.frames = roll.frames.filter(k => !keys.has(k));
     if (roll.frames.length !== before) touched.push(roll);
   }
-  state.inbox.selection.clear();
+  state.folder.selection.clear();
   afterRollsChanged(touched);
 }
 
 function addSelectionToRoll(id) {
-  const target = state.inbox.rolls.find(s => s.id === id);
-  const keys = Array.from(state.inbox.selection);
+  const target = state.folder.rolls.find(r => r.id === id);
+  const keys = Array.from(state.folder.selection);
   if (!target || !keys.length) return;
   const touched = new Set([target]);
-  for (const roll of state.inbox.rolls) {
+  for (const roll of state.folder.rolls) {
     if (roll === target) continue;
     const before = roll.frames.length;
     roll.frames = roll.frames.filter(k => !keys.includes(k));
     if (roll.frames.length !== before) touched.add(roll);
   }
   target.frames = sortedKeys([...target.frames, ...keys]);
-  state.inbox.selection.clear();
+  state.folder.selection.clear();
   afterRollsChanged([...touched]);
 }
 
 function mergeRollIntoPrevious(id) {
-  const rolls = state.inbox.rolls;
-  const pos = rolls.findIndex(s => s.id === id);
+  const rolls = state.folder.rolls;
+  const pos = rolls.findIndex(r => r.id === id);
   if (pos <= 0) return;
   rolls[pos - 1].frames = sortedKeys([...rolls[pos - 1].frames, ...rolls[pos].frames]);
   rolls.splice(pos, 1);
@@ -3113,14 +2475,14 @@ function mergeRollIntoPrevious(id) {
 }
 
 function removeRoll(id) {
-  state.inbox.rolls = state.inbox.rolls.filter(s => s.id !== id);
+  state.folder.rolls = state.folder.rolls.filter(r => r.id !== id);
   afterRollsChanged([]);
 }
 
 function toggleUnmatchedFrames(mode) {
-  const unmatched = inboxFrames().filter(f => f.unmatched_jpeg).map(f => f.key);
+  const unmatched = folderFrames().filter(f => f.unmatched_jpeg).map(f => f.key);
   if (mode === "exclude") {
-    state.inbox.selection = new Set(unmatched);
+    state.folder.selection = new Set(unmatched);
     leaveOutSelection();
     return;
   }
@@ -3130,9 +2492,9 @@ function toggleUnmatchedFrames(mode) {
   for (const key of unmatched) {
     if (rollOf(key)) continue;
     let target = null;
-    for (let i = sheetIndexOf(key) - 1; i >= 0 && !target; i--) target = rollOf(inboxFrames()[i].key);
-    target = target || state.inbox.rolls[0];
-    if (!target) { state.inbox.rolls.push(newRoll([key])); target = state.inbox.rolls[0]; }
+    for (let i = sheetIndexOf(key) - 1; i >= 0 && !target; i--) target = rollOf(folderFrames()[i].key);
+    target = target || state.folder.rolls[0];
+    if (!target) { state.folder.rolls.push(newRoll([key])); target = state.folder.rolls[0]; }
     else target.frames = sortedKeys([...target.frames, key]);
     touched.add(target);
   }
@@ -3140,18 +2502,20 @@ function toggleUnmatchedFrames(mode) {
 }
 
 function clearSheetSelection() {
-  state.inbox.selection.clear();
-  renderInboxSheet();
+  state.folder.selection.clear();
+  renderSheet();
   updateSheetToolbar();
 }
 
 function afterRollsChanged(touched) {
   normalizeRolls();
-  renderInboxSheet();
+  for (const roll of state.folder.rolls) markChangesStale(roll);
+  renderSheet();
   renderRollCards();
   updateSheetToolbar();
-  updateInboxRunButton();
-  for (const roll of touched) if (state.inbox.rolls.includes(roll)) scheduleRollName(roll);
+  renderDestination();
+  updateRunButton();
+  for (const roll of touched) if (state.folder.rolls.includes(roll)) scheduleRollName(roll);
 }
 
 // ----- roll cards -----
@@ -3166,10 +2530,17 @@ function rollRangeText(roll) {
   return `${n} frame${n === 1 ? "" : "s"} · ${files} file${files === 1 ? "" : "s"} · ${humanBytes(bytes)}${range ? ` · ${range}` : ""}`;
 }
 
+// With one roll kept in place the folder is the roll: no cutting colours,
+// no new folder name.
+function singleRollInPlace() {
+  return state.folder.destination === "keep" && state.folder.rolls.length === 1;
+}
+
 function renderRollCards() {
-  const host = document.getElementById("inbox-rolls");
+  const host = document.getElementById("roll-cards");
   host.innerHTML = "";
-  const rolls = state.inbox.rolls;
+  const rolls = state.folder.rolls;
+  document.getElementById("rolls-heading").textContent = rolls.length === 1 ? "Roll" : "Rolls";
   if (!rolls.length) {
     host.innerHTML = `<div class="library-empty">No rolls yet. Select frames on the sheet and press “New roll from selection”.</div>`;
     return;
@@ -3179,7 +2550,7 @@ function renderRollCards() {
   if (left) {
     const note = document.createElement("div");
     note.className = "lib-sub roll-left-note";
-    note.textContent = `${left} frame${left === 1 ? "" : "s"} left out: they stay in the source folder.`;
+    note.textContent = `${left} frame${left === 1 ? "" : "s"} left out: they stay as they are.`;
     host.appendChild(note);
   }
 }
@@ -3207,28 +2578,33 @@ function optionsHtml(items, selectedId, labelOf = (i) => i.display_name || i.nam
     `<option value="${escapeHtml(i.id)}"${i.id === selectedId ? " selected" : ""}>${escapeHtml(labelOf(i))}</option>`)].join("");
 }
 
+
 function renderRollCard(roll, index) {
   const el = document.createElement("div");
-  el.className = `roll-card roll-hue-${index % ROLL_HUE_COUNT}`;
+  const single = singleRollInPlace();
+  el.className = `roll-card${single ? " single" : ` roll-hue-${index % ROLL_HUE_COUNT}`}`;
   el.dataset.id = roll.id;
-  el.innerHTML = rollCardHead(roll, index) + rollCardName(roll) + rollCardGear(roll) + rollCardFields(roll.tagging);
+  el.innerHTML = rollCardHead(roll, index) + (single ? "" : rollCardName(roll)) + rollCardGear(roll) + rollCardFields(roll) + rollCardMore(roll) + rollCardChanges(roll);
   wireRollActions(el, roll);
-  wireRollName(el, roll);
+  if (!single) wireRollName(el, roll);
   wireRollGear(el, roll);
   wireRollFields(el, roll);
+  wireRollExpanders(el, roll);
   return el;
 }
 
 function rollCardHead(roll, index) {
-  const selected = state.inbox.selection.size;
+  const selected = state.folder.selection.size;
+  const single = singleRollInPlace();
+  const title = single ? baseName(state.folder.path) : `Roll ${index + 1}`;
   return `
     <div class="roll-card-head">
-      <span class="roll-card-index">Roll ${index + 1}</span>
+      <span class="roll-card-index">${escapeHtml(title)}</span>
       <span class="roll-card-range">${escapeHtml(rollRangeText(roll))}</span>
       <span class="roll-card-actions">
         <button type="button" class="action-link" data-act="add" ${selected ? "" : "disabled"}>Add ${selected ? `${selected} selected` : "selection"}</button>
         ${index > 0 ? `<button type="button" class="action-link" data-act="merge">Merge into roll ${index}</button>` : ""}
-        <button type="button" class="action-link" data-act="remove">Leave out</button>
+        ${single ? "" : `<button type="button" class="action-link" data-act="remove">Leave out</button>`}
       </span>
     </div>`;
 }
@@ -3253,25 +2629,80 @@ function rollCardGear(roll) {
     </div>`;
 }
 
-function rollCardFields(t) {
-  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
-  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
+function rollCardFields(roll) {
+  const t = roll.tagging;
   return `
     <div class="field-grid compact">
       <label><span>Roll date</span><input type="date" data-field="roll_date" value="${escapeHtml(t.roll_date || "")}" /></label>
       <label><span>Place / title</span><input type="text" data-field="place" value="${escapeHtml(t.place || "")}" placeholder="Jāņos, Mexico…" /></label>
+    </div>
+    <div class="roll-card-links">
+      <button type="button" class="action-link" data-expand="more" aria-expanded="${roll.moreOpen}">${roll.moreOpen ? "Less" : "More"}</button>
+      <button type="button" class="action-link" data-expand="changes" aria-expanded="${roll.changesOpen}">${roll.changesOpen ? "Hide changes" : "Changes"}</button>
+    </div>`;
+}
+
+function rollCardMore(roll) {
+  const t = roll.tagging;
+  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
+  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
+  return `
+    <div class="field-grid compact roll-more${roll.moreOpen ? "" : " hidden"}">
       <label><span>Development provider</span><select data-field="development_provider_id">${optionsHtml(devProviders, t.development_provider_id)}</select></label>
       <label><span>Development method</span><select data-field="development_method_id">${optionsHtml(state.devMethods, t.development_method_id)}</select></label>
       <label><span>Scan provider</span><select data-field="scan_provider_id">${optionsHtml(scanProviders, t.scan_provider_id)}</select></label>
       <label><span>Scan method</span><select data-field="scan_method_id">${optionsHtml(state.scanMethods, t.scan_method_id)}</select></label>
       <label class="full"><span>Roll notes</span><input type="text" data-field="roll_notes" value="${escapeHtml(t.roll_notes || "")}" /></label>
+      <label class="checkbox-field full">
+        <span>Existing FilmEx metadata</span>
+        <span class="checkbox-row">
+          <input type="checkbox" data-field="replace_managed_metadata" ${t.replace_managed_metadata ? "checked" : ""} />
+          <span>Replace instead of merge</span>
+        </span>
+      </label>
+    </div>`;
+}
+
+// The dry run for this roll: per file, what will be written, with the
+// per-file lens override and extra keywords.
+function rollCardChanges(roll) {
+  if (!roll.changesOpen) return `<div class="roll-changes hidden"></div>`;
+  if (!roll.changes) return `<div class="roll-changes"><span class="lib-sub">Checking…</span></div>`;
+  const stale = roll.changesStale ? `<div class="roll-changes-stale"><span class="pill warn">Changed since</span> <button type="button" class="action-link" data-act="refresh-changes">Check again</button></div>` : "";
+  return `<div class="roll-changes">${stale}${roll.changes.diffs.map(file => diffFileHtml(roll, file)).join("")}</div>`;
+}
+
+function diffFileHtml(roll, file) {
+  const t = roll.tagging;
+  const thumb = state.folder.thumbs.has(file.name)
+    ? `<button type="button" class="diff-thumb-link" data-open="${escapeHtml(file.name)}" aria-label="Open file"><img class="diff-thumb" src="${escapeHtml(buildThumbnailUrl(state.folder.path, file.name, state.previewInvert))}" alt="" loading="lazy" /></button>`
+    : "";
+  const rows = file.changes.map(ch => `
+      <div class="diff-row">
+        <span class="diff-tag">${escapeHtml(ch.tag)}</span>
+        <span class="diff-action ${ch.action}">${ch.action}</span>
+        <span class="diff-value">${formatValue(ch.after)}</span>
+      </div>`).join("");
+  return `
+    <div class="diff-file" data-file="${escapeHtml(file.name)}">
+      ${thumb}
+      <div class="diff-file-main">
+        <div class="diff-file-header">
+          <div class="diff-file-name">${escapeHtml(file.name)}</div>
+          <div class="diff-file-controls">
+            <select class="diff-file-lens-select" aria-label="Lens for this frame">${lensOverrideOptions(t.camera, t.file_lens_ids[file.name] || "")}</select>
+            <input type="text" class="diff-file-keyword-input" value="${escapeHtml(t.file_keywords[file.name] || "")}" placeholder="extra keywords, comma-separated" />
+          </div>
+        </div>
+        <div class="diff-changes">${rows}</div>
+      </div>
     </div>`;
 }
 
 function wireRollActions(el, roll) {
   el.querySelector("[data-act=add]").addEventListener("click", () => addSelectionToRoll(roll.id));
   el.querySelector("[data-act=merge]")?.addEventListener("click", () => mergeRollIntoPrevious(roll.id));
-  el.querySelector("[data-act=remove]").addEventListener("click", () => removeRoll(roll.id));
+  el.querySelector("[data-act=remove]")?.addEventListener("click", () => removeRoll(roll.id));
 }
 
 // Typing a name takes it out of the template's hands until "use template".
@@ -3282,7 +2713,8 @@ function wireRollName(el, roll) {
     roll.nameError = null;
     el.querySelector(".roll-name-auto").classList.remove("hidden");
     el.querySelector(".roll-name-error").classList.add("hidden");
-    updateInboxRunButton();
+    markChangesStale(roll);
+    updateRunButton();
   });
   el.querySelector(".roll-name-auto").addEventListener("click", () => {
     roll.nameAuto = true;
@@ -3303,10 +2735,75 @@ function wireRollGear(el, roll) {
 function wireRollFields(el, roll) {
   for (const field of el.querySelectorAll("[data-field]")) {
     field.addEventListener("change", (e) => {
-      roll.tagging[e.target.dataset.field] = e.target.value;
-      if (["roll_date", "place"].includes(e.target.dataset.field)) scheduleRollName(roll);
+      const name = e.target.dataset.field;
+      roll.tagging[name] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
+      markChangesStale(roll);
+      if (["roll_date", "place"].includes(name)) scheduleRollName(roll);
+      else rememberGear(roll.tagging);
+      updateRunButton();
     });
   }
+}
+
+function wireRollExpanders(el, roll) {
+  el.querySelector("[data-expand=more]").addEventListener("click", () => {
+    roll.moreOpen = !roll.moreOpen;
+    renderRollCards();
+  });
+  el.querySelector("[data-expand=changes]").addEventListener("click", () => {
+    roll.changesOpen = !roll.changesOpen;
+    renderRollCards();
+    if (roll.changesOpen && (!roll.changes || roll.changesStale)) void loadRollChanges(roll);
+  });
+  el.querySelector("[data-act=refresh-changes]")?.addEventListener("click", () => void loadRollChanges(roll));
+  for (const btn of el.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openSourceFile(btn.dataset.open));
+  for (const file of el.querySelectorAll(".diff-file")) {
+    const name = file.dataset.file;
+    file.querySelector(".diff-file-lens-select").addEventListener("change", (e) => {
+      if (e.target.value) roll.tagging.file_lens_ids[name] = e.target.value;
+      else delete roll.tagging.file_lens_ids[name];
+      markChangesStale(roll, { render: true });
+    });
+    file.querySelector(".diff-file-keyword-input").addEventListener("input", (e) => {
+      if (e.target.value.trim()) roll.tagging.file_keywords[name] = e.target.value;
+      else delete roll.tagging.file_keywords[name];
+      markChangesStale(roll, { render: true });
+    });
+  }
+}
+
+function markChangesStale(roll, { render = false } = {}) {
+  if (!roll.changes || roll.changesStale) return;
+  roll.changesStale = true;
+  if (render) {
+    const card = document.querySelector(`.roll-card[data-id="${cssEscape(roll.id)}"] .roll-changes`);
+    if (card && !card.querySelector(".roll-changes-stale")) {
+      card.insertAdjacentHTML("afterbegin", `<div class="roll-changes-stale"><span class="pill warn">Changed since</span> <button type="button" class="action-link" data-act="refresh-changes">Check again</button></div>`);
+      card.querySelector("[data-act=refresh-changes]").addEventListener("click", () => void loadRollChanges(roll));
+    }
+  }
+}
+
+async function loadRollChanges(roll) {
+  const folder = state.folder;
+  const single = singleRollInPlace();
+  try {
+    const body = {
+      folder: folder.path,
+      files: rollImages(roll),
+      as_roll: single ? undefined : (roll.name.trim() || undefined),
+      ...rollTagging(roll),
+    };
+    const res = await api("/api/metadata/dry-run", { method: "POST", body: JSON.stringify(body) });
+    if (!folder.rolls.includes(roll)) return;
+    roll.changes = { diffs: res.diffs };
+    roll.changesStale = false;
+  } catch (e) {
+    roll.changes = { diffs: [] };
+    roll.changesStale = false;
+    renderFolderBanner(`Could not check the changes: ${planErrorsText(e)}`, "bad");
+  }
+  renderRollCards();
 }
 
 function rollGear(roll) {
@@ -3316,6 +2813,9 @@ function rollGear(roll) {
 
 function setRollGear(roll, gear) {
   Object.assign(roll.tagging, gear);
+  if (gear.camera !== undefined) roll.tagging.file_lens_ids = {};
+  rememberGear(roll.tagging);
+  markChangesStale(roll);
   renderRollCards();
   scheduleRollName(roll);
 }
@@ -3332,7 +2832,7 @@ const rollNameTimers = new Map();
 function scheduleRollName(roll) {
   if (!roll.nameAuto) return;
   clearTimeout(rollNameTimers.get(roll.id));
-  rollNameTimers.set(roll.id, setTimeout(() => void refreshRollName(roll), INBOX_NAME_DEBOUNCE_MS));
+  rollNameTimers.set(roll.id, setTimeout(() => void refreshRollName(roll), NAME_DEBOUNCE_MS));
 }
 
 async function refreshRollName(roll) {
@@ -3356,52 +2856,89 @@ async function refreshRollName(roll) {
     roll.nameError = `Could not render the name: ${e.message}`;
   }
   const card = document.querySelector(`.roll-card[data-id="${cssEscape(roll.id)}"]`);
-  if (card) {
-    card.querySelector(".roll-name-input").value = roll.name;
+  const input = card?.querySelector(".roll-name-input");
+  if (input) {
+    input.value = roll.name;
     const err = card.querySelector(".roll-name-error");
     err.textContent = roll.nameError || "";
     err.classList.toggle("hidden", !roll.nameError);
     card.querySelector(".roll-name-auto").classList.toggle("hidden", roll.nameAuto);
   }
-  updateInboxRunButton();
+  updateRunButton();
 }
 
-// ----- destination and run -----
+// ----- destination and the one action -----
 
-// Where the Run button sends the rolls: what the user picked (default: the
-// import mode setting), except that without a library root only a split in
-// place is possible. Rendering reads this; it never changes the choice.
-function inboxDestination() {
-  const root = state.settings?.library_root || "";
-  const chosen = state.inbox.destination || `import-${state.settings?.import_mode || "copy"}`;
-  const value = root ? chosen : "split";
-  if (value === "split") return { value, kind: "split", mode: null };
-  return { value, kind: "import", mode: value.slice("import-".length) };
+// Where the rolls go. Without a library only "keep" is possible; a folder
+// inside the library keeps by default, one outside copies or moves as the
+// import default says.
+function destination() {
+  return hasLibrary() ? (state.folder.destination || "keep") : "keep";
 }
 
-function renderInboxDestination() {
-  const select = document.getElementById("inbox-destination");
-  const hint = document.getElementById("inbox-dest-hint");
+function renderDestination() {
+  const current = destination();
+  const library = hasLibrary();
+  for (const btn of document.querySelectorAll("#destination .segment")) {
+    const on = btn.dataset.dest === current;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-checked", String(on));
+    btn.disabled = !library && btn.dataset.dest !== "keep";
+  }
+  const hint = document.getElementById("destination-hint");
+  const n = state.folder.rolls.length;
   const root = state.settings?.library_root || "";
-  const dest = inboxDestination();
-  for (const opt of select.options) opt.disabled = !root && opt.value !== "split";
-  select.value = dest.value;
-  const folder = (state.inbox.folder || "").replace(/\/+$/, "");
-  if (dest.kind === "import") {
-    hint.textContent = `${dest.mode === "move" ? "Move" : "Copy"} each roll to ${root}/<year>/<name>, verify every file, then tag it there.`;
+  if (!library) {
+    hint.innerHTML = `Tagged where it is. <button type="button" class="action-link" id="destination-choose-library">Choose a library folder</button> to copy or move rolls into one.`;
+    document.getElementById("destination-choose-library").addEventListener("click", () => void chooseLibraryFolder());
+  } else if (current === "keep") {
+    hint.textContent = n > 1
+      ? `Each roll becomes its own folder ${splitsIntoSiblings() ? "next to this one" : "inside this one"}, tagged.`
+      : "Tagged where it is.";
   } else {
-    const rootClean = root.replace(/\/+$/, "");
-    const parent = folder.slice(0, folder.lastIndexOf("/"));
-    const grand = parent.slice(0, parent.lastIndexOf("/"));
-    const where = rootClean && grand === rootClean ? `next to this folder, under ${parent.split("/").pop()}` : "as subfolders inside this folder";
-    hint.textContent = `Move the frames into new roll folders ${where}, then tag each one.${!root ? " Set a library root in Settings to import instead." : ""}`;
+    hint.textContent = `${current === "move" ? "Moved" : "Copied"} to ${baseName(root)}/<year>/<name>, every file verified, then tagged there.`;
   }
 }
 
-function inboxBlockers() {
-  const rolls = state.inbox.rolls;
+// Mirrors the server's split layout: a roll folder under <root>/<year>/ is
+// cut into siblings, anything else into subfolders.
+function splitsIntoSiblings() {
+  const root = (state.settings?.library_root || "").replace(/\/+$/, "");
+  const path = state.folder.path;
+  if (!root || !path.startsWith(root + "/")) return false;
+  return path.slice(root.length + 1).split("/").length === 2;
+}
+
+function setDestination(value) {
+  state.folder.destination = value;
+  if (value !== "keep") {
+    if (state.settings) state.settings.import_mode = value;
+    queueSettingsPatch({ import_mode: value });
+  }
+  for (const roll of state.folder.rolls) markChangesStale(roll);
+  renderRollCards();
+  renderDestination();
+  updateRunButton();
+}
+
+function runLabel() {
+  const n = state.folder.rolls.length;
+  const dest = destination();
+  if (dest === "keep") {
+    if (n <= 1) {
+      const files = n ? rollImages(state.folder.rolls[0]).length : 0;
+      return `Write ${files} file${files === 1 ? "" : "s"}`;
+    }
+    return `Split into ${n} rolls`;
+  }
+  return `${dest === "move" ? "Move" : "Copy"} ${n} roll${n === 1 ? "" : "s"} to library`;
+}
+
+function runBlockers() {
+  const rolls = state.folder.rolls;
   const problems = [];
   if (!rolls.length) problems.push("no rolls");
+  if (singleRollInPlace()) return problems;
   const names = new Set();
   for (const roll of rolls) {
     const name = (roll.name || "").trim();
@@ -3409,20 +2946,16 @@ function inboxBlockers() {
     else if (names.has(name.toLowerCase())) problems.push(`two rolls are named ${name}`);
     names.add(name.toLowerCase());
   }
-  if (inboxDestination().kind === "import" && !state.settings?.library_root) problems.push("no library root");
   return problems;
 }
 
-function updateInboxRunButton() {
-  const btn = document.getElementById("inbox-run");
-  const dest = inboxDestination();
-  const n = state.inbox.rolls.length;
-  const verb = dest.kind === "split" ? "Split into" : dest.mode === "move" ? "Move" : "Import";
-  btn.textContent = n ? `${verb} ${n} roll${n === 1 ? "" : "s"}` : verb;
-  const blockers = inboxBlockers();
-  btn.disabled = !!state.inbox.running || blockers.length > 0;
+function updateRunButton() {
+  const btn = document.getElementById("folder-run");
+  btn.textContent = runLabel();
+  const blockers = runBlockers();
+  btn.disabled = !!state.folder.running || blockers.length > 0;
   btn.title = blockers.join("; ");
-  document.getElementById("inbox-undo").classList.toggle("hidden", !state.inbox.lastOperation);
+  document.getElementById("folder-undo").classList.toggle("hidden", !state.folder.lastOperation);
 }
 
 function rollTagging(roll) {
@@ -3438,16 +2971,19 @@ function rollTagging(roll) {
     roll_date: t.roll_date || null,
     roll_notes: (t.roll_notes || "").trim() || null,
     place: (t.place || "").trim() || null,
+    replace_managed_metadata: !!t.replace_managed_metadata,
+    file_keywords: keywordPayload(t.file_keywords),
+    file_lens_ids: { ...t.file_lens_ids },
   };
 }
 
-function inboxRequestBody() {
-  const dest = inboxDestination();
+function batchRequestBody() {
+  const dest = destination();
   const body = {
-    folder: state.inbox.folder,
-    rolls: state.inbox.rolls.map(roll => ({ name: roll.name.trim(), frames: roll.frames, tagging: rollTagging(roll) })),
+    folder: state.folder.path,
+    rolls: state.folder.rolls.map(roll => ({ name: roll.name.trim(), frames: roll.frames, tagging: rollTagging(roll) })),
   };
-  if (dest.kind === "import") body.mode = dest.mode;
+  if (dest !== "keep") body.mode = dest;
   return body;
 }
 
@@ -3463,68 +2999,134 @@ function planErrorsText(e) {
   return e.message;
 }
 
-function describePlan(plan, dest) {
+
+// What the one action does: write in place, split, or import.
+function plannedAction() {
+  const dest = destination();
+  if (dest === "keep" && state.folder.rolls.length <= 1) return "write";
+  return dest === "keep" ? "split" : "import";
+}
+
+function batchEndpoints(action) {
+  return action === "split"
+    ? { plan: "/api/folder/split", apply: "/api/folder/split/apply" }
+    : { plan: "/api/import/plan", apply: "/api/import/apply" };
+}
+
+function describePlan(plan, action, dest) {
   const lines = [];
-  if (dest.kind === "split") {
-    lines.push(plan.layout === "siblings" ? `New roll folders next to the source, under ${plan.target_parent}:` : `New roll folders inside ${plan.target_parent}:`);
+  if (action === "split") {
+    lines.push(plan.layout === "siblings" ? `New roll folders next to this one, under ${baseName(plan.target_parent)}:` : `New roll folders inside ${baseName(plan.target_parent)}:`);
   } else {
-    lines.push(`${dest.mode === "move" ? "Move" : "Copy"} ${humanBytes(plan.total_bytes)} into ${plan.root}:`);
+    lines.push(`${dest === "move" ? "Move" : "Copy"} ${humanBytes(plan.total_bytes)} into ${plan.root}:`);
   }
   for (const item of plan.items) {
-    const where = dest.kind === "split" ? item.name : `${item.year}/${item.name}`;
+    const where = action === "split" ? item.name : `${item.year}/${item.name}`;
     lines.push(`  ${where}  —  ${item.frames.length} frames, ${item.files.length} files, ${humanBytes(item.bytes)}`);
   }
-  if (plan.unassigned.length) lines.push(`${plan.unassigned.length} frame${plan.unassigned.length === 1 ? "" : "s"} stay in the source folder.`);
+  if (plan.unassigned.length) lines.push(`${plan.unassigned.length} frame${plan.unassigned.length === 1 ? "" : "s"} stay in this folder.`);
   if (plan.other_files.length) lines.push(`${plan.other_files.length} other file${plan.other_files.length === 1 ? "" : "s"} (${plan.other_files.slice(0, 3).join(", ")}${plan.other_files.length > 3 ? ", …" : ""}) stay behind.`);
-  if (dest.kind === "split" && plan.remove_source) lines.push("The source folder will be empty afterwards and is removed.");
-  if (dest.kind === "import") {
-    lines.push(dest.mode === "move"
+  if (action === "split" && plan.remove_source) lines.push("This folder will be empty afterwards and is removed.");
+  if (action === "import") {
+    lines.push(dest === "move"
       ? "Sources are deleted only after every file of a roll has been read back and verified."
-      : "Every copy is read back and verified; the source folder is left as it is.");
+      : "Every copy is read back and verified; this folder is left as it is.");
   }
   lines.push("Each new folder is tagged with its roll's gear and film. The batch can be undone.");
   return lines.join("\n");
 }
 
-async function runInboxBatch() {
-  if (inboxBlockers().length || state.inbox.running) return;
-  const dest = inboxDestination();
-  const body = inboxRequestBody();
-  if (!(await confirmInboxPlan(dest, body))) return;
-  state.inbox.running = true;
-  state.inbox.result = null;
-  renderInboxResult(null);
-  updateInboxRunButton();
-  renderInboxProgress("Starting…", 0);
+function gearSummary(roll) {
+  const t = roll.tagging;
+  return [t.camera?.display_name, t.lens?.display_name, t.film?.display_name, t.roll_date].filter(Boolean).join(" · ") || "no gear or film set";
+}
+
+async function runFolderAction() {
+  if (runBlockers().length || state.folder.running) return;
+  const action = plannedAction();
+  if (action === "write") await writeInPlace();
+  else await runBatch(action);
+}
+
+// Keep here, one roll: write metadata to the files where they are.
+async function writeInPlace() {
+  const folder = state.folder;
+  const roll = folder.rolls[0];
+  const images = rollImages(roll);
+  const all = images.length === folderFrames().reduce((n, f) => n + f.images.length, 0);
+  const body = { folder: folder.path, files: all ? undefined : images, ...rollTagging(roll) };
+  const ok = await ask(`Write metadata to ${images.length} file${images.length === 1 ? "" : "s"} in ${baseName(folder.path)}?\n${gearSummary(roll)}`, { title: "Write metadata", okLabel: "Write" });
+  if (!ok) return;
+  startRun();
   try {
-    const done = await runJob(inboxEndpoints(dest).apply, { body, ...inboxProgressHandlers(dest) });
-    await finishInboxBatch(done, dest);
+    let total = 0;
+    let written = 0;
+    const done = await runJob("/api/metadata/apply/stream", {
+      body,
+      onStart: (ev) => { total = ev.total; renderFolderProgress(`Writing 0/${total}`, 0); setPageTitleProgress("Writing", 0, total); },
+      onEvent: () => { written += 1; renderFolderProgress(`Writing ${written}/${total}`, total ? written / total : null); setPageTitleProgress("Writing", written, total); },
+    });
+    folder.result = { action: "write", done };
+    await finishRun();
   } catch (e) {
-    renderInboxProgress(null);
-    await notify(planErrorsText(e), dest.kind === "split" ? "Split failed" : "Import failed");
+    renderFolderProgress(null);
+    await notify(planErrorsText(e), "Writing failed");
   } finally {
-    state.inbox.running = false;
-    resetPageTitle();
-    updateInboxRunButton();
+    endRun();
   }
 }
 
-function inboxEndpoints(dest) {
-  return dest.kind === "split"
-    ? { plan: "/api/folder/split", apply: "/api/folder/split/apply" }
-    : { plan: "/api/import/plan", apply: "/api/import/apply" };
+async function runBatch(action) {
+  const dest = destination();
+  const body = batchRequestBody();
+  if (!(await confirmPlan(action, dest, body))) return;
+  startRun();
+  try {
+    const done = await runJob(batchEndpoints(action).apply, { body, ...batchProgressHandlers(dest) });
+    state.folder.lastOperation = done.operation_id;
+    state.folder.result = { action, dest, done };
+    await finishRun();
+  } catch (e) {
+    renderFolderProgress(null);
+    await notify(planErrorsText(e), action === "split" ? "Split failed" : "Import failed");
+  } finally {
+    endRun();
+  }
 }
 
-function inboxActionLabel(dest) {
-  return dest.kind === "split" ? "Split" : dest.mode === "move" ? "Move" : "Import";
+function startRun() {
+  state.folder.running = true;
+  state.folder.result = null;
+  renderFolderResult(null);
+  updateRunButton();
+  renderFolderProgress("Starting…", 0);
+}
+
+function endRun() {
+  state.folder.running = false;
+  resetPageTitle();
+  updateRunButton();
+}
+
+async function finishRun() {
+  const folder = state.folder;
+  const keepResult = folder.result;
+  const keepOp = folder.lastOperation;
+  renderFolderProgress(null);
+  if (hasLibrary()) void loadLibrary({ rescan: true });
+  await reloadAfterRun();
+  folder.result = keepResult;
+  folder.lastOperation = keepOp;
+  renderFolderResult(keepResult);
+  updateRunButton();
 }
 
 // Ask the server for the batch's plan, show it, and resolve true once the
 // user confirms. A plan that cannot run is explained instead.
-async function confirmInboxPlan(dest, body) {
+async function confirmPlan(action, dest, body) {
   let plan;
   try {
-    plan = await api(inboxEndpoints(dest).plan, { method: "POST", body: JSON.stringify(body) });
+    plan = await api(batchEndpoints(action).plan, { method: "POST", body: JSON.stringify(body) });
   } catch (e) {
     await notify(planErrorsText(e), "The batch cannot run as planned");
     return false;
@@ -3533,22 +3135,22 @@ async function confirmInboxPlan(dest, body) {
     await notify(plan.problems.join("\n"), "The batch cannot run as planned");
     return false;
   }
-  const label = inboxActionLabel(dest);
+  const label = action === "split" ? "Split" : dest === "move" ? "Move" : "Copy";
   const n = plan.items.length;
-  return ask(describePlan(plan, dest), { title: `${label} ${n} roll${n === 1 ? "" : "s"}?`, okLabel: label });
+  return ask(describePlan(plan, action, dest), { title: `${label} ${n} roll${n === 1 ? "" : "s"}?`, okLabel: label });
 }
 
-function inboxProgressHandlers(dest) {
+function batchProgressHandlers(dest) {
   let total = 0;
   return {
     onStart: (ev) => {
       total = ev.total || 0;
-      setPageTitleProgress(inboxActionLabel(dest), 0, total);
+      setPageTitleProgress(dest === "keep" ? "Split" : dest === "move" ? "Move" : "Copy", 0, total);
     },
     onEvent: (ev) => {
-      const line = inboxProgressLine(ev, dest, total);
+      const line = batchProgressLine(ev, dest, total);
       if (!line) return;
-      renderInboxProgress(line.text, line.fraction);
+      renderFolderProgress(line.text, line.fraction);
       if (line.title) setPageTitleProgress(...line.title);
     },
   };
@@ -3556,14 +3158,14 @@ function inboxProgressHandlers(dest) {
 
 // What one job event means on screen: { text, fraction, title? }, or null
 // for events the progress bar does not show.
-function inboxProgressLine(ev, dest, total) {
+function batchProgressLine(ev, dest, total) {
   const byBytes = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
   switch (ev.step) {
     case "move":
       return { text: `Moving ${ev.done}/${ev.total} · ${ev.roll}`, fraction: total ? ev.done / total : null, title: ["Moving", ev.done, ev.total] };
     case "copy":
       return {
-        text: `${dest.mode === "move" ? "Moving" : "Copying"} ${ev.roll} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`,
+        text: `${dest === "move" ? "Moving" : "Copying"} ${ev.roll} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`,
         fraction: byBytes,
         title: ["Copying", ev.files_done, ev.files_total],
       };
@@ -3578,44 +3180,24 @@ function inboxProgressLine(ev, dest, total) {
   }
 }
 
-async function finishInboxBatch(done, dest) {
-  state.inbox.lastOperation = done.operation_id;
-  state.inbox.result = { done, dest };
-  renderInboxProgress(null);
-  renderInboxResult(state.inbox.result);
-  if (state.settings?.library_root) void loadLibrary({ rescan: true });
-  await reloadInboxAfterBatch();
-}
-
-async function reloadInboxAfterBatch() {
-  const folder = state.inbox.folder;
-  const keepResult = state.inbox.result;
-  const keepOp = state.inbox.lastOperation;
+// The folder changed on disk: read it again. A source emptied by a split is
+// gone, so the screen keeps the result and says so.
+async function reloadAfterRun() {
+  const path = state.folder.path;
   try {
-    await api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`);
+    await api(`/api/folder/frames?${new URLSearchParams({ path })}`);
   } catch {
-    // The source folder is gone (every frame moved out): keep the result on screen.
-    state.inbox.listing = null;
-    state.inbox.frames = [];
-    state.inbox.indexByKey = null;
-    state.inbox.rolls = [];
-    state.inbox.selection = new Set();
-    renderInbox();
-    renderInboxResult(keepResult);
-    renderInboxBanner("The source folder is empty now and was removed.", "ok");
-    state.inbox.lastOperation = keepOp;
-    updateInboxRunButton();
+    const folder = state.folder;
+    Object.assign(folder, { listing: null, frames: [], indexByKey: null, rolls: [], selection: new Set() });
+    renderFolder();
+    renderFolderBanner("This folder is empty now and was removed.", "ok");
     return;
   }
-  await loadInboxFolder(folder);
-  state.inbox.result = keepResult;
-  state.inbox.lastOperation = keepOp;
-  renderInboxResult(keepResult);
-  updateInboxRunButton();
+  await openFolder(path);
 }
 
-function renderInboxProgress(text, fraction) {
-  const el = document.getElementById("inbox-progress");
+function renderFolderProgress(text, fraction) {
+  const el = document.getElementById("folder-progress");
   if (!text) { el.classList.add("hidden"); el.innerHTML = ""; return; }
   el.classList.remove("hidden");
   const pct = fraction === null || fraction === undefined ? null : Math.max(0, Math.min(100, Math.round(fraction * 100)));
@@ -3628,119 +3210,86 @@ function renderInboxProgress(text, fraction) {
   `;
 }
 
-function renderInboxResult(result) {
-  const section = document.getElementById("inbox-result");
-  const body = document.getElementById("inbox-result-body");
+function renderFolderResult(result) {
+  const section = document.getElementById("folder-result");
+  const body = document.getElementById("folder-result-body");
   if (!result) { section.classList.add("hidden"); body.innerHTML = ""; return; }
-  const { done, dest } = result;
   section.classList.remove("hidden");
-  const rows = (done.created || []).map((c) => {
-    const files = c.files.length;
-    const problems = c.errors.length ? `<span class="pill bad">${c.errors.length} problem${c.errors.length === 1 ? "" : "s"}</span>` : "";
-    const skipped = c.tag_skipped ? `<span class="pill warn" title="${escapeHtml(c.tag_skipped)}">not tagged</span>` : "";
-    const verified = dest.kind === "import" ? (c.verified ? `<span class="pill ok">verified</span>` : `<span class="pill bad">incomplete</span>`) : "";
-    return `
-      <div class="result-row">
-        <code title="${escapeHtml(c.path)}">${escapeHtml(c.name)}</code>
-        <span class="lib-sub">${files} file${files === 1 ? "" : "s"} · ${c.applied.length} tagged</span>
-        <span class="result-pills">${verified}${skipped}${problems}</span>
-        <span class="lib-actions">
-          <button type="button" class="secondary" data-open="${escapeHtml(c.path)}">Open</button>
-          <button type="button" class="secondary" data-reveal="${escapeHtml(c.path)}">Reveal</button>
-        </span>
+  const { action, dest, done } = result;
+  if (action === "write") {
+    const n = done.applied_files.length;
+    body.innerHTML = `
+      <div>Wrote ${n} file${n === 1 ? "" : "s"}.</div>
+      ${done.errors.length ? `<pre class="result-errors">${escapeHtml(done.errors.join("\n"))}</pre>` : ""}
+      ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
+      <div class="apply-actions">
+        <button type="button" class="secondary" data-reveal="${escapeHtml(state.folder.path)}">Reveal</button>
+        ${hasLibrary() ? `<button type="button" class="secondary" id="result-back-library">Back to Library</button>` : ""}
       </div>`;
-  }).join("");
-  const errors = (done.errors || []);
-  body.innerHTML = `
-    <div class="result-list">${rows || `<div class="lib-sub">Nothing was created.</div>`}</div>
-    ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
-    ${dest.kind === "split" && done.removed_source ? `<div class="lib-sub" style="margin-top:10px">The emptied source folder was removed; its old manifest is kept in the undo journal.</div>` : ""}
-    ${dest.kind === "import" && done.removed_sources?.length ? `<div class="lib-sub" style="margin-top:10px">${done.removed_sources.length} source file${done.removed_sources.length === 1 ? "" : "s"} removed after verification.</div>` : ""}
-    ${errors.length ? `<pre class="result-errors">${escapeHtml(errors.join("\n"))}</pre>` : ""}
-  `;
-  for (const btn of body.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openFolderInTagView(btn.dataset.open, null));
+    document.getElementById("result-back-library")?.addEventListener("click", () => void openLibrary());
+  } else {
+    const rows = (done.created || []).map((c) => {
+      const files = c.files.length;
+      const problems = c.errors.length ? `<span class="pill bad">${c.errors.length} problem${c.errors.length === 1 ? "" : "s"}</span>` : "";
+      const skipped = c.tag_skipped ? `<span class="pill warn" title="${escapeHtml(c.tag_skipped)}">not tagged</span>` : "";
+      const verified = action === "import" ? (c.verified ? `<span class="pill ok">verified</span>` : `<span class="pill bad">incomplete</span>`) : "";
+      return `
+        <div class="result-row">
+          <code title="${escapeHtml(c.path)}">${escapeHtml(c.name)}</code>
+          <span class="lib-sub">${files} file${files === 1 ? "" : "s"} · ${c.applied.length} tagged</span>
+          <span class="result-pills">${verified}${skipped}${problems}</span>
+          <span class="lib-actions">
+            <button type="button" class="secondary" data-open="${escapeHtml(c.path)}">Open</button>
+            <button type="button" class="secondary" data-reveal="${escapeHtml(c.path)}">Reveal</button>
+          </span>
+        </div>`;
+    }).join("");
+    const errors = (done.errors || []);
+    body.innerHTML = `
+      <div class="result-list">${rows || `<div class="lib-sub">Nothing was created.</div>`}</div>
+      ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
+      ${action === "split" && done.removed_source ? `<div class="lib-sub" style="margin-top:10px">The emptied folder was removed; its old manifest is kept in the undo journal.</div>` : ""}
+      ${action === "import" && done.removed_sources?.length ? `<div class="lib-sub" style="margin-top:10px">${done.removed_sources.length} source file${done.removed_sources.length === 1 ? "" : "s"} removed after verification.</div>` : ""}
+      ${errors.length ? `<pre class="result-errors">${escapeHtml(errors.join("\n"))}</pre>` : ""}
+      ${dest !== "keep" && hasLibrary() ? `<div class="apply-actions"><button type="button" class="secondary" id="result-back-library">Back to Library</button></div>` : ""}
+    `;
+    document.getElementById("result-back-library")?.addEventListener("click", () => void openLibrary());
+  }
+  for (const btn of body.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openFolder(btn.dataset.open));
   for (const btn of body.querySelectorAll("[data-reveal]")) btn.addEventListener("click", () => void revealFolder(btn.dataset.reveal));
 }
 
-async function undoInboxBatch() {
-  const opId = state.inbox.lastOperation;
-  if (!opId || state.inbox.running) return;
+async function undoLastBatch() {
+  const opId = state.folder.lastOperation;
+  if (!opId || state.folder.running) return;
   const ok = await ask(
     "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.",
     { okLabel: "Undo batch" }
   );
   if (!ok) return;
-  state.inbox.running = true;
-  updateInboxRunButton();
-  renderInboxProgress("Undoing…", null);
+  state.folder.running = true;
+  updateRunButton();
+  renderFolderProgress("Undoing…", null);
   try {
     const done = await runJob(`/api/operations/${encodeURIComponent(opId)}/undo`, {
-      onEvent: (ev) => { if (ev.file) renderInboxProgress(`Restoring ${ev.file}`, null); },
+      onEvent: (ev) => { if (ev.file) renderFolderProgress(`Restoring ${ev.file}`, null); },
     });
-    state.inbox.lastOperation = null;
-    state.inbox.result = null;
-    renderInboxProgress(null);
-    renderInboxResult(null);
+    state.folder.lastOperation = null;
+    state.folder.result = null;
+    renderFolderProgress(null);
+    renderFolderResult(null);
     const n = (done.restored || []).length + (done.removed || []).length;
     const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
     await notify(`${n} file${n === 1 ? "" : "s"} put back, ${(done.removed_folders || []).length} folder${(done.removed_folders || []).length === 1 ? "" : "s"} removed.${problems}`, "Batch undone");
-    if (state.settings?.library_root) void loadLibrary({ rescan: true });
-    if (state.inbox.folder) await loadInboxFolder(state.inbox.folder);
+    if (hasLibrary()) void loadLibrary({ rescan: true });
+    if (state.folder.path) await openFolder(state.folder.path);
   } catch (e) {
-    renderInboxProgress(null);
+    renderFolderProgress(null);
     await notify(e.message, "Undo failed");
   } finally {
-    state.inbox.running = false;
-    updateInboxRunButton();
+    state.folder.running = false;
+    updateRunButton();
   }
-}
-
-function humanBytes(n) {
-  if (!n && n !== 0) return "";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = Number(n);
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
-  return i === 0 ? `${value} B` : `${value.toFixed(value >= 100 ? 0 : 1)} ${units[i]}`;
-}
-
-// ----- Tag view: read-only sheet -----
-
-async function loadTagSheet() {
-  const section = document.getElementById("tag-sheet-section");
-  const folder = state.folder;
-  if (!folder || !state.scan) { section.classList.add("hidden"); state.tagFrames = null; return; }
-  try {
-    const listing = await api(`/api/folder/frames?${new URLSearchParams({ path: folder })}`);
-    if (state.folder !== folder) return;
-    state.tagFrames = listing;
-  } catch {
-    state.tagFrames = null;
-  }
-  renderTagSheet();
-}
-
-function renderTagSheet() {
-  const section = document.getElementById("tag-sheet-section");
-  const listing = state.tagFrames;
-  if (!listing || !listing.frames.length || !state.scan) { section.classList.add("hidden"); return; }
-  section.classList.remove("hidden");
-  const scanFiles = new Map((state.scan.files || []).map(f => [f.name, f]));
-  const n = listing.frames.length;
-  document.getElementById("tag-sheet-count").textContent = `${n} frame${n === 1 ? "" : "s"}`;
-  renderContactSheet(document.getElementById("tag-sheet"), {
-    folder: state.folder,
-    frames: listing.frames,
-    hasThumb: (file) => fileHasPreview(scanFiles.get(file)),
-    invert: state.previewInvert,
-    rollIndex: null,
-    selection: null,
-    onClick: (key) => {
-      const frame = listing.frames.find(f => f.key === key);
-      if (frame?.preview) void openSourceFile(frame.preview);
-    },
-    compact: true,
-  });
 }
 
 // ---------- Wiring ----------
@@ -3749,96 +3298,65 @@ window.addEventListener("DOMContentLoaded", () => {
   loadTheme();
   init();
 
-  document.getElementById("browse-btn").addEventListener("click", onBrowse);
-  document.getElementById("folder-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); onScan(); }
-  });
-
-  for (const kind of ["camera", "lens", "film"]) {
-    document.getElementById(`tile-${kind}`).addEventListener("click", () => openPicker(kind));
+  // Header
+  document.getElementById("open-folder").addEventListener("click", () => void onOpenFolder());
+  for (const tab of document.querySelectorAll(".view-tab")) {
+    tab.addEventListener("click", () => {
+      if (tab.dataset.view === "library") void openLibrary();
+      else showView(tab.dataset.view);
+    });
   }
+  document.getElementById("theme-dark").addEventListener("click", () => applyTheme("dark"));
+  document.getElementById("theme-paper").addEventListener("click", () => applyTheme("paper"));
+  document.getElementById("settings-open").addEventListener("click", () => void openSettings());
 
+  // Home
+  document.getElementById("home-open").addEventListener("click", () => void onOpenFolder());
+  document.getElementById("home-path").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); void openFolder(e.target.value); }
+  });
+  document.getElementById("home-choose-library").addEventListener("click", () => void chooseLibraryFolder());
+
+  // Picker
   document.getElementById("picker-close").addEventListener("click", closePicker);
   document.getElementById("picker-backdrop").addEventListener("click", closePicker);
   document.getElementById("picker-search").addEventListener("input", renderPickerGrid);
+  document.getElementById("picker-new").addEventListener("click", addFromPicker);
   document.getElementById("picker-show-all").addEventListener("click", () => {
     const grid = document.getElementById("picker-grid");
     grid.dataset.showAll = "true";
     renderPickerGrid();
   });
 
-  document.getElementById("advanced-toggle").addEventListener("click", (e) => {
-    const btn = e.currentTarget;
-    const body = document.getElementById("advanced-body");
-    const expanded = btn.getAttribute("aria-expanded") === "true";
-    btn.setAttribute("aria-expanded", String(!expanded));
-    body.classList.toggle("hidden", expanded);
-  });
-
-  for (const id of ["adv-dev-provider", "adv-dev-method", "adv-scan-provider", "adv-scan-method"]) {
-    document.getElementById(id).addEventListener("change", (e) => {
-      state.advanced[e.target.dataset.field] = e.target.value;
-      markPreviewStale();
-      saveStickyState();
-    });
-  }
-  document.getElementById("adv-roll-notes").addEventListener("change", (e) => {
-    state.advanced.roll_notes = e.target.value;
-    markPreviewStale();
-    saveStickyState();
-  });
-  document.getElementById("adv-place").addEventListener("change", (e) => {
-    state.advanced.place = e.target.value;
-    markPreviewStale();
-    saveStickyState();
-  });
-  document.getElementById("adv-roll-date").addEventListener("change", (e) => {
-    state.advanced.roll_date = e.target.value || "";
-    state.advanced.roll_date_source = state.advanced.roll_date ? "user" : "";
-    renderRollDate();
-    markPreviewStale();
-    saveStickyState();
-  });
-  document.getElementById("adv-replace-managed").addEventListener("change", (e) => {
-    state.advanced.replace_managed_metadata = !!e.target.checked;
-    markPreviewStale();
-    saveStickyState();
-  });
-
-  document.getElementById("preview-invert-toggle").addEventListener("click", () => {
-    state.previewInvert = !state.previewInvert;
-    renderPreviewInvertToggle();
-    saveStickyState();
-    clearPreviewStatus();
-    if (state.lastDryRunResult) renderDiff(state.lastDryRunResult);
-    renderTagSheet();
-  });
-  document.getElementById("create-previews-btn").addEventListener("click", onCreatePreviews);
-  document.getElementById("dry-run-btn").addEventListener("click", onDryRun);
-  document.getElementById("apply-btn").addEventListener("click", onApply);
-
-  // Settings view toggle
-  document.getElementById("settings-open").addEventListener("click", openSettings);
-  for (const tab of document.querySelectorAll(".view-tab")) {
-    tab.addEventListener("click", () => {
-      if (tab.dataset.view === "library") void openLibrary();
-      else if (tab.dataset.view === "inbox") void openInbox();
-      else showView(tab.dataset.view);
-    });
-  }
-  document.getElementById("library-rescan").addEventListener("click", () => void rescanLibrary());
-  document.getElementById("library-normalize").addEventListener("click", () => void openNamingPanel());
+  // Library
   document.getElementById("library-filter").addEventListener("input", (e) => {
     state.libraryFilter = e.target.value;
     if (state.library) renderLibrary();
   });
+  document.getElementById("library-menu-btn").addEventListener("click", (e) => { e.stopPropagation(); toggleLibraryMenu(); });
+  for (const item of document.querySelectorAll("#library-menu .menu-item")) {
+    item.addEventListener("click", () => void onLibraryMenu(item.dataset.menu));
+  }
+  document.addEventListener("click", () => toggleLibraryMenu(false));
   document.getElementById("naming-close").addEventListener("click", closeNamingPanel);
   document.getElementById("naming-apply").addEventListener("click", () => void applySelectedRenames());
   document.getElementById("naming-undo").addEventListener("click", () => void undoLastRename());
-  document.getElementById("library-choose-root").addEventListener("click", onChooseLibraryRoot);
-  document.getElementById("theme-dark").addEventListener("click", () => applyTheme("dark"));
-  document.getElementById("theme-paper").addEventListener("click", () => applyTheme("paper"));
-  document.getElementById("settings-back").addEventListener("click", closeSettings);
+
+  // Folder screen
+  document.getElementById("sheet-cut").addEventListener("click", cutBeforeSelected);
+  document.getElementById("sheet-new-roll").addEventListener("click", newRollFromSelection);
+  document.getElementById("sheet-leave-out").addEventListener("click", leaveOutSelection);
+  document.getElementById("sheet-clear").addEventListener("click", clearSheetSelection);
+  document.getElementById("sheet-invert").addEventListener("click", toggleInvert);
+  document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
+  for (const btn of document.querySelectorAll("#destination .segment")) {
+    btn.addEventListener("click", () => setDestination(btn.dataset.dest));
+  }
+  document.getElementById("folder-run").addEventListener("click", () => void runFolderAction());
+  document.getElementById("folder-undo").addEventListener("click", () => void undoLastBatch());
+
+  // Settings
+  document.getElementById("settings-back").addEventListener("click", () => void closeSettings());
   document.getElementById("settings-show-archived").addEventListener("change", (e) => {
     settingsState.showArchived = e.target.checked;
     refreshAllSettingsLists();
@@ -3859,48 +3377,21 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   document.getElementById("general-library-browse").addEventListener("click", onBrowseLibraryRoot);
 
-  // Inbox view
-  document.getElementById("inbox-browse").addEventListener("click", () => void onInboxBrowse());
-  document.getElementById("inbox-load").addEventListener("click", () => void loadInboxFolder(document.getElementById("inbox-folder").value));
-  document.getElementById("inbox-folder").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); void loadInboxFolder(e.target.value); }
-  });
-  document.getElementById("sheet-cut").addEventListener("click", cutBeforeSelected);
-  document.getElementById("sheet-new-roll").addEventListener("click", newRollFromSelection);
-  document.getElementById("sheet-leave-out").addEventListener("click", leaveOutSelection);
-  document.getElementById("sheet-clear").addEventListener("click", clearSheetSelection);
-  document.getElementById("sheet-thumbs").addEventListener("click", () => void buildInboxThumbnails());
-  document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
-  document.getElementById("inbox-destination").addEventListener("change", (e) => {
-    state.inbox.destination = e.target.value;
-    if (e.target.value.startsWith("import-")) {
-      const mode = e.target.value.slice("import-".length);
-      if (state.settings) state.settings.import_mode = mode;
-      queueSettingsPatch({ import_mode: mode });
-    }
-    renderInboxDestination();
-    updateInboxRunButton();
-  });
-  document.getElementById("inbox-run").addEventListener("click", () => void runInboxBatch());
-  document.getElementById("inbox-undo").addEventListener("click", () => void undoInboxBatch());
-  document.getElementById("tag-sheet-split").addEventListener("click", () => void openInbox({ folder: state.folder, destination: "split" }));
-
   setupWindowDrop();
 });
 
 // Full-window drop handling.
 // Finder/Explorer/Nautilus all write the folder's absolute path into the drag
-// payload as `text/uri-list` (`file:///Users/you/Photos/...`). We read that,
-// fill the folder input, and auto-scan. The browser intentionally blocks
-// access to absolute paths via `File` / `webkitdirectory` for security, so
-// this URI-list trick is the *only* way to get a real path out of a drop.
+// payload as `text/uri-list` (`file:///Users/you/Photos/...`). We read that
+// and open the folder. The browser intentionally blocks access to absolute
+// paths via `File` / `webkitdirectory` for security, so this URI-list trick
+// is the *only* way to get a real path out of a drop.
 //
 // Dragenter/dragleave fire per-element as the cursor crosses children, so a
 // depth counter keeps the overlay stable — it only hides when the counter
 // hits zero (drag truly left the window or dropped).
 function setupWindowDrop() {
   const overlay = document.getElementById("drop-overlay");
-  const input = document.getElementById("folder-input");
   let depth = 0;
 
   const show = () => { overlay.classList.remove("hidden"); };
@@ -3939,23 +3430,22 @@ function setupWindowDrop() {
 
     const path = extractPathFromDrop(e.dataTransfer);
     if (path) {
-      acceptDroppedFolder(path);
+      void openFolder(path);
       return;
     }
 
     // Browser stripped the path (common with network volumes under
-    // /Volumes/...). Fall back: focus the input, pre-fill whatever name we
-    // can glean, show a hint next to it, and let the user paste the path
-    // they can easily grab by dragging the same folder into Terminal.
+    // /Volumes/...). Ask for it: dragging the same folder into Terminal
+    // gives the full path to paste.
     const hintName = guessDroppedName(e.dataTransfer);
-    showPasteFallback(hintName);
+    const typed = await askText(
+      `Your browser did not share the folder's full path${hintName ? ` (${hintName})` : ""}. Drag the same folder into Terminal to copy its path, then paste it here.`,
+      { title: "Folder path needed", placeholder: "/Volumes/…" }
+    );
+    if (typed) void openFolder(typed);
   });
 }
 
-// Walk every mimetype the browser exposes and try to extract an absolute
-// filesystem path. Browsers vary wildly here, especially for network mounts.
-// We log the raw payload to console so users can send us evidence if it
-// still fails for a weird file manager.
 function extractPathFromDrop(dt) {
   if (!dt) return "";
   const dump = {};
@@ -4004,18 +3494,3 @@ function guessDroppedName(dt) {
   return "";
 }
 
-function showPasteFallback(hintName) {
-  const input = document.getElementById("folder-input");
-  input.focus();
-  input.select();
-  const msg = [
-    "Your browser wouldn't share the full folder path with this page",
-    "(common for network drives).",
-    "",
-    hintName ? `Detected: ${hintName}` : "",
-    "",
-    "Easiest workaround: drag the same folder into Terminal to copy the full",
-    "path, then paste it into the folder input.",
-  ].filter(Boolean).join("\n");
-  void notify(msg, "Folder path needed");
-}

@@ -241,7 +241,15 @@ film stock rows.
   (`services/exiftool_locator.py`): setting → `FILMEX_EXIFTOOL` → `PATH` →
   Homebrew/system candidates → bundled copy. Never spawn a bare
   `"exiftool"`.
-- **Dialogs**: no `alert`/`confirm`. Use `notify()` / `ask()` in `app.js`.
+- **Dialogs**: no `alert`/`confirm`/`prompt`. Use `notify()` / `ask()` /
+  `askText()` in `app.js`.
+- **Screens** (`index.html`, one `<main>` each): **Home** until a library
+  folder is set (drop zone, Open folder, recent folders, choose a library);
+  **Library** once one is (the start screen from then on); the **Folder
+  screen** for any open folder; **Settings**. The header shows a Library
+  tab when a library exists, a tab for the open folder, and "Open folder"
+  always. There is no separate tagging or import view: everything a
+  folder needs happens on its screen.
 - **Tagging pipeline** (`services/tagging.py`): `plan_tagging(request,
   session)` resolves ids into snapshots and intents, `preview_all` is the
   dry run, `apply_all` writes file by file and the manifest at the end. The
@@ -252,13 +260,13 @@ film stock rows.
   roll folder. It owns image extensions, source kinds, the junk rules
   (hidden files, `._*` AppleDouble, `smbdelete*`, `@eaDir`, `#recycle`,
   `Thumbs.db`), the litter a cleanup may delete, frame grouping and the
-  `.thm` lookup. The Tag view scan, thumbnails, Library index, contact
+  `.thm` lookup. The folder scan, thumbnails, Library index, contact
   sheet, split and import all read folders through it.
 
 ## Naming system
 
 `services/naming.py` renders roll folder names from the template in
-Settings ▸ General (default `{date}-{camera}-{film}`, optional `-{place}`
+Settings ▸ Preferences (default `{date}-{camera}-{film}`, optional `-{place}`
 suffix). Tokens: `{date} {year} {month} {camera} {film} {lens} {place}
 {roll}`. `{camera}` and `{film}` use the entity's `short_name` when set
 (`F3`, `Gold`), else the slugged display name. Slugs keep Unicode letters,
@@ -273,7 +281,7 @@ in `operation_log`, and can undo it. Renames and undos are exclusive jobs.
 
 ## Library view
 
-`services/library.py` indexes the library root (Settings ▸ General) with a
+`services/library.py` indexes the library root (Settings ▸ Preferences) with a
 shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
 
 - A folder's **tagged set** is the union of `applied_files` over manifest
@@ -291,9 +299,15 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   instantly and survives an unmounted share; `POST /api/library/rescan`
   replaces the cache in one transaction as a job.
 - Dry-run and apply accept `files: [...]` to restrict to a subset; names
-  are validated against the scan. The UI shows the subset as a chip.
+  are validated against the scan. "Tag remaining" opens the folder with
+  only the untagged files in its roll; the rest show as left out.
+- Settings has two groups: Preferences (library folder, name template,
+  ExifTool) first, then the gear catalogue. Gear can also be added from
+  inside a picker ("+ New camera…"), which opens the same form and picks
+  the saved row. The import default (`import_mode`) is not in Settings;
+  the Folder screen's destination control sets it.
 
-## Inbox: split and import
+## Folder screen: keep, split and import
 
 `services/frames.py` turns a folder into **frames**: every file sharing a
 basename (`DSC0001.ARW`, `DSC0001.JPG`, `DSC0001.xmp` or the legacy
@@ -304,10 +318,31 @@ folder with raw frames, a JPEG-only frame is flagged `unmatched_jpeg` so
 the user can leave camera JPEGs behind.
 
 A **roll draft** (`fileops.RollDraft`) is a folder name, a list of frame
-keys and the tagging fields of `DryRunRequest` minus folder and files. The
-Inbox view builds drafts on a contact sheet; the server never trusts them:
-`resolve_rolls` re-checks names, duplicates and frame membership, and
-both apply paths re-plan right before running.
+keys and the tagging fields of `DryRunRequest` minus folder and files,
+including the per-file `file_keywords` and `file_lens_ids` (file names are
+the same wherever the roll ends up). The Folder screen builds drafts on a
+contact sheet; the server never trusts them: `resolve_rolls` re-checks
+names, duplicates and frame membership, and both apply paths re-plan right
+before running.
+
+**What the one action does** is decided by the destination control and the
+roll count, in `plannedAction()` in `app.js`:
+
+| Destination | Rolls | Action | Endpoint |
+| --- | --- | --- | --- |
+| Keep here | 1 | write in place (the roll's files, all or a subset) | `POST /api/metadata/apply/stream` |
+| Keep here | 2+ | split | `POST /api/folder/split/apply` |
+| Copy / Move to library | any | import | `POST /api/import/apply` |
+
+The destination defaults to keep for a folder inside the library, for a
+"Tag remaining" subset, or without a library; otherwise to the
+`import_mode` setting, which the control updates. A single kept roll shows
+no folder name: the folder is the roll. The "Changes" expander on a card
+is the dry run for that roll's files; for a roll that will get a new
+folder name it passes `as_roll` so the `Roll|…` keyword previews right.
+A new roll starts from the last used gear and processing fields
+(`last_selection` in settings), and a folder with a manifest fills its
+first roll from it.
 
 **Split** (`services/fileops.py`): a roll folder under `<root>/<year>/`
 becomes siblings in that year folder; a flat year folder or a folder

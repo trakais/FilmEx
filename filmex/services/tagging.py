@@ -121,15 +121,20 @@ class _Processing:
     scan_method: ScanMethod | None
 
 
-def plan_tagging(req: DryRunRequest, session: Session) -> TaggingPlan:
-    """Resolve a request into a plan, or raise ``TaggingError``."""
+def plan_tagging(req: DryRunRequest, session: Session, *, roll_id: str | None = None) -> TaggingPlan:
+    """Resolve a request into a plan, or raise ``TaggingError``.
+
+    ``roll_id`` overrides the folder's name as the roll id; only a dry run
+    passes it, to preview a roll under the folder name it is about to get.
+    """
     scan = _scan(req.folder)
     names = [f.name for f in scan.files]
     gear = _resolve_gear(session, req)
     processing = _resolve_processing(session, req)
+    roll_id = roll_id or scan.roll_id
     return TaggingPlan(
         folder=scan.folder,
-        roll_id=scan.roll_id,
+        roll_id=roll_id,
         source_kind=scan.source_kind,
         scan_tier=scan.scan_tier,
         camera_snapshot=_camera_snapshot(gear.camera),
@@ -139,7 +144,7 @@ def plan_tagging(req: DryRunRequest, session: Session) -> TaggingPlan:
         dev_method_snapshot=_named_snapshot(processing.dev_method),
         scan_provider_snapshot=_named_snapshot(processing.scan_provider),
         scan_method_snapshot=_named_snapshot(processing.scan_method),
-        keyword_context=_keyword_context(scan.roll_id, gear, processing, req.extra_keywords),
+        keyword_context=_keyword_context(roll_id, gear, processing, req.extra_keywords),
         file_keywords_by_name=_normalize_file_keywords(req.file_keywords, names),
         file_lens_by_name=_normalize_file_lenses(session, req.file_lens_ids, names, gear.camera),
         capture_date=CaptureDate(_normalize_roll_date(req.roll_date)),
