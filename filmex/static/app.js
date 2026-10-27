@@ -223,7 +223,7 @@ function renderThemeSwitch() {
 // One dialog element serves alert, confirm and prompt. With `input`, the
 // promise resolves with the typed text, or null when dismissed.
 
-function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabel = null, input = null } = {}) {
+function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabel = null, input = null, danger = false } = {}) {
   return new Promise((resolve) => {
     const dialog = document.getElementById("dialog");
     const backdrop = document.getElementById("dialog-backdrop");
@@ -233,6 +233,8 @@ function showDialog({ title = "FilmEx", message = "", okLabel = "OK", cancelLabe
     document.getElementById("dialog-title").textContent = title;
     document.getElementById("dialog-message").textContent = message;
     okBtn.textContent = okLabel;
+    okBtn.classList.toggle("danger", danger);
+    okBtn.classList.toggle("primary", !danger);
     cancelBtn.textContent = cancelLabel || "Cancel";
     cancelBtn.classList.toggle("hidden", !cancelLabel);
     field.classList.toggle("hidden", !input);
@@ -274,8 +276,8 @@ function notify(message, title = "FilmEx") {
   return showDialog({ title, message });
 }
 
-function ask(message, { title = "Confirm", okLabel = "Continue", cancelLabel = "Cancel" } = {}) {
-  return showDialog({ title, message, okLabel, cancelLabel });
+function ask(message, { title = "Confirm", okLabel = "Continue", cancelLabel = "Cancel", danger = false } = {}) {
+  return showDialog({ title, message, okLabel, cancelLabel, danger });
 }
 
 
@@ -823,10 +825,17 @@ function groupPickerFilms(items) {
 
 function renderPickerTile(item, kind) {
   const tile = document.createElement("div");
+  tile.tabIndex = 0;
+  tile.setAttribute("role", "button");
   // Film tiles would collide with the brand-color strip if we reused the
   // default .favorite ::before dot — the CSS resolves that by attaching the
   // film-grid favorite marker to ::after instead, so the class is safe here.
   tile.className = "picker-tile" + (item.favorite ? " favorite" : "");
+  const current = pickerTarget?.current?.(kind);
+  if (current && current.id === item.id) {
+    tile.classList.add("current");
+    tile.setAttribute("aria-pressed", "true");
+  }
 
   if (kind === "film") {
     const [c1, c2] = filmBrandColors(item.brand);
@@ -868,6 +877,9 @@ function renderPickerTile(item, kind) {
   }
 
   tile.addEventListener("click", () => selectFromPicker(item));
+  tile.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectFromPicker(item); }
+  });
   return tile;
 }
 
@@ -1195,7 +1207,7 @@ const SETTINGS_KINDS = {
     endpoint: "/api/film-stocks",
     groupBy: "brand",
     primary: "display_name",
-    sub: (row) => `${row.film_type} · ISO ${row.box_speed_iso}`,
+    sub: (row) => `${filmTypeLabel(row.film_type)} · ISO ${row.box_speed_iso}`,
     fields: [
       { name: "brand", label: "Brand", type: "brand-ref", required: true, help: "Pick from existing brands. Create a new brand under Film brands first." },
       { name: "name", label: "Name", required: true },
@@ -2040,7 +2052,7 @@ async function applySelectedRenames() {
   if (!items.length) return;
   const ok = await ask(
     `Rename ${items.length} folder${items.length === 1 ? "" : "s"} and rewrite the Roll keyword on their tagged files?`,
-    { okLabel: "Rename" }
+    { okLabel: "Rename", danger: true }
   );
   if (!ok) return;
   const btn = document.getElementById("naming-apply");
@@ -2421,7 +2433,7 @@ async function gatherRoll(path) {
     `Move ${plan.file_count} file${plan.file_count === 1 ? "" : "s"} from ${names} into ${plan.roll_name}, merge their manifests, and remove the empty subfolders?\n\n` +
     `Lightroom knows these files by their current paths: a catalog that has them will show them as missing until you relink the folder (Library ▸ Find Missing Folder). ` +
     `That is harmless for developed JPEGs; for raws you have edited in Lightroom, move the folder in Lightroom instead.\n\nThe batch can be undone.`,
-    { title: "Gather into one folder", okLabel: "Gather" }
+    { title: "Gather into one folder", okLabel: "Gather", danger: true }
   );
   if (!ok) return;
   if (state.folder.path !== plan.roll) await openFolder(plan.roll);
@@ -2998,7 +3010,7 @@ function compactTile(kind, entity, roll) {
   const colors = kind === "film" && entity ? filmBrandColors(entity.brand) : null;
   const style = colors ? ` style="--brand-c1:${escapeHtml(colors[0])};--brand-c2:${escapeHtml(colors[1])}"` : "";
   return `
-    <div class="tile compact ${kind}-tile${entity ? " selected" : ""}" data-kind="${kind}" data-roll="${roll.id}"${style}>
+    <div class="tile compact ${kind}-tile${entity ? " selected" : ""}" data-kind="${kind}" data-roll="${roll.id}" role="button" tabindex="0" aria-haspopup="dialog"${style}>
       <div class="tile-label">${label}</div>
       <div class="tile-content${entity ? "" : " empty"}">${entity ? escapeHtml(copy.title) : `Pick a ${kind}`}</div>
       ${entity ? `<div class="tile-sub">${escapeHtml(copy.sub)}</div>` : ""}
@@ -3049,7 +3061,7 @@ function rollCardName(roll) {
       <span class="tile-label">Folder name</span>
       <input type="text" class="roll-name-input" value="${escapeHtml(roll.name)}" placeholder="from the template…" spellcheck="false" />
       <button type="button" class="action-link roll-name-auto${roll.nameAuto ? " hidden" : ""}">use template</button>
-      <span class="roll-name-error${roll.nameError ? "" : " hidden"}">${escapeHtml(roll.nameError || "")}</span>
+      <span class="roll-name-error${roll.nameError ? "" : " hidden"}${roll.nameErrorSoft ? " soft" : ""}">${escapeHtml(roll.nameError || "")}</span>
     </div>`;
 }
 
@@ -3159,6 +3171,11 @@ function wireRollName(el, roll) {
 function wireRollGear(el, roll) {
   for (const tile of el.querySelectorAll(".tile")) {
     tile.addEventListener("click", () => openPicker(tile.dataset.kind, rollPickerTarget(roll)));
+    tile.addEventListener("keydown", (e) => {
+      if (e.target !== tile || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      openPicker(tile.dataset.kind, rollPickerTarget(roll));
+    });
     tile.querySelector(".tile-clear")?.addEventListener("click", (e) => {
       e.stopPropagation();
       setRollGear(roll, withoutGear(rollGear(roll), tile.dataset.kind));
@@ -3257,6 +3274,7 @@ function setRollGear(roll, gear) {
 function rollPickerTarget(roll) {
   return {
     camera: () => roll.tagging.camera,
+    current: (kind) => roll.tagging[kind],
     set: (kind, item) => setRollGear(roll, withGear(rollGear(roll), kind, item)),
   };
 }
@@ -3268,6 +3286,8 @@ function scheduleRollName(roll) {
   clearTimeout(rollNameTimers.get(roll.id));
   rollNameTimers.set(roll.id, setTimeout(() => void refreshRollName(roll), NAME_DEBOUNCE_MS));
 }
+
+const MISSING_TOKEN_WORDS = { date: "date", year: "date", month: "date", camera: "camera", film: "film", lens: "lens", place: "place" };
 
 async function refreshRollName(roll) {
   if (!roll.nameAuto) return;
@@ -3285,9 +3305,14 @@ async function refreshRollName(roll) {
     });
     if (!roll.nameAuto) return;
     roll.name = res.name || "";
-    roll.nameError = res.error ? `Template: ${res.error}` : null;
+    const missing = /^missing value for \{(\w+)\}$/.exec(res.error || "");
+    roll.nameError = !res.error ? null
+      : missing ? `The name fills in once the roll has a ${MISSING_TOKEN_WORDS[missing[1]] || missing[1]}.`
+      : `Template: ${res.error}`;
+    roll.nameErrorSoft = !!missing;
   } catch (e) {
     roll.nameError = `Could not render the name: ${e.message}`;
+    roll.nameErrorSoft = false;
   }
   const card = document.querySelector(`.roll-card[data-id="${cssEscape(roll.id)}"]`);
   const input = card?.querySelector(".roll-name-input");
@@ -3296,6 +3321,7 @@ async function refreshRollName(roll) {
     const err = card.querySelector(".roll-name-error");
     err.textContent = roll.nameError || "";
     err.classList.toggle("hidden", !roll.nameError);
+    err.classList.toggle("soft", !!roll.nameErrorSoft);
     card.querySelector(".roll-name-auto").classList.toggle("hidden", roll.nameAuto);
   }
   updateRunButton();
@@ -3503,7 +3529,7 @@ async function writeInPlace() {
   const images = rollImages(roll);
   const all = images.length === folderFrames().reduce((n, f) => n + f.images.length, 0);
   const body = { folder: folder.path, files: all ? undefined : images, ...rollTagging(roll) };
-  const ok = await ask(writeConfirmText(folder.path, images, roll), { title: "Write metadata", okLabel: "Write" });
+  const ok = await ask(writeConfirmText(folder.path, images, roll), { title: "Write metadata", okLabel: "Write", danger: true });
   if (!ok) return;
   startRun();
   try {
@@ -3598,7 +3624,7 @@ async function confirmPlan(action, dest, body) {
   }
   const label = action === "split" ? "Split" : dest === "move" ? "Move" : "Copy";
   const n = plan.items.length;
-  return ask(describePlan(plan, action, dest), { title: `${label} ${n} roll${n === 1 ? "" : "s"}?`, okLabel: label });
+  return ask(describePlan(plan, action, dest), { title: `${label} ${n} roll${n === 1 ? "" : "s"}?`, okLabel: label, danger: true });
 }
 
 function batchProgressHandlers(dest) {
@@ -3785,6 +3811,12 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("picker-close").addEventListener("click", closePicker);
   document.getElementById("picker-backdrop").addEventListener("click", closePicker);
   document.getElementById("picker-search").addEventListener("input", renderPickerGrid);
+  // Enter in the search picks the first match.
+  document.getElementById("picker-search").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = document.querySelector("#picker-grid .picker-tile");
+    if (first) { e.preventDefault(); first.click(); }
+  });
   document.getElementById("picker-new").addEventListener("click", addFromPicker);
   document.getElementById("picker-show-all").addEventListener("click", () => {
     const grid = document.getElementById("picker-grid");
