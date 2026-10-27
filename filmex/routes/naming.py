@@ -80,9 +80,10 @@ def apply_renames(req: ApplyRenamesRequest, session: Session = Depends(get_sessi
     return job_routes.stream(jobs.get_manager().submit("rename", body, exclusive=True, start={"total": len(items)}))
 
 
+# Each undo returns what the undo job reports.
 _UNDO_BY_KIND = {
     "rename": renames.undo,
-    "split": fileops.undo_split,
+    "split": lambda session, op_id, **options: fileops.undo_split(session, op_id, **options).to_dict(),
     "import": importer.undo_import,
 }
 

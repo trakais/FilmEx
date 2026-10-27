@@ -124,8 +124,13 @@ class ImportPlan:
     free_bytes: int | None
 
     @property
+    def problems(self) -> list[str]:
+        """Every reason the plan cannot run; roll problems name their roll."""
+        return self.errors + [f"{i.name}: {e}" for i in self.items for e in i.errors]
+
+    @property
     def ok(self) -> bool:
-        return not self.errors and not any(i.errors for i in self.items)
+        return not self.problems
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -338,10 +343,10 @@ def apply_import(
 
         record["verified"] = True
         tagged = fileops.tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
-        record["applied"] = tagged["applied"]
-        record["errors"].extend(tagged["errors"])
-        record["tag_skipped"] = tagged.get("skipped")
-        errors.extend(f"{item.name}: {e}" for e in tagged["errors"])
+        record["applied"] = tagged.applied
+        record["errors"].extend(tagged.errors)
+        record["tag_skipped"] = tagged.skipped
+        errors.extend(f"{item.name}: {e}" for e in tagged.errors)
         _annotate_manifest(target, source=source_path, mode=mode, files=record["files"])
 
         if mode == "move":

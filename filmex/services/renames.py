@@ -361,14 +361,7 @@ def undo(
     cancelled: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
     """Reverse a rename operation: folders back, manifests back, keywords back."""
-    op = operations.get(session, op_id)
-    if op is None:
-        raise KeyError(op_id)
-    if op.kind != "rename":
-        raise ValueError(f"cannot undo an operation of kind {op.kind}")
-    if op.status == operations.UNDONE:
-        raise ValueError("operation already undone")
-    data = operations.to_dict(op)
+    data = operations.load_for_undo(session, op_id, "rename")
     emit = progress or (lambda e: None)
     restored: list[dict[str, str]] = []
     errors: list[str] = []

@@ -39,6 +39,9 @@ SIBLINGS = "siblings"
 SUBFOLDERS = "subfolders"
 
 
+def _no_progress(event: dict[str, Any]) -> None:
+    pass
+
 
 class PlanError(ValueError):
     """The batch cannot run as requested; ``errors`` lists why."""
@@ -188,6 +191,16 @@ def resolve_rolls(
     return resolved, unassigned, errors
 
 
+@dataclass
+class TagOutcome:
+    """What tagging a new roll folder did: the files written, per-file or
+    request errors, and ``skipped`` with the reason when nothing was tried."""
+
+    applied: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    skipped: str | None = None
+
+
 def tag_folder(
     session: Session,
     folder: Path,
@@ -195,31 +208,39 @@ def tag_folder(
     *,
     progress: Progress | None = None,
     cancelled: Cancelled = lambda: False,
-) -> dict[str, Any]:
+) -> TagOutcome:
     """Run the apply pipeline on every image in ``folder``.
 
-    Without ExifTool the files are left untagged and the result says so; the
+    Without ExifTool the files are left untagged and the outcome says so; the
     Library then shows the folder as untagged, ready for the Tag view.
     """
-    emit = progress or (lambda e: None)
+    emit = progress or _no_progress
     if not exiftool.available():
-        return {"applied": [], "errors": [], "skipped": "ExifTool not available: files were moved but not tagged"}
-    req = DryRunRequest(folder=str(folder), **tagging)
+        return TagOutcome(skipped="ExifTool not available: files were moved but not tagged")
     try:
-        tagging_plan = tg.plan_tagging(req, session)
+        tagging_plan = tg.plan_tagging(DryRunRequest(folder=str(folder), **tagging), session)
     except tg.TaggingError as exc:
-        return {"applied": [], "errors": [f"tagging: {exc.detail}"], "skipped": None}
-    final = tg.apply_all(
+        return TagOutcome(errors=[f"tagging: {exc.detail}"])
+    applied = tg.apply_all(
         tagging_plan,
         progress=lambda event: emit({**event, "step": "tag", "roll": folder.name}),
         cancelled=cancelled,
     )
-    return {
-        "applied": final.applied_files,
-        "errors": final.errors,
-        "manifest_path": final.manifest_path,
-        "skipped": None,
-    }
+    return TagOutcome(applied=applied.applied_files, errors=applied.errors)
+
+
+def remove_roll_folder(folder: Path) -> str | None:
+    """Remove a roll folder a batch created: its manifest, OS litter, then the
+    folder. Returns what stopped it, or None once the folder is gone."""
+    manifest_path = mf.manifest_path_for(folder)
+    if manifest_path.is_file():
+        try:
+            manifest_path.unlink()
+        except OSError as exc:
+            return f"{folder.name}: could not remove its manifest: {exc}"
+    if remove_folder_if_empty(folder):
+        return None
+    return f"{folder.name}: left in place, it still holds files"
 
 
 # ---------- split: plan ----------
@@ -249,8 +270,13 @@ class SplitPlan:
     remove_source: bool  # the source folder will be empty of images afterwards
 
     @property
+    def problems(self) -> list[str]:
+        """Every reason the plan cannot run; roll problems name their roll."""
+        return self.errors + [f"{i.name}: {e}" for i in self.items for e in i.errors]
+
+    @property
     def ok(self) -> bool:
-        return not self.errors and not any(i.errors for i in self.items)
+        return not self.problems
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -329,6 +355,108 @@ def _same_path(a: Path, b: Path) -> bool:
         return False
 
 
+# ---------- split: results ----------
+
+
+@dataclass
+class Move:
+    """One file that changed place. Journaled as ``{"from", "to"}``."""
+
+    source: str
+    target: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"from": self.source, "to": self.target}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> Move:
+        return cls(source=data["from"], target=data["to"])
+
+
+@dataclass
+class SplitRoll:
+    """One roll folder a split created."""
+
+    name: str
+    path: str
+    files: list[str] = field(default_factory=list)
+    applied: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    tag_skipped: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SplitRoll:
+        return cls(
+            name=data["name"],
+            path=data["path"],
+            files=list(data.get("files") or []),
+            applied=list(data.get("applied") or []),
+            errors=list(data.get("errors") or []),
+            tag_skipped=data.get("tag_skipped"),
+        )
+
+
+@dataclass
+class SplitResult:
+    """What a split did. ``to_dict`` is both the journal entry and what the
+    split job reports; ``from_dict`` reads the journal back for undo."""
+
+    created: list[SplitRoll] = field(default_factory=list)
+    moves: list[Move] = field(default_factory=list)
+    removed_source: bool = False
+    stashed_manifest: dict[str, Any] | None = None
+    errors: list[str] = field(default_factory=list)
+    cancelled: bool = False
+    operation_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {
+            "created": [roll.to_dict() for roll in self.created],
+            "moves": [move.to_dict() for move in self.moves],
+            "removed_source": self.removed_source,
+            "stashed_manifest": self.stashed_manifest,
+            "errors": list(self.errors),
+            "cancelled": self.cancelled,
+        }
+        if self.operation_id:
+            data["operation_id"] = self.operation_id
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SplitResult:
+        return cls(
+            created=[SplitRoll.from_dict(r) for r in data.get("created") or []],
+            moves=[Move.from_dict(m) for m in data.get("moves") or []],
+            removed_source=bool(data.get("removed_source")),
+            stashed_manifest=data.get("stashed_manifest"),
+            errors=list(data.get("errors") or []),
+            cancelled=bool(data.get("cancelled")),
+        )
+
+
+@dataclass
+class SplitUndoResult:
+    restored: list[Move] = field(default_factory=list)
+    removed_folders: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    note: str = "Metadata written by the split stays on the files; re-tag the folder to replace it."
+    operation_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {
+            "restored": [move.to_dict() for move in self.restored],
+            "removed_folders": list(self.removed_folders),
+            "errors": list(self.errors),
+            "note": self.note,
+        }
+        if self.operation_id:
+            data["operation_id"] = self.operation_id
+        return data
+
+
 # ---------- split: apply ----------
 
 
@@ -340,81 +468,88 @@ def apply_split(
     root: str | None,
     progress: Progress | None = None,
     cancelled: Cancelled = lambda: False,
-) -> dict[str, Any]:
+) -> SplitResult:
     """Create the roll folders, move the frames, tag each new folder, journal it.
 
     The plan is recomputed right before running so a change on disk since
     the preview stops the batch instead of moving the wrong files.
     """
-    emit = progress or (lambda e: None)
     plan = plan_split(source, rolls, root=root)
     if not plan.ok:
-        raise PlanError(plan.errors + [e for i in plan.items for e in (f"{i.name}: {x}" for x in i.errors)])
-    source_path = Path(plan.source)
-
-    op = operations.start(
-        session,
-        "split",
-        {"source": plan.source, "target_parent": plan.target_parent, "layout": plan.layout,
-         "items": [{"name": i.name, "target": i.target, "frames": i.frames} for i in plan.items]},
-        root=root,
-    )
-    moves: list[dict[str, str]] = []
-    created: list[dict[str, Any]] = []
-    errors: list[str] = []
-    was_cancelled = False
-    total = sum(len(i.files) for i in plan.items)
-    done = 0
-
-    try:
-        for item in plan.items:
-            if cancelled():
-                was_cancelled = True
-                break
-            target = Path(item.target)
-            target.mkdir(parents=False, exist_ok=False)
-            record: dict[str, Any] = {"name": item.name, "path": item.target, "files": [], "applied": [], "errors": [], "tag_skipped": None}
-            created.append(record)
-            for name in item.files:
-                if cancelled():
-                    was_cancelled = True
-                    break
-                src = source_path / name
-                dst = target / name
-                _move_file(src, dst)
-                moves.append({"from": str(src), "to": str(dst)})
-                record["files"].append(name)
-                done += 1
-                emit({"type": "progress", "step": "move", "roll": item.name, "file": name, "done": done, "total": total})
-            if was_cancelled:
-                break
-            tagged = tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
-            record["applied"] = tagged["applied"]
-            record["errors"] = tagged["errors"]
-            record["tag_skipped"] = tagged.get("skipped")
-            errors.extend(f"{item.name}: {e}" for e in tagged["errors"])
-            emit({"type": "progress", "step": "roll", "roll": item.name, "files": len(record["files"]), "applied": len(record["applied"])})
-    except OSError as exc:
-        errors.append(f"stopped: {exc}")
-
-    # A source with no images left keeps nothing worth a folder: its manifest
-    # goes into the journal (undo restores it) and the folder is removed when
-    # only litter remains. In the subfolders layout the folder stays, since
-    # it now holds the new rolls, but the stale manifest still goes.
-    stashed, removed_source = _retire_source(source_path, remove_folder=plan.layout == SIBLINGS)
-
-    result = {
-        "created": created,
-        "moves": moves,
-        "removed_source": removed_source,
-        "stashed_manifest": stashed,
-        "errors": errors,
-        "cancelled": was_cancelled,
+        raise PlanError(plan.problems)
+    journal = {
+        "source": plan.source,
+        "target_parent": plan.target_parent,
+        "layout": plan.layout,
+        "items": [{"name": i.name, "target": i.target, "frames": i.frames} for i in plan.items],
     }
-    status = operations.FAILED if errors and not moves else operations.DONE
-    operations.finish(session, op.id, status, result)
-    result["operation_id"] = op.id
+    op = operations.start(session, "split", journal, root=root)
+    result = _Split(session, plan, progress or _no_progress, cancelled).run()
+    status = operations.FAILED if result.errors and not result.moves else operations.DONE
+    operations.finish(session, op.id, status, result.to_dict())
+    result.operation_id = op.id
     return result
+
+
+class _Split:
+    """Runs a checked split plan: for each roll, create its folder, move its
+    frames in, tag it. A file-system error stops the batch; everything moved
+    until then is in the result, so undo can put it back."""
+
+    def __init__(self, session: Session, plan: SplitPlan, emit: Progress, cancelled: Cancelled) -> None:
+        self.session = session
+        self.plan = plan
+        self.emit = emit
+        self.cancelled = cancelled
+        self.source = Path(plan.source)
+        self.total_files = sum(len(i.files) for i in plan.items)
+        self.result = SplitResult()
+
+    def run(self) -> SplitResult:
+        try:
+            for item in self.plan.items:
+                if self.cancelled():
+                    self.result.cancelled = True
+                    break
+                roll = self._move_roll(item)
+                if self.result.cancelled:
+                    break
+                self._tag_roll(roll, item)
+        except OSError as exc:
+            self.result.errors.append(f"stopped: {exc}")
+        self._retire_source()
+        return self.result
+
+    def _move_roll(self, item: SplitItem) -> SplitRoll:
+        target = Path(item.target)
+        target.mkdir(parents=False, exist_ok=False)
+        roll = SplitRoll(name=item.name, path=item.target)
+        self.result.created.append(roll)
+        for name in item.files:
+            if self.cancelled():
+                self.result.cancelled = True
+                break
+            _move_file(self.source / name, target / name)
+            self.result.moves.append(Move(source=str(self.source / name), target=str(target / name)))
+            roll.files.append(name)
+            self.emit({"type": "progress", "step": "move", "roll": roll.name, "file": name,
+                       "done": len(self.result.moves), "total": self.total_files})
+        return roll
+
+    def _tag_roll(self, roll: SplitRoll, item: SplitItem) -> None:
+        outcome = tag_folder(self.session, Path(roll.path), item.tagging, progress=self.emit, cancelled=self.cancelled)
+        roll.applied, roll.errors, roll.tag_skipped = outcome.applied, outcome.errors, outcome.skipped
+        self.result.errors.extend(f"{roll.name}: {e}" for e in outcome.errors)
+        self.emit({"type": "progress", "step": "roll", "roll": roll.name, "files": len(roll.files), "applied": len(roll.applied)})
+
+    def _retire_source(self) -> None:
+        # A source with no images left keeps nothing worth a folder: its
+        # manifest goes into the journal (undo restores it) and the folder is
+        # removed when only litter remains. In the subfolders layout the folder
+        # stays, since it now holds the new rolls, but the stale manifest goes.
+        self.result.stashed_manifest, self.result.removed_source = _retire_source(
+            self.source, remove_folder=self.plan.layout == SIBLINGS
+        )
 
 
 def _move_file(src: Path, dst: Path) -> None:
@@ -457,81 +592,78 @@ def undo_split(
     *,
     progress: Progress | None = None,
     cancelled: Cancelled = lambda: False,
-) -> dict[str, Any]:
+) -> SplitUndoResult:
     """Move every frame back, restore the source folder and its manifest,
     remove the roll folders the split created.
 
     Metadata written by the split's tagging step stays on the files; the
     result says so, and re-tagging the source folder replaces it.
     """
-    op = operations.get(session, op_id)
-    if op is None:
-        raise KeyError(op_id)
-    if op.kind != "split":
-        raise ValueError(f"cannot undo an operation of kind {op.kind}")
-    if op.status == operations.UNDONE:
-        raise ValueError("operation already undone")
-    data = operations.to_dict(op)
-    result = data["result"]
-    emit = progress or (lambda e: None)
-    source = Path(data["plan"]["source"])
-    restored: list[dict[str, str]] = []
-    errors: list[str] = []
+    entry = operations.load_for_undo(session, op_id, "split")
+    recorded = SplitResult.from_dict(entry["result"])
+    source = Path(entry["plan"]["source"])
+    undo = _SplitUndo(recorded, source, progress or _no_progress, cancelled).run()
+    if undo.restored or undo.removed_folders:
+        operations.mark_undone(session, op_id, undo.to_dict())
+    undo.operation_id = op_id
+    return undo
 
-    source.mkdir(parents=True, exist_ok=True)
-    for move in reversed(result.get("moves", [])):
-        if cancelled():
-            errors.append("cancelled before every file was moved back")
-            break
-        current, original = Path(move["to"]), Path(move["from"])
-        try:
-            if not current.exists():
-                raise OSError("file is no longer where the split put it")
-            _move_file(current, original)
-        except OSError as exc:
-            errors.append(f"{current.name}: {exc}")
-            emit({"type": "progress", "step": "move", "file": current.name, "ok": False, "error": str(exc)})
-            continue
-        restored.append({"from": str(current), "to": str(original)})
-        emit({"type": "progress", "step": "move", "file": current.name, "ok": True})
 
-    removed_folders: list[str] = []
-    for record in result.get("created", []):
-        folder = Path(record["path"])
-        if not folder.is_dir():
-            continue
-        # Sidecars the tagging step wrote go back with their raw files, so
-        # the metadata stays with the frame and the folder can be removed.
-        moved_names = {Path(m["to"]).name for m in result.get("moves", []) if Path(m["to"]).parent == folder}
-        for sidecar in tagging_sidecars(folder, sorted(moved_names)):
-            if sidecar.name in moved_names:
+class _SplitUndo:
+    def __init__(self, recorded: SplitResult, source: Path, emit: Progress, cancelled: Cancelled) -> None:
+        self.recorded = recorded
+        self.source = source
+        self.emit = emit
+        self.cancelled = cancelled
+        self.result = SplitUndoResult()
+
+    def run(self) -> SplitUndoResult:
+        self.source.mkdir(parents=True, exist_ok=True)
+        self._move_frames_back()
+        for roll in self.recorded.created:
+            self._remove_roll(Path(roll.path))
+        if self.recorded.stashed_manifest and not mf.manifest_path_for(self.source).exists():
+            mf.write_manifest(self.source, self.recorded.stashed_manifest)
+        return self.result
+
+    def _move_frames_back(self) -> None:
+        for move in reversed(self.recorded.moves):
+            if self.cancelled():
+                self.result.errors.append("cancelled before every file was moved back")
+                return
+            current, original = Path(move.target), Path(move.source)
+            try:
+                if not current.exists():
+                    raise OSError("file is no longer where the split put it")
+                _move_file(current, original)
+            except OSError as exc:
+                self.result.errors.append(f"{current.name}: {exc}")
+                self.emit({"type": "progress", "step": "move", "file": current.name, "ok": False, "error": str(exc)})
                 continue
-            try:
-                _move_file(sidecar, source / sidecar.name)
-                restored.append({"from": str(sidecar), "to": str(source / sidecar.name)})
-            except OSError as exc:
-                errors.append(f"{sidecar.name}: {exc}")
-        manifest_path = mf.manifest_path_for(folder)
-        if manifest_path.is_file():
-            try:
-                manifest_path.unlink()
-            except OSError as exc:
-                errors.append(f"{folder.name}: could not remove its manifest: {exc}")
-        if remove_folder_if_empty(folder):
-            removed_folders.append(str(folder))
+            self.result.restored.append(Move(source=str(current), target=str(original)))
+            self.emit({"type": "progress", "step": "move", "file": current.name, "ok": True})
+
+    def _remove_roll(self, folder: Path) -> None:
+        if not folder.is_dir():
+            return
+        self._return_tagging_sidecars(folder)
+        problem = remove_roll_folder(folder)
+        if problem:
+            self.result.errors.append(problem)
         else:
-            errors.append(f"{folder.name}: left in place, it still holds files")
+            self.result.removed_folders.append(str(folder))
 
-    if result.get("stashed_manifest") and not mf.manifest_path_for(source).exists():
-        mf.write_manifest(source, result["stashed_manifest"])
-
-    undo_result = {
-        "restored": restored,
-        "removed_folders": removed_folders,
-        "errors": errors,
-        "note": "Metadata written by the split stays on the files; re-tag the folder to replace it.",
-    }
-    if restored or removed_folders:
-        operations.mark_undone(session, op_id, undo_result)
-    undo_result["operation_id"] = op_id
-    return undo_result
+    def _return_tagging_sidecars(self, folder: Path) -> None:
+        """Sidecars the tagging step wrote go back with their raw files, so
+        the metadata stays with the frame and the folder can be removed."""
+        moved = {Path(m.target).name for m in self.recorded.moves if Path(m.target).parent == folder}
+        for sidecar in tagging_sidecars(folder, sorted(moved)):
+            if sidecar.name in moved:
+                continue
+            back = self.source / sidecar.name
+            try:
+                _move_file(sidecar, back)
+            except OSError as exc:
+                self.result.errors.append(f"{sidecar.name}: {exc}")
+                continue
+            self.result.restored.append(Move(source=str(sidecar), target=str(back)))

@@ -61,6 +61,19 @@ def get(session: Session, op_id: str) -> OperationLog | None:
     return session.get(OperationLog, op_id)
 
 
+def load_for_undo(session: Session, op_id: str, kind: str) -> dict[str, Any]:
+    """The journal entry for ``op_id``, checked to be a ``kind`` batch that
+    has not been undone yet. Raises ``KeyError`` or ``ValueError``."""
+    row = get(session, op_id)
+    if row is None:
+        raise KeyError(op_id)
+    if row.kind != kind:
+        raise ValueError(f"cannot undo an operation of kind {row.kind}")
+    if row.status == UNDONE:
+        raise ValueError("operation already undone")
+    return to_dict(row)
+
+
 def to_dict(row: OperationLog) -> dict[str, Any]:
     return {
         "id": row.id,

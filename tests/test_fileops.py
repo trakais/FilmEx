@@ -126,11 +126,11 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     assert sorted(p.name for p in hp5.iterdir()) == ["lab_001.jpg", "lab_001.thm", "lab_002.jpg", "lab_002.thm", "lab_003.jpg", "lab_003.thm", "roll_manifest.json"]
     # notes.txt keeps the source folder alive; its manifest moved into the journal.
     assert mixed.is_dir() and sorted(p.name for p in mixed.iterdir()) == ["notes.txt"]
-    assert not result["removed_source"]
-    assert result["stashed_manifest"]["roll_id"] == "EUR-04"
-    assert not result["errors"]
-    assert len(result["moves"]) == 17
-    assert [len(c["applied"]) for c in result["created"]] == [8, 3]
+    assert not result.removed_source
+    assert result.stashed_manifest["roll_id"] == "EUR-04"
+    assert not result.errors
+    assert len(result.moves) == 17
+    assert [len(c.applied) for c in result.created] == [8, 3]
     assert mf.read_manifest(gold)["roll_id"] == "2026-04-01-Fed2-Gold"
     assert mf.read_manifest(gold)["capture_date_value"] == "2026-04-01"
     assert mf.read_manifest(hp5)["capture_date_value"] == "2026-04-09"
@@ -142,20 +142,20 @@ def test_apply_split_moves_frames_tags_new_rolls_and_undo_restores(library: Path
     (gold / "DSC0004.xmp").write_text("<x/>")
 
     with Session(get_engine()) as session:
-        op = operations.get(session, result["operation_id"])
+        op = operations.get(session, result.operation_id)
         assert op.kind == "split" and op.status == "done"
-        undo = fileops.undo_split(session, result["operation_id"])
-        assert operations.get(session, result["operation_id"]).status == "undone"
+        undo = fileops.undo_split(session, result.operation_id)
+        assert operations.get(session, result.operation_id).status == "undone"
 
-    assert len(undo["restored"]) == 18  # 17 moves back plus the tagging sidecar
+    assert len(undo.restored) == 18  # 17 moves back plus the tagging sidecar
     assert (mixed / "DSC0004.xmp").is_file()
-    assert sorted(undo["removed_folders"]) == sorted([str(gold), str(hp5)])
+    assert sorted(undo.removed_folders) == sorted([str(gold), str(hp5)])
     assert not gold.exists() and not hp5.exists()
     names = sorted(p.name for p in mixed.iterdir())
     assert "DSC0001.ARW" in names and "lab_003.thm" in names and "DSC0003.ARW.xmp" in names
     assert mf.read_manifest(mixed)["roll_id"] == "EUR-04"
     with Session(get_engine()) as session, pytest.raises(ValueError):
-        fileops.undo_split(session, result["operation_id"])
+        fileops.undo_split(session, result.operation_id)
 
 
 def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Path, fake_exiftool):
@@ -164,11 +164,11 @@ def test_apply_split_removes_an_emptied_source_and_undo_recreates_it(library: Pa
     listing = fr.list_frames(mixed)
     with Session(get_engine()) as session:
         result = fileops.apply_split(session, mixed, _rolls(listing), root=str(library))
-    assert result["removed_source"]
+    assert result.removed_source
     assert not mixed.exists()
     with Session(get_engine()) as session:
-        undo = fileops.undo_split(session, result["operation_id"])
-    assert not undo["errors"]
+        undo = fileops.undo_split(session, result.operation_id)
+    assert not undo.errors
     assert mixed.is_dir() and (mixed / "DSC0004.ARW").is_file()
 
 
@@ -187,13 +187,13 @@ def test_apply_split_stops_on_cross_volume_rename_and_keeps_partial_moves_undoab
     monkeypatch.setattr(fileops.os, "rename", flaky_rename)
     with Session(get_engine()) as session:
         result = fileops.apply_split(session, mixed, _rolls(listing), root=str(library))
-    assert len(result["moves"]) == 2
-    assert result["errors"] and "Cross-device" in result["errors"][0]
+    assert len(result.moves) == 2
+    assert result.errors and "Cross-device" in result.errors[0]
     assert not (library / "2026" / "2026-04-09-Fed2-HP5").exists()
     monkeypatch.setattr(fileops.os, "rename", real_rename)
     with Session(get_engine()) as session:
-        undo = fileops.undo_split(session, result["operation_id"])
-    assert len(undo["restored"]) == 2 and not undo["errors"]
+        undo = fileops.undo_split(session, result.operation_id)
+    assert len(undo.restored) == 2 and not undo.errors
     assert sorted(p.name for p in mixed.iterdir() if p.name.startswith("DSC0001")) == ["DSC0001.ARW", "DSC0001.JPG", "DSC0001.xmp"]
 
 
@@ -205,7 +205,7 @@ def test_tag_folder_without_exiftool_reports_skip(tmp_path: Path, fake_exiftool,
     make_jpeg("a.jpg", long_edge=64, folder=folder)
     with Session(get_engine()) as session:
         out = fo.tag_folder(session, folder, {})
-    assert out["skipped"] and not out["applied"]
+    assert out.skipped and not out.applied
     assert not mf.manifest_path_for(folder).exists()
 
 
@@ -232,3 +232,18 @@ def test_planning_leaves_the_callers_rolls_untouched(library: Path, fake_exiftoo
         fileops.apply_split(session, mixed, rolls, root=str(library))
     assert mf.read_manifest(library / "2026" / "2026-04-01-Fed2-Gold")["capture_date_value"] == "2026-04-01"
     assert mf.read_manifest(library / "2026" / "2026-04-09-Fed2-HP5")["capture_date_value"] == "2026-04-09"
+
+
+def test_split_result_journal_round_trip():
+    """The journal stores to_dict(); undo reads it back with from_dict()."""
+    result = fileops.SplitResult(
+        created=[fileops.SplitRoll(name="R1", path="/x/R1", files=["a.jpg"], applied=["a.jpg"])],
+        moves=[fileops.Move(source="/x/src/a.jpg", target="/x/R1/a.jpg")],
+        removed_source=True,
+        stashed_manifest={"roll_id": "src"},
+        errors=["R1: something"],
+    )
+    data = result.to_dict()
+    assert data["moves"] == [{"from": "/x/src/a.jpg", "to": "/x/R1/a.jpg"}]
+    assert "operation_id" not in data
+    assert fileops.SplitResult.from_dict(data) == result

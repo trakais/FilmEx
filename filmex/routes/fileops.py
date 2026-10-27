@@ -103,7 +103,7 @@ def split_apply(req: SplitRequest, session: Session = Depends(get_session)) -> S
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     if not plan.ok:
-        raise HTTPException(status_code=400, detail={"errors": plan.errors + [f"{i.name}: {e}" for i in plan.items for e in i.errors]})
+        raise HTTPException(status_code=400, detail={"errors": plan.problems})
     folder = req.folder
 
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
@@ -111,7 +111,7 @@ def split_apply(req: SplitRequest, session: Session = Depends(get_session)) -> S
             try:
                 return fileops.apply_split(
                     job_session, folder, rolls, root=root, progress=job_ctx.emit, cancelled=job_ctx.cancelled
-                )
+                ).to_dict()
             except fileops.PlanError as exc:
                 raise RuntimeError("; ".join(exc.errors)) from exc
 
@@ -149,7 +149,7 @@ def import_apply(req: ImportRequest, session: Session = Depends(get_session)) ->
     except fileops.PlanError as exc:
         raise _plan_errors(exc) from exc
     if not plan.ok:
-        raise HTTPException(status_code=400, detail={"errors": plan.errors + [f"{i.name}: {e}" for i in plan.items for e in i.errors]})
+        raise HTTPException(status_code=400, detail={"errors": plan.problems})
     folder = req.folder
 
     def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
