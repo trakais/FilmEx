@@ -2211,6 +2211,7 @@ body[data-theme="paper"] .menu { background: linear-gradient(180deg, #f5ecdf 0%,
 /* ---------- Folder screen ---------- */
 .folder-head { display: flex; flex-direction: column; gap: 12px; }
 .folder-title { display: flex; align-items: baseline; gap: 14px; }
+.folder-reveal { margin-left: auto; align-self: center; }
 .folder-name {
   margin: 0;
   font-family: var(--font-mono);
@@ -2225,6 +2226,10 @@ body[data-theme="paper"] .menu { background: linear-gradient(180deg, #f5ecdf 0%,
 .roll-card.single { border-left-color: var(--border-strong); }
 .roll-card.single .roll-card-index { color: var(--text); font-family: var(--font-mono); letter-spacing: 0; text-transform: none; font-size: 13px; }
 .roll-card-links { display: flex; gap: 16px; }
+/* Expanders carry a chevron that turns when open. */
+.action-link.expander { display: inline-flex; align-items: center; gap: 5px; }
+.action-link .chev { transition: transform 0.15s var(--ease); }
+.action-link.expander.open .chev { transform: rotate(180deg); }
 .roll-more { margin-top: 2px; }
 .roll-changes { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); padding-top: 4px; }
 .roll-changes .diff-file { background-image: none; padding: 12px 0; border-bottom: 1px solid var(--border); }
@@ -2320,6 +2325,26 @@ body[data-theme="paper"] .home-drop { background: rgba(255, 251, 245, 0.5); }
   place-items: center;
 }
 .sheet-cell.cut-maybe .sheet-cut-tag { color: var(--muted); border-color: var(--border-strong); }
+/* "Open this image" magnifier: bottom-right of a thumbnail, shown on hover. */
+.sheet-open, .thumb-open {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 2px;
+  background: rgba(10, 10, 10, 0.78);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease), background 0.12s var(--ease);
+}
+.sheet-cell:hover .sheet-open, .sheet-open:focus-visible, .diff-thumb-link:hover .thumb-open { opacity: 1; }
+.sheet-open:hover { background: var(--yellow); color: #0a0a0a; border-color: var(--yellow); }
+.diff-thumb-link { position: relative; }
 .sheet-cut-tag:hover:not(:disabled) { background: var(--yellow); color: #0a0a0a; border-color: var(--yellow); }
 .cuts-panel {
   margin-top: 12px;

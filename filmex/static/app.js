@@ -1064,6 +1064,11 @@ function lensOverrideOptions(camera, selectedId) {
   return options.join("");
 }
 
+// Small inline icons: a chevron for expanders, a magnifier for "open this
+// image", so a control looks like one instead of a word.
+const CHEVRON_ICON = `<svg class="chev" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const MAGNIFIER_ICON = `<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false"><circle cx="5.75" cy="5.75" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8.75 8.75 12.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+
 async function openSourceFile(name) {
   try {
     const params = new URLSearchParams({ folder: state.folder.path, name });
@@ -2366,13 +2371,16 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
     const cut = cutAt ? cutAt(frame.key) : null;
     if (cut) cell.classList.add(`cut-${cut.strength}`);
     const scissors = cut ? `<button type="button" class="sheet-cut-tag" title="${escapeHtml(cutReasonText(cut))}" aria-label="Cut here">✂</button>` : "";
+    const openName = frame.preview || frame.images[0];
+    const magnifier = openName ? `<button type="button" class="sheet-open" title="Open ${escapeHtml(openName)}" aria-label="Open ${escapeHtml(openName)}">${MAGNIFIER_ICON}</button>` : "";
     cell.innerHTML = `
-      <div class="sheet-thumb">${thumb}${stamp}${scissors}</div>
+      <div class="sheet-thumb">${thumb}${stamp}${scissors}${magnifier}</div>
       <div class="sheet-cell-name"><span>${escapeHtml(frame.display_key)}</span>${badge}</div>
     `;
     cell.title = frame.files.join("\n");
     if (onClick) cell.addEventListener("click", (ev) => onClick(frame.key, ev));
     if (cut && onCut) cell.querySelector(".sheet-cut-tag").addEventListener("click", (ev) => { ev.stopPropagation(); onCut(frame.key); });
+    if (openName) cell.querySelector(".sheet-open").addEventListener("click", (ev) => { ev.stopPropagation(); void openSourceFile(openName); });
     frag.appendChild(cell);
   }
   container.appendChild(frag);
@@ -2916,8 +2924,8 @@ function rollCardFields(roll) {
       <label><span>Place / title</span><input type="text" data-field="place" value="${escapeHtml(t.place || "")}" placeholder="Jāņos, Mexico…" /></label>
     </div>
     <div class="roll-card-links">
-      <button type="button" class="action-link" data-expand="more" aria-expanded="${roll.moreOpen}">${roll.moreOpen ? "Less" : "More"}</button>
-      <button type="button" class="action-link" data-expand="changes" aria-expanded="${roll.changesOpen}">${roll.changesOpen ? "Hide changes" : "Changes"}</button>
+      <button type="button" class="action-link expander${roll.moreOpen ? " open" : ""}" data-expand="more" aria-expanded="${roll.moreOpen}">${CHEVRON_ICON}<span>${roll.moreOpen ? "Less" : "More"}</span></button>
+      <button type="button" class="action-link expander${roll.changesOpen ? " open" : ""}" data-expand="changes" aria-expanded="${roll.changesOpen}">${CHEVRON_ICON}<span>${roll.changesOpen ? "Hide changes" : "Changes"}</span></button>
     </div>`;
 }
 
@@ -2954,7 +2962,7 @@ function rollCardChanges(roll) {
 function diffFileHtml(roll, file) {
   const t = roll.tagging;
   const thumb = state.folder.thumbs.has(file.name)
-    ? `<button type="button" class="diff-thumb-link" data-open="${escapeHtml(file.name)}" aria-label="Open file"><img class="diff-thumb" src="${escapeHtml(buildThumbnailUrl(state.folder.path, file.name, state.previewInvert))}" alt="" loading="lazy" /></button>`
+    ? `<button type="button" class="diff-thumb-link" data-open="${escapeHtml(file.name)}" title="Open ${escapeHtml(file.name)}" aria-label="Open ${escapeHtml(file.name)}"><img class="diff-thumb" src="${escapeHtml(buildThumbnailUrl(state.folder.path, file.name, state.previewInvert))}" alt="" loading="lazy" /><span class="thumb-open">${MAGNIFIER_ICON}</span></button>`
     : "";
   const rows = file.changes.map(ch => `
       <div class="diff-row">
@@ -3607,6 +3615,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Header
   document.getElementById("open-folder").addEventListener("click", () => void onOpenFolder());
+  document.getElementById("folder-reveal").addEventListener("click", () => { if (state.folder.path) void revealFolder(state.folder.path); });
   for (const tab of document.querySelectorAll(".view-tab")) {
     tab.addEventListener("click", () => {
       if (tab.dataset.view === "library") void openLibrary();
