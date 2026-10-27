@@ -1,6 +1,6 @@
 """Split a folder into per-roll folders, plus the helpers the importer shares.
 
-Rules (docs/upgrade-plan.md, cross-cutting):
+Rules (AGENTS.md, cross-cutting rules):
 - every batch is planned first and only runs what the plan showed
 - never overwrite: an existing target stops the whole batch
 - moves only within one volume (``os.rename``); anything else is refused

@@ -38,9 +38,6 @@ The desktop shell picks a random loopback port and a per-launch token.
 `FILMEX_SMOKE_SECONDS=8 uv run filmex` opens the window, checks the page
 initialised, and closes it: use it to verify a build without a human.
 
-The phased plan for the desktop upgrade lives in `docs/upgrade-plan.md`.
-Tick tasks there as they land.
-
 ---
 
 ## Project layout
@@ -66,7 +63,7 @@ filmex/
 │   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
 │   └── default_data.sqlite   # bundled starter DB; copied to the data dir on first run
 ├── packaging/                # PyInstaller spec, icon generator, build + vendoring scripts
-├── docs/upgrade-plan.md      # phased plan with status checkboxes
+├── docs/screenshots/         # README images
 ├── data/                     # gitignored — checkout's live DB + runtime state
 ├── examples/
 │   └── entities-batch.json   # sample batch for the CLI
@@ -425,6 +422,27 @@ Routes: `GET /api/folder/frames`, `POST /api/naming/render`, `POST
 /api/import/plan`, `POST /api/import/apply` (job). Plan failures answer
 `400 {"detail": {"errors": [...]}}`; a plan that comes back with
 `"ok": false` lists why in `problems`.
+
+## Cross-cutting rules
+
+File operations:
+- Plan first, show the whole plan, run only what was shown and confirmed.
+  Every executed batch is journaled in `operation_log` and can be undone.
+- Copy, verify, then tag at the destination; the source is untouched until
+  verification passes. Moves only within one volume (`os.rename`); a
+  cross-volume move is refused, never silently turned into a copy.
+- Never overwrite. A collision anywhere stops the whole batch before
+  anything runs.
+- Only one file-mutating job at a time (`exclusive` jobs).
+- Hidden files, AppleDouble files and the junk list are skipped, never
+  copied; `smbdelete*` and `@eaDir` entries never fail a scan.
+
+Unicode and SMB: paths come from directory listings as-is; display names,
+keywords and new folder names are NFC.
+
+Code: vanilla JS, no framework, no build step; each screen is a `<main>`
+in `index.html`. The server never imports pywebview. Every change keeps
+`uv run pytest` and `uv run ruff check .` green and browser mode working.
 
 ## Metadata write policy
 

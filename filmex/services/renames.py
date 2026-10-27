@@ -6,7 +6,7 @@ carries a ``Roll|<folder name>`` keyword that must be swapped, or Lightroom
 keeps showing the old roll. All of that happens here, as one journaled
 operation that can be undone.
 
-Rules (see docs/upgrade-plan.md, cross-cutting):
+Rules (AGENTS.md, cross-cutting rules):
 - rename within the same parent only, never across volumes
 - never overwrite: an existing target is a conflict, not a merge
 - the whole plan is shown first; this module only executes what was chosen
