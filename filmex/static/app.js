@@ -2875,7 +2875,7 @@ function renderRollCard(roll, index) {
 function rollCardHead(roll, index) {
   const selected = state.folder.selection.size;
   const single = singleRollInPlace();
-  const title = single ? baseName(state.folder.path) : `Roll ${index + 1}`;
+  const title = single ? folderLabel(state.folder.path) : `Roll ${index + 1}`;
   return `
     <div class="roll-card-head">
       <span class="roll-card-index">${escapeHtml(title)}</span>
@@ -3308,7 +3308,7 @@ function batchEndpoints(action) {
 function describePlan(plan, action, dest) {
   const lines = [];
   if (action === "split") {
-    lines.push(plan.layout === "siblings" ? `New roll folders next to this one, under ${baseName(plan.target_parent)}:` : `New roll folders inside ${baseName(plan.target_parent)}:`);
+    lines.push(plan.layout === "siblings" ? `New roll folders next to this one, under ${folderLabel(plan.target_parent)}:` : `New roll folders inside ${folderLabel(plan.target_parent)}:`);
   } else {
     lines.push(`${dest === "move" ? "Move" : "Copy"} ${humanBytes(plan.total_bytes)} into ${plan.root}:`);
   }
@@ -3347,7 +3347,7 @@ async function writeInPlace() {
   const images = rollImages(roll);
   const all = images.length === folderFrames().reduce((n, f) => n + f.images.length, 0);
   const body = { folder: folder.path, files: all ? undefined : images, ...rollTagging(roll) };
-  const ok = await ask(`Write metadata to ${images.length} file${images.length === 1 ? "" : "s"} in ${baseName(folder.path)}?\n${gearSummary(roll)}`, { title: "Write metadata", okLabel: "Write" });
+  const ok = await ask(writeConfirmText(folder.path, images, roll), { title: "Write metadata", okLabel: "Write" });
   if (!ok) return;
   startRun();
   try {
@@ -3366,6 +3366,19 @@ async function writeInPlace() {
   } finally {
     endRun();
   }
+}
+
+// Names the files when there are few of them and the folder by its label
+// under the library year, never by its bare basename: a roll folder called
+// "RAW" must not read as "a RAW file".
+function writeConfirmText(path, images, roll) {
+  const where = folderLabel(path);
+  const n = images.length;
+  const head = n === 1
+    ? `Write metadata to ${images[0]} in ${where}?`
+    : `Write metadata to ${n} files in ${where}?`;
+  const names = n > 1 && n <= 4 ? images.join(", ") : null;
+  return [head, names, gearSummary(roll)].filter(Boolean).join("\n");
 }
 
 async function runBatch(action) {
