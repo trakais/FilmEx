@@ -1,28 +1,56 @@
 # FilmEx
 
-FilmEx, or Film EXIF, is a local-first browser tool for tagging film scan folders before import into Lightroom or other DAM software. It relies on your system exiftool and local filesystem, so you must run it locally, not in a container or on another machine. 
+FilmEx (Film EXIF) is a desktop app for tagging folders of film scans with
+the analog camera, lens and film they came from, before the scans go into
+Lightroom or any other DAM. It is local-first: ExifTool runs on your
+machine, your folders stay where they are, nothing leaves the computer.
 
 ![FilmEx overview](docs/screenshots/filmex-overview.webp)
 _Main tagging workflow_
 
-## What It Does
+## Install
 
-- scans a single film-roll folder
-- detects supported files: `JPG`, `TIFF`, `DNG`, `ARW`
-- lets you choose analog camera, lens, and film stock
-- keeps film brands as a separate controlled list with per-brand colors
-- adds development and scan metadata
-- lets you add per-file lens overrides and extra keywords in the preview
-- stores roll notes as a description/caption field, not as keywords
-- shows a dry-run preview before writing anything
-- can create lightweight local previews for files that do not already have `.thm` thumbnails
-- writes metadata with ExifTool
-- creates a `roll_manifest.json` next to the images
+Pick one:
 
-For raw files (`DNG`, `ARW`), FilmEx writes to XMP sidecars using the canonical
-replaced-extension form like `photo.xmp`.
+- **macOS app.** Download `FilmEx-<version>-arm64.dmg` from the releases
+  page and drag `FilmEx.app` to Applications. The app is not notarized (no
+  paid Apple developer account), so the first launch is blocked: open it
+  once, then go to System Settings ▸ Privacy & Security and click **Open
+  Anyway**. Or clear the quarantine flag instead, once per downloaded
+  version:
 
-For `JPG` and `TIFF`, FilmEx writes metadata into the file itself.
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/FilmEx.app
+  ```
+- **Installed tool, any platform.** Needs [`uv`](https://docs.astral.sh/uv/);
+  it installs Python itself. `filmex` then opens the window.
+
+  ```bash
+  uv tool install "filmex @ git+<clone URL of this repository>"
+  filmex
+  ```
+- **From a checkout.** `uv sync` once, then `uv run filmex`.
+
+ExifTool must be installed (`brew install exiftool` on macOS). FilmEx finds
+it on `PATH`, in the usual Homebrew locations, or at the path set in
+Settings ▸ Preferences.
+
+## What it does
+
+- opens a folder of scans and shows its frames on a contact sheet
+- detects `JPG`, `TIFF`, `DNG` and `ARW`, and keeps a raw file, its JPEG,
+  its `.xmp` sidecar and its `.thm` thumbnail together as one frame
+- lets you pick the camera, lens and film from your own gear lists, with
+  film brands as a separate list that carries each brand's colours
+- adds development and scan provider and method, roll date, place, notes
+- shows exactly what will be written to every file before writing it, with
+  per-file lens overrides and extra keywords
+- writes with ExifTool: XMP sidecars (`photo.xmp`) for raw files, embedded
+  metadata for `JPG` and `TIFF`; re-applying never duplicates a keyword
+- leaves a `roll_manifest.json` beside the images
+- splits a scan session into one folder per roll, imports rolls from a card
+  into a library with copy-and-verify, renames roll folders to one naming
+  scheme, and can undo each of those batches
 
 ## How it works
 
@@ -47,7 +75,7 @@ The same screen covers the rest:
   Open and Reveal on each row. The index is cached, so it opens even when
   the share is unmounted.
 - **Importing.** With a library set, a folder opened from anywhere else
-  defaults to "Copy to library" or "Move to library". Rolls land in
+  offers "Copy to library" and "Move to library". Rolls land in
   `<root>/<year>/<name>`, every file is read back and verified before a
   source is ever deleted, and each new folder is tagged on the spot. The
   plan is shown before anything runs, and the last batch can be undone.
@@ -61,103 +89,41 @@ The same screen covers the rest:
 Raw files and their JPEGs, sidecars and `.thm` thumbnails always travel
 together. Files that belong to no frame, such as notes, stay behind.
 
-## Desktop app
+## Where things live
 
-FilmEx also runs as a native window with no Terminal and no background
-process: the server lives inside the app and stops when you quit.
+- The app's database (gear, films, providers, settings, recent folders,
+  the library index, the undo journal) is in the per-user data directory:
+  `~/Library/Application Support/FilmEx` on macOS. A source checkout uses
+  `data/` instead. `FILMEX_DATA_DIR` overrides both.
+- A fresh install starts from a bundled database with sample cameras,
+  lenses, films, film brands, providers and methods.
+- Each tagged folder carries its own `roll_manifest.json`. Everything
+  about a roll that matters later is in that file and in the images'
+  metadata, not in the database.
 
-Pick one:
+## Browser mode
 
-- **App bundle (macOS).** Download `FilmEx-<version>-arm64.dmg` from the
-  releases page, drag `FilmEx.app` to Applications. The app is not notarized
-  (no paid Apple developer account), so the first launch is blocked. Open it
-  once, then go to System Settings ▸ Privacy & Security and click
-  **Open Anyway**. Or remove the quarantine flag instead:
-
-  ```bash
-  xattr -dr com.apple.quarantine /Applications/FilmEx.app
-  ```
-
-  This is needed once per downloaded version.
-- **Installed tool (no Gatekeeper prompt).** Needs `uv`; it installs Python
-  itself. Replace the URL with this repository's clone URL:
-
-  ```bash
-  uv tool install "filmex @ git+https://git.dodies.lv/<user>/FilmEx"
-  filmex
-  ```
-- **From a checkout.**
-
-  ```bash
-  uv run filmex
-  ```
-
-The desktop app keeps its database in the per-user data directory
-(`~/Library/Application Support/FilmEx` on macOS). A source checkout keeps
-using `data/`. `FILMEX_DATA_DIR` overrides both. ExifTool is found on `PATH`,
-in the usual Homebrew locations, or at the path set in Settings ▸ Preferences.
-
-### Building the app
+The window is a thin shell around a local web server, so FilmEx also runs
+in an ordinary browser: on Linux and Windows, where there is no app bundle
+yet, or whenever you prefer a browser tab.
 
 ```bash
-packaging/build-macos.sh
+./filmex-run          # macOS / Linux
+filmex-run.cmd        # Windows
 ```
 
-Produces `dist/FilmEx.app` and a DMG. To bundle ExifTool inside the app, run
-`packaging/fetch-exiftool.sh` first (pin the tarball checksum in
-`packaging/exiftool.lock` when prompted). Releases are built locally; the
-GitHub workflow in `.github/workflows/build.yml` is optional.
-
-## Requirements
-
-- Python 3.11+
-- `uv`
-- `exiftool` available on `PATH`
-
-## Run Locally
-
-First time only:
-
-```bash
-uv sync
-```
-
-Then, on macOS / Linux:
-
-```bash
-./filmex-run
-```
-
-On Windows:
-
-```cmd
-filmex-run.cmd
-```
-
-This starts the server on `http://127.0.0.1:8765` and opens your browser. Set
-`FILMEX_PORT` to use a different port.
-
-Or run uvicorn directly if you prefer:
-
-```bash
-uv run uvicorn filmex.main:app --port 8765
-```
-
-## Notes
-
-- A source checkout stores runtime data in `data/`; the desktop app uses the
-  per-user data directory.
-- Settings, recent folders and the last selection are stored in the database,
-  not in the browser.
-- A starter SQLite database is bundled with sample cameras, lenses, films, film brands, providers, and methods.
-- Your own working database lives in `data/filmex.sqlite`.
-- Temporary and private local files should stay in `tmp/`, which is ignored by git.
+This starts the server on `http://127.0.0.1:8765` and opens your browser;
+set `FILMEX_PORT` for another port. The server only answers requests from
+the same machine. Everything works the same, except that the folder picker
+is a text field instead of a native dialog.
 
 ## Bulk data entry
 
-To add cameras, lenses, film brands, films, providers, or methods in bulk —
-for example from an LLM-drafted batch — use the CLI. It is idempotent: rows
-that already exist (matched by natural key) are skipped, never overwritten.
+To add cameras, lenses, film brands, films, providers or methods in bulk,
+for example from an LLM-drafted batch, use the CLI. It is idempotent: rows
+that already exist (matched by natural key) are skipped, never
+overwritten. `export-json` dumps the live database in the same shape, so it
+doubles as a backup and as a way to move gear between installs.
 
 ```bash
 uv run python -m filmex.cli add-from-json examples/entities-batch.json --dry-run
@@ -168,13 +134,27 @@ uv run python -m filmex.cli export-json -o backup.json
 
 See `AGENTS.md` for the batch schema and nomenclature conventions.
 
-## Testing
+## Building the app
 
 ```bash
-uv run pytest
+packaging/build-macos.sh
 ```
 
-## Contributing
+Produces `dist/FilmEx.app` and a DMG, ad-hoc signed. To bundle ExifTool
+inside the app, run `packaging/fetch-exiftool.sh` first (pin the tarball
+checksum in `packaging/exiftool.lock` when prompted). Releases are built
+locally.
+
+## Development
+
+Python 3.11+, `uv`, ExifTool on `PATH`.
+
+```bash
+uv sync                  # first time only
+uv run pytest            # tests
+uv run ruff check .      # lint
+FILMEX_SMOKE_SECONDS=8 uv run filmex   # open the window, check it, close it
+```
 
 `AGENTS.md` at the repo root is the canonical reference for project
 conventions: data model, nomenclature, metadata write policy, keyword
