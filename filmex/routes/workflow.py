@@ -235,6 +235,17 @@ def file_thumbnail(folder: str, name: str, invert: bool = False) -> FileResponse
     return FileResponse(thumb, media_type="image/jpeg")
 
 
+@router.get("/api/files/preview")
+def file_preview(folder: str, name: str, invert: bool = False) -> FileResponse:
+    """The viewer's large preview of one file, made on first request and cached."""
+    target = _resolve_folder_file(folder, name)
+    try:
+        path, _ = pv.ensure_preview(target, invert=invert, large=True)
+    except (pv.PreviewUnavailable, OSError) as e:
+        raise HTTPException(status_code=404, detail=f"No preview for {name}: {e}") from e
+    return FileResponse(path, media_type="image/jpeg")
+
+
 @router.get("/api/files/source")
 def file_source(folder: str, name: str) -> FileResponse:
     target = _resolve_folder_file(folder, name)

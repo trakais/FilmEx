@@ -580,6 +580,43 @@ def test_thumbnail_endpoint_serves_cached_preview_after_create(client, roll_fact
     assert list((data_dir / "preview_cache").glob("*.jpg"))
 
 
+def test_large_preview_endpoint_scales_inverts_and_caches(client, tmp_path, data_dir):
+    from io import BytesIO
+
+    from PIL import Image
+
+    folder = tmp_path / "roll"
+    folder.mkdir()
+    Image.new("RGB", (3000, 2000), (200, 120, 40)).save(folder / "scan_000.jpg", quality=90)
+    params = {"folder": str(folder), "name": "scan_000.jpg"}
+
+    res = client.get("/api/files/preview", params=params)
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"].startswith("image/jpeg")
+    with Image.open(BytesIO(res.content)) as image:
+        assert max(image.size) == 2048
+        r, g, b = image.convert("RGB").getpixel((10, 10))
+        assert r > 150 and b < 90
+
+    inverted = client.get("/api/files/preview", params={**params, "invert": "true"})
+    assert inverted.status_code == 200
+    with Image.open(BytesIO(inverted.content)) as image:
+        r, g, b = image.convert("RGB").getpixel((10, 10))
+        assert r < 90 and b > 150
+
+    assert len(list((data_dir / "preview_cache").glob("*.jpg"))) == 2
+    again = client.get("/api/files/preview", params=params)
+    assert again.content == res.content
+
+
+def test_large_preview_endpoint_404_for_unreadable_file(client, tmp_path):
+    folder = tmp_path / "roll"
+    folder.mkdir()
+    (folder / "scan_000.jpg").write_bytes(b"not a jpeg")
+    res = client.get("/api/files/preview", params={"folder": str(folder), "name": "scan_000.jpg"})
+    assert res.status_code == 404
+
+
 def test_create_previews_endpoint_reports_created_and_failed(client, roll_factory, data_dir):
     folder = roll_factory("2026-04-17_R108F", jpegs=1, dngs=1)
     res = client.post(

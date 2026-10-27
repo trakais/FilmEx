@@ -20,6 +20,9 @@ from filmex.services import exiftool_locator as locator
 from filmex.services import frames as fr
 
 PREVIEW_SIZE = (320, 240)
+# The in-app viewer's size: big enough to judge a frame on a laptop screen,
+# small enough to make on demand.
+LARGE_SIZE = (2048, 2048)
 RAW_PREVIEW_TAGS = ("PreviewImage", "JpgFromRaw", "ThumbnailImage")
 
 
@@ -65,36 +68,47 @@ def existing_preview_path(file_path: str | Path, *, invert: bool = False) -> Pat
     return None
 
 
-def cached_preview_path_for(file_path: str | Path, *, invert: bool) -> Path:
+def cached_preview_path_for(file_path: str | Path, *, invert: bool, large: bool = False) -> Path:
     path = Path(file_path).expanduser().resolve()
     st = path.stat()
+    size = "|large" if large else ""
     digest = hashlib.sha256(
-        f"{path}|{st.st_size}|{st.st_mtime_ns}|invert={int(invert)}|v1".encode("utf-8")
+        f"{path}|{st.st_size}|{st.st_mtime_ns}|invert={int(invert)}{size}|v1".encode()
     ).hexdigest()
     return preview_cache_dir() / f"{digest}.jpg"
 
 
-def ensure_preview(file_path: str | Path, *, invert: bool = False) -> tuple[Path, bool]:
-    """Return a preview path and whether it was generated in this call."""
+def ensure_preview(
+    file_path: str | Path, *, invert: bool = False, large: bool = False
+) -> tuple[Path, bool]:
+    """Return a preview path and whether it was generated in this call.
+
+    ``large`` is the viewer's size (LARGE_SIZE); a lab's ``.thm`` is too
+    small for it, so it is made from the file itself.
+    """
     path = Path(file_path).expanduser().resolve()
-    thm = fr.thumbnail_for(path)
+    thm = None if large else fr.thumbnail_for(path)
     if thm is not None and not invert:
         return thm, False
 
-    target = cached_preview_path_for(path, invert=invert)
+    target = cached_preview_path_for(path, invert=invert, large=large)
     if target.is_file():
         return target, False
 
+    size = LARGE_SIZE if large else PREVIEW_SIZE
     image = _load_preview_image(path, thm=thm)
     try:
+        # A JPEG can decode at a fraction of its size, much faster than a
+        # full decode followed by a resize.
+        image.draft("RGB", size)
         if image.mode not in ("RGB", "L"):
             image = image.convert("RGB")
         if image.mode == "L":
             image = image.convert("RGB")
         if invert:
             image = ImageOps.invert(image)
-        image.thumbnail(PREVIEW_SIZE)
-        image.save(target, "JPEG", quality=80, optimize=True)
+        image.thumbnail(size)
+        image.save(target, "JPEG", quality=86 if large else 80, optimize=True)
     finally:
         image.close()
 

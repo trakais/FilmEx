@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FilmEx</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230e0e0e'/%3E%3Crect x='7' y='10' width='18' height='12' rx='1.5' fill='none' stroke='%23f3be22' stroke-width='2'/%3E%3Cg fill='%23f3be22'%3E%3Crect x='8' y='6' width='3' height='2'/%3E%3Crect x='14.5' y='6' width='3' height='2'/%3E%3Crect x='21' y='6' width='3' height='2'/%3E%3Crect x='8' y='24' width='3' height='2'/%3E%3Crect x='14.5' y='24' width='3' height='2'/%3E%3Crect x='21' y='24' width='3' height='2'/%3E%3C/g%3E%3C/svg%3E" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161513'/%3E%3Cpath d='M4.5 12.5V8h4.5M23 8h4.5v4.5M4.5 19.5V24h4.5M23 24h4.5v-4.5' fill='none' stroke='%23dcb459' stroke-width='2'/%3E%3Cg fill='none' stroke='%23f3f1ea' stroke-width='1.4' stroke-linejoin='round'%3E%3Crect x='9' y='12.5' width='14' height='8.5' rx='1.3'/%3E%3Ccircle cx='15' cy='17' r='2.6'/%3E%3Cpath d='M10.8 12.5v-1.3h2.4v1.3M19.6 12.5v-1.3h2v1.3'/%3E%3C/g%3E%3C/svg%3E" />
   <link rel="stylesheet" href="/static/style-rangefinder.css" />
 </head>
 <body>
@@ -360,6 +360,30 @@
       <button id="dialog-cancel" class="secondary">Cancel</button>
       <button id="dialog-ok" class="primary">OK</button>
     </div>
+  </div>
+
+  <!-- Viewer: one frame large, the folder as a filmstrip under it. Opened
+       from a thumbnail's magnifier or with Space on the contact sheet. -->
+  <div id="viewer" class="viewer hidden" role="dialog" aria-modal="true" aria-label="Frame viewer" tabindex="-1">
+    <div class="viewer-top">
+      <div class="viewer-title">
+        <span id="viewer-name" class="viewer-name"></span>
+        <span id="viewer-meta" class="viewer-meta"></span>
+      </div>
+      <div class="viewer-counter" aria-live="polite"><span id="viewer-index"></span><span class="viewer-of">/</span><span id="viewer-total"></span></div>
+      <div class="viewer-tools">
+        <button id="viewer-invert" class="action-link" type="button" aria-pressed="false" title="Invert (I)">Invert</button>
+        <button id="viewer-open" class="action-link" type="button" title="Open the file in its default app">Open in app</button>
+        <button id="viewer-close" class="icon-btn" type="button" aria-label="Close" title="Close (Space or Esc)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+      </div>
+    </div>
+    <div id="viewer-stage" class="viewer-stage">
+      <button id="viewer-prev" class="viewer-nav prev" type="button" aria-label="Previous frame" title="Previous (←)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-back"/></svg></button>
+      <img id="viewer-image" class="viewer-image" alt="" />
+      <div id="viewer-status" class="viewer-status hidden"></div>
+      <button id="viewer-next" class="viewer-nav next" type="button" aria-label="Next frame" title="Next (→)"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-forward"/></svg></button>
+    </div>
+    <div id="viewer-strip" class="viewer-strip" aria-label="Frames"></div>
   </div>
 
   <script src="/static/app.js"></script>

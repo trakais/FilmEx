@@ -240,6 +240,13 @@ film stock rows.
   (`services/exiftool_locator.py`): setting → `FILMEX_EXIFTOOL` → `PATH` →
   Homebrew/system candidates → bundled copy. Never spawn a bare
   `"exiftool"`.
+- **Viewer**: a thumbnail's magnifier, a Changes thumbnail, or Space on the
+  contact sheet opens one frame large (`openViewer()` in `app.js`), with
+  the folder as a filmstrip; arrows step, I inverts for the viewer only,
+  Space or Esc closes and a single selection follows the last frame. The
+  image is `GET /api/files/preview` (long edge 2048 px, made on first
+  request and cached beside the thumbnails); the thumbnail shows until it
+  arrives and the neighbours are loaded ahead.
 - **Dialogs**: no `alert`/`confirm`/`prompt`. Use `notify()` / `ask()` /
   `askText()` in `app.js`; confirmations of file operations pass
   `danger: true` so they carry the red action.

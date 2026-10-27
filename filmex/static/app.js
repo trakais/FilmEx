@@ -1104,6 +1104,174 @@ function icon(name, cls = "") {
 const CHEVRON_ICON = `<svg class="chev" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const MAGNIFIER_ICON = `<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false"><circle cx="5.75" cy="5.75" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8.75 8.75 12.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
 
+// ---------- Viewer ----------
+//
+// One frame at a time, large, with the folder as a filmstrip under it, like
+// Quick Look: arrows step through every frame, I flips the inversion for the
+// viewer only, Space or Escape closes. The cached thumbnail shows at once and
+// the large preview (made and cached by the server) replaces it when it
+// arrives; the neighbours load ahead so stepping through a roll is instant.
+
+const viewer = { frames: [], index: 0, invert: false, token: 0 };
+
+function buildPreviewUrl(folder, name, invert) {
+  if (invert && isPositiveFile(folder, name)) invert = false;
+  const params = new URLSearchParams({ folder, name, invert: invert ? "true" : "false" });
+  return `/api/files/preview?${params.toString()}`;
+}
+
+function frameImage(frame) {
+  return frame.preview || frame.images[0];
+}
+
+function viewerOpen() {
+  return !document.getElementById("viewer").classList.contains("hidden");
+}
+
+function openViewer(key) {
+  const frames = folderFrames().filter(frameImage);
+  const index = frames.findIndex(f => f.key === key);
+  if (index < 0) return;
+  Object.assign(viewer, { frames, index, invert: state.previewInvert });
+  renderViewerStrip();
+  document.getElementById("viewer").classList.remove("hidden");
+  document.body.classList.add("viewing");
+  showViewerFrame();
+  document.getElementById("viewer").focus({ preventScroll: true });
+}
+
+// From a file name (the Changes list): the frame that holds it.
+function openViewerAtFile(name) {
+  const frame = folderFrames().find(f => f.files.includes(name) || f.images.includes(name));
+  if (frame && frameImage(frame)) openViewer(frame.key);
+  else void openSourceFile(name);
+}
+
+function closeViewer() {
+  document.getElementById("viewer").classList.add("hidden");
+  document.body.classList.remove("viewing");
+  const frame = viewer.frames[viewer.index];
+  if (!frame) return;
+  // Like Quick Look: a single selection follows the frame you ended on.
+  if (state.folder.selection.size <= 1) moveCursor(frame.key, false);
+  else scrollCellIntoView(frame.key);
+}
+
+function stepViewer(delta) {
+  const next = Math.max(0, Math.min(viewer.frames.length - 1, viewer.index + delta));
+  if (next === viewer.index) return;
+  viewer.index = next;
+  showViewerFrame();
+}
+
+function viewerFrameMeta(frame) {
+  const rolls = state.folder.rolls;
+  const roll = rolls.findIndex(r => r.frames.includes(frame.key));
+  const where = roll < 0 ? "Left out" : rolls.length > 1 ? `Roll ${roll + 1}` : "";
+  return [where, frame.images.join(" + ")].filter(Boolean).join(" · ");
+}
+
+function renderViewerStrip() {
+  const folder = state.folder;
+  const multi = folder.rolls.length > 1;
+  const strip = document.getElementById("viewer-strip");
+  strip.innerHTML = viewer.frames.map((frame, i) => {
+    const roll = folder.rolls.findIndex(r => r.frames.includes(frame.key));
+    const cls = roll < 0 ? " unassigned" : multi ? ` roll-hue-${roll % ROLL_HUE_COUNT}` : "";
+    const thumb = frame.preview && folder.thumbs.has(frame.preview)
+      ? `<img src="${escapeHtml(buildThumbnailUrl(folder.path, frame.preview, state.previewInvert))}" alt="" loading="lazy" />`
+      : `<span>${escapeHtml(frame.display_key)}</span>`;
+    return `<button type="button" class="strip-cell${cls}" data-index="${i}" tabindex="-1" aria-label="${escapeHtml(frame.display_key)}">${thumb}</button>`;
+  }).join("");
+  for (const cell of strip.querySelectorAll(".strip-cell")) {
+    cell.addEventListener("click", () => { viewer.index = Number(cell.dataset.index); showViewerFrame(); });
+  }
+}
+
+function showViewerFrame() {
+  const folder = state.folder;
+  const frame = viewer.frames[viewer.index];
+  const name = frameImage(frame);
+  const token = ++viewer.token;
+  const img = document.getElementById("viewer-image");
+  const status = document.getElementById("viewer-status");
+  status.classList.add("hidden");
+  // The cached thumbnail first, when it is in the viewer's inversion.
+  const thumb = viewer.invert === state.previewInvert && frame.preview && folder.thumbs.has(frame.preview);
+  if (thumb) img.src = buildThumbnailUrl(folder.path, frame.preview, viewer.invert);
+  else img.removeAttribute("src");
+  img.classList.add("loading");
+  const large = new Image();
+  large.onload = () => {
+    if (token !== viewer.token) return;
+    img.src = large.src;
+    img.classList.remove("loading");
+  };
+  large.onerror = () => {
+    if (token !== viewer.token) return;
+    img.classList.remove("loading");
+    if (!thumb) {
+      status.textContent = `No preview for ${name}. Open it in its app instead.`;
+      status.classList.remove("hidden");
+    }
+  };
+  large.src = buildPreviewUrl(folder.path, name, viewer.invert);
+
+  document.getElementById("viewer-name").textContent = frame.display_key;
+  document.getElementById("viewer-meta").textContent = viewerFrameMeta(frame);
+  document.getElementById("viewer-index").textContent = String(viewer.index + 1);
+  document.getElementById("viewer-total").textContent = String(viewer.frames.length);
+  document.getElementById("viewer-prev").disabled = viewer.index === 0;
+  document.getElementById("viewer-next").disabled = viewer.index === viewer.frames.length - 1;
+  document.getElementById("viewer-invert").setAttribute("aria-pressed", String(viewer.invert));
+  for (const cell of document.querySelectorAll("#viewer-strip .strip-cell")) {
+    cell.classList.toggle("current", Number(cell.dataset.index) === viewer.index);
+  }
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  document.querySelector(`#viewer-strip .strip-cell[data-index="${viewer.index}"]`)
+    ?.scrollIntoView({ block: "nearest", inline: "center", behavior: reduce ? "auto" : "smooth" });
+  for (const i of [viewer.index + 1, viewer.index - 1]) {
+    const near = viewer.frames[i];
+    if (near) new Image().src = buildPreviewUrl(folder.path, frameImage(near), viewer.invert);
+  }
+}
+
+function onViewerKey(e) {
+  if (!viewerOpen() || e.metaKey || e.ctrlKey || e.altKey) return;
+  const actions = {
+    ArrowRight: () => stepViewer(1),
+    ArrowDown: () => stepViewer(1),
+    ArrowLeft: () => stepViewer(-1),
+    ArrowUp: () => stepViewer(-1),
+    Home: () => stepViewer(-viewer.frames.length),
+    End: () => stepViewer(viewer.frames.length),
+    Escape: closeViewer,
+    " ": closeViewer,
+    i: () => { viewer.invert = !viewer.invert; showViewerFrame(); },
+  };
+  const action = actions[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+  if (!action) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  action();
+}
+
+function wireViewer() {
+  document.addEventListener("keydown", onViewerKey, true);
+  document.getElementById("viewer-close").addEventListener("click", closeViewer);
+  document.getElementById("viewer-prev").addEventListener("click", () => stepViewer(-1));
+  document.getElementById("viewer-next").addEventListener("click", () => stepViewer(1));
+  document.getElementById("viewer-invert").addEventListener("click", () => { viewer.invert = !viewer.invert; showViewerFrame(); });
+  document.getElementById("viewer-open").addEventListener("click", () => {
+    const frame = viewer.frames[viewer.index];
+    if (frame) void openSourceFile(frameImage(frame));
+  });
+  // A click on the dark surround, not the frame or a control, closes.
+  document.getElementById("viewer-stage").addEventListener("click", (e) => {
+    if (e.target.id === "viewer-stage") closeViewer();
+  });
+}
+
 async function openSourceFile(name) {
   try {
     const params = new URLSearchParams({ folder: state.folder.path, name });
@@ -2549,7 +2717,7 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
     if (cut) cell.classList.add(`cut-${cut.strength}`);
     const scissors = cut ? `<button type="button" class="sheet-cut-tag" title="${escapeHtml(cutReasonText(cut))}" aria-label="Cut here">${icon("scissors")}</button>` : "";
     const openName = frame.preview || frame.images[0];
-    const magnifier = openName ? `<button type="button" class="sheet-open" title="Open ${escapeHtml(openName)}" aria-label="Open ${escapeHtml(openName)}">${MAGNIFIER_ICON}</button>` : "";
+    const magnifier = openName ? `<button type="button" class="sheet-open" title="View ${escapeHtml(frame.display_key)} (Space)" aria-label="View ${escapeHtml(frame.display_key)}">${MAGNIFIER_ICON}</button>` : "";
     cell.innerHTML = `
       <div class="sheet-thumb">${thumb}${stamp}${scissors}${magnifier}</div>
       <div class="sheet-cell-name"><span>${escapeHtml(frame.display_key)}</span>${badge}</div>
@@ -2557,7 +2725,7 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
     cell.title = frame.files.join("\n");
     if (onClick) cell.addEventListener("click", (ev) => onClick(frame.key, ev));
     if (cut && onCut) cell.querySelector(".sheet-cut-tag").addEventListener("click", (ev) => { ev.stopPropagation(); onCut(frame.key); });
-    if (openName) cell.querySelector(".sheet-open").addEventListener("click", (ev) => { ev.stopPropagation(); void openSourceFile(openName); });
+    if (openName) cell.querySelector(".sheet-open").addEventListener("click", (ev) => { ev.stopPropagation(); openViewer(frame.key); });
     frag.appendChild(cell);
   }
   container.appendChild(frag);
@@ -2587,7 +2755,7 @@ function updateSheetToolbar() {
   const label = document.getElementById("sheet-selection");
   label.textContent = n
     ? `${n} frame${n === 1 ? "" : "s"} selected`
-    : "Click a frame, shift-click for a range, ⌘-click to add. Arrow keys move, C cuts, X leaves out.";
+    : "Click a frame, shift-click for a range, ⌘-click to add. Arrow keys move, Space views, C cuts, X leaves out.";
   document.getElementById("cuts-rhythm").value = String(state.settings?.frames_per_roll ?? 36);
   document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
   document.getElementById("sheet-new-roll").disabled = n === 0;
@@ -2893,7 +3061,7 @@ function humanDuration(seconds) {
 //
 // On the sheet: arrow keys move the cursor (shift extends the selection),
 // C cuts before the cursor, X leaves the selection out, Enter takes a
-// suggested cut at the cursor, Escape clears. Off while typing in a field
+// suggested cut at the cursor, Space views it large, Escape clears. Off while typing in a field
 // or while a dialog is open.
 
 function onSheetKey(e) {
@@ -2901,6 +3069,7 @@ function onSheetKey(e) {
   if (!document.getElementById("dialog").classList.contains("hidden")) return;
   if (!document.getElementById("picker-panel").classList.contains("hidden")) return;
   if (!document.getElementById("settings-form-panel").classList.contains("hidden")) return;
+  if (viewerOpen()) return;
   const tag = (document.activeElement?.tagName || "").toLowerCase();
   if (["input", "select", "textarea"].includes(tag) || document.activeElement?.isContentEditable) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2924,6 +3093,9 @@ function onSheetKey(e) {
     if (folder.selection.size) leaveOutSelection();
   } else if (e.key === "Enter") {
     if (folder.anchor && suggestedCutAt(folder.anchor)) { e.preventDefault(); cutBefore(folder.anchor); }
+  } else if (e.key === " ") {
+    e.preventDefault();
+    if (folder.anchor) openViewer(folder.anchor);
   } else if (e.key === "Escape") {
     clearSheetSelection();
   }
@@ -3141,7 +3313,7 @@ function rollCardChanges(roll) {
 function diffFileHtml(roll, file) {
   const t = roll.tagging;
   const thumb = state.folder.thumbs.has(file.name)
-    ? `<button type="button" class="diff-thumb-link" data-open="${escapeHtml(file.name)}" title="Open ${escapeHtml(file.name)}" aria-label="Open ${escapeHtml(file.name)}"><img class="diff-thumb" src="${escapeHtml(buildThumbnailUrl(state.folder.path, file.name, state.previewInvert))}" alt="" loading="lazy" /><span class="thumb-open">${MAGNIFIER_ICON}</span></button>`
+    ? `<button type="button" class="diff-thumb-link" data-open="${escapeHtml(file.name)}" title="View ${escapeHtml(file.name)}" aria-label="View ${escapeHtml(file.name)}"><img class="diff-thumb" src="${escapeHtml(buildThumbnailUrl(state.folder.path, file.name, state.previewInvert))}" alt="" loading="lazy" /><span class="thumb-open">${MAGNIFIER_ICON}</span></button>`
     : "";
   const rows = file.changes.map(ch => `
       <div class="diff-row">
@@ -3227,7 +3399,7 @@ function wireRollExpanders(el, roll) {
     if (roll.changesOpen && (!roll.changes || roll.changesStale)) void loadRollChanges(roll);
   });
   el.querySelector("[data-act=refresh-changes]")?.addEventListener("click", () => void loadRollChanges(roll));
-  for (const btn of el.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openSourceFile(btn.dataset.open));
+  for (const btn of el.querySelectorAll("[data-open]")) btn.addEventListener("click", () => openViewerAtFile(btn.dataset.open));
   for (const file of el.querySelectorAll(".diff-file")) {
     const name = file.dataset.file;
     file.querySelector(".diff-file-lens-select").addEventListener("change", (e) => {
@@ -3918,6 +4090,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("cuts-rhythm").addEventListener("change", (e) => setRhythm(e.target.value));
   document.getElementById("cuts-apply-all").addEventListener("click", applyAllCuts);
   document.addEventListener("keydown", onSheetKey);
+  wireViewer();
   for (const btn of document.querySelectorAll("#destination .segment")) {
     btn.addEventListener("click", () => setDestination(btn.dataset.dest));
   }
