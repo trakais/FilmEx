@@ -212,7 +212,9 @@ film stock rows.
   daemon thread on a random loopback port; pywebview shows the page; closing
   the window stops the server. The server never imports pywebview; desktop
   behaviour lives in `desktop.py` and behind `window.pywebview` checks in
-  `app.js` (`pickFolder()`, `window.filmexDesktop.onDrop`).
+  `app.js` (`pickFolder()`, `window.filmexDesktop.onDrop`). On macOS the
+  native title bar follows the page theme (`match_title_bar()`, called on
+  show and from `applyTheme()` through `api.match_theme`).
 - **Loopback guard** (`filmex/security.py`): `/api/*` rejects non-loopback
   `Host` headers (DNS rebinding) and foreign `Origin` headers (cross-site
   posts). In desktop mode the window opens `/?token=…` once; the server
@@ -239,7 +241,14 @@ film stock rows.
   Homebrew/system candidates → bundled copy. Never spawn a bare
   `"exiftool"`.
 - **Dialogs**: no `alert`/`confirm`/`prompt`. Use `notify()` / `ask()` /
-  `askText()` in `app.js`.
+  `askText()` in `app.js`; confirmations of file operations pass
+  `danger: true` so they carry the red action.
+- **Look**: colours, sizes and tracking are tokens on `:root` in
+  `style-rangefinder.css` (panels sit above the page, inputs are wells,
+  five type sizes, nothing under 11px, no caps on data). Icons are the SVG
+  symbols in `index.html`, drawn with `icon(name)`; no Unicode glyphs or
+  emoji as icons. Fonts ship in `static/fonts` (OFL); nothing loads from
+  the network.
 - **Screens** (`index.html`, one `<main>` each): **Home** until a library
   folder is set (drop zone, Open folder, recent folders, choose a library);
   **Library** once one is (the start screen from then on); the **Folder

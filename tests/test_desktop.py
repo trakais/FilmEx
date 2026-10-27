@@ -77,3 +77,16 @@ def test_wait_for_server_accepts_guarded_401():
 def test_wait_for_server_times_out_on_closed_port():
     port = desktop.free_port()
     assert desktop.wait_for_server(f"http://127.0.0.1:{port}", timeout=0.5) is False
+
+
+
+def test_match_theme_without_a_native_window_is_a_no_op():
+    api = desktop.DesktopApi()
+    assert api.match_theme("dark") is False
+
+    class _NoNative:
+        native = None
+
+    api.window = _NoNative()
+    assert api.match_theme("paper") is False
+    assert desktop.match_title_bar(None, "dark") is False

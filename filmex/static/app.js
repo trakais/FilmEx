@@ -204,6 +204,8 @@ function applyTheme(theme, { persist = true } = {}) {
     // ignore — the server copy is the real one
   }
   if (persist) queueSettingsPatch({ theme: nextTheme });
+  // The desktop shell paints its native title bar to match.
+  window.pywebview?.api?.match_theme?.(nextTheme)?.catch?.(() => {});
 }
 
 function renderThemeSwitch() {
@@ -1094,6 +1096,11 @@ function lensOverrideOptions(camera, selectedId) {
 
 // Small inline icons: a chevron for expanders, a magnifier for "open this
 // image", so a control looks like one instead of a word.
+// One icon set, drawn in index.html as <symbol id="i-…">.
+function icon(name, cls = "") {
+  return `<svg class="icon${cls ? ` ${cls}` : ""}" aria-hidden="true" focusable="false"><use href="#i-${name}"/></svg>`;
+}
+
 const CHEVRON_ICON = `<svg class="chev" viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const MAGNIFIER_ICON = `<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false"><circle cx="5.75" cy="5.75" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8.75 8.75 12.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
 
@@ -1482,7 +1489,7 @@ function renderSettingsRow(kind, row, cfg) {
       ${escapeHtml(primary)}
       ${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ""}
     </div>
-    ${hasFavorite ? `<button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite">★</button>` : ""}
+    ${hasFavorite ? `<button class="settings-row-star ${row.favorite ? "on" : ""}" title="Favorite" aria-label="Favorite" aria-pressed="${row.favorite ? "true" : "false"}">${icon("dot")}</button>` : ""}
     <button class="settings-row-edit">Edit</button>
     ${hasArchive ? `<button class="settings-row-archive">${row.archived ? "Unarchive" : "Archive"}</button>` : ""}
   `;
@@ -1894,16 +1901,28 @@ function renderLibraryRow(row) {
 // A roll kept as RAW and JPG renditions: the roll's row carries the combined
 // status and gear; one slimmer row per rendition carries the actions, since
 // each rendition is tagged on its own (same gear, its own scan source).
+// Film and camera of a Library row, led by the film's cassette in its brand
+// colours when the stock is known.
+function libraryMetaHtml(row) {
+  const meta = [row.film_display, row.camera_display].filter(Boolean).join(" · ");
+  const film = row.film_display ? state.films.find(f => f.display_name === row.film_display) : null;
+  let can = "";
+  if (film) {
+    const [c1, c2] = filmBrandColors(film.brand);
+    can = `<span class="lib-can" style="--brand-c1:${escapeHtml(c1)};--brand-c2:${escapeHtml(c2)}">${canisterSvg()}</span>`;
+  }
+  return `<span class="lib-meta" title="${escapeHtml(meta)}">${can}${escapeHtml(meta)}</span>`;
+}
+
 function renderLibraryRoll(row) {
   const frag = document.createDocumentFragment();
   const head = document.createElement("div");
   head.className = `lib-row lib-roll ${row.status}`;
   head.dataset.path = row.path;
-  const meta = [row.film_display, row.camera_display].filter(Boolean).join(" · ");
   head.innerHTML = `
     ${libraryStatusPill(row)}
     <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))} · ${row.renditions.length} renditions</span></span>
-    <span class="lib-meta" title="${escapeHtml(meta)}">${escapeHtml(meta || "")}</span>
+    ${libraryMetaHtml(row)}
     <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
     <span class="lib-actions"><button type="button" class="secondary" data-act="gather" title="Move the renditions' files into the roll folder">Gather</button><button type="button" class="secondary" data-act="reveal" title="Show in Finder">Reveal</button></span>
   `;
@@ -1922,7 +1941,6 @@ function renderLibraryFolderRow(row) {
   const el = document.createElement("div");
   el.className = `lib-row ${row.status}`;
   el.dataset.path = row.path;
-  const meta = [row.film_display, row.camera_display].filter(Boolean).join(" · ");
   const actions = [];
   if (row.status === "partial") {
     actions.push(`<button type="button" class="primary" data-act="remaining">Tag remaining ${row.untagged_count}</button>`);
@@ -1935,7 +1953,7 @@ function renderLibraryFolderRow(row) {
   el.innerHTML = `
     ${libraryStatusPill(row)}
     <span class="lib-name"><code title="${escapeHtml(row.path)}">${escapeHtml(row.display_name)}</code><span class="lib-sub">${escapeHtml(libraryCountsText(row))}</span></span>
-    <span class="lib-meta" title="${escapeHtml(meta)}">${escapeHtml(meta || "")}</span>
+    ${libraryMetaHtml(row)}
     <span class="lib-date">${row.last_applied_at ? escapeHtml(formatStamp(row.last_applied_at, { dateOnly: true })) : ""}</span>
     <span class="lib-actions">${actions.join("")}</span>
   `;
@@ -2021,7 +2039,7 @@ function renderNamingPanel() {
       <span class="pill ${NAMING_STATUS_CLASS[p.status] || ""}">${NAMING_STATUS_LABEL[p.status] || p.status}</span>
       <span class="naming-old" title="${escapeHtml(p.path)}">${escapeHtml((p.parent ? p.parent + "/" : "") + p.current)}</span>
       ${p.proposed && p.status !== "conforms"
-        ? `<span class="naming-arrow">→</span><span class="naming-new" title="${escapeHtml(p.proposed)}">${escapeHtml(p.proposed)}</span>`
+        ? `<span class="naming-arrow">${icon("forward")}</span><span class="naming-new" title="${escapeHtml(p.proposed)}">${escapeHtml(p.proposed)}</span>`
         : `<span></span><span class="naming-new"></span>`}
       ${p.reason ? `<span class="naming-reason">${escapeHtml(p.reason)}</span>` : ""}
     `;
@@ -2529,7 +2547,7 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
       : frame.has_raw && frame.images.length > 1 ? `<span class="sheet-badge">pair</span>` : "";
     const cut = cutAt ? cutAt(frame.key) : null;
     if (cut) cell.classList.add(`cut-${cut.strength}`);
-    const scissors = cut ? `<button type="button" class="sheet-cut-tag" title="${escapeHtml(cutReasonText(cut))}" aria-label="Cut here">✂</button>` : "";
+    const scissors = cut ? `<button type="button" class="sheet-cut-tag" title="${escapeHtml(cutReasonText(cut))}" aria-label="Cut here">${icon("scissors")}</button>` : "";
     const openName = frame.preview || frame.images[0];
     const magnifier = openName ? `<button type="button" class="sheet-open" title="Open ${escapeHtml(openName)}" aria-label="Open ${escapeHtml(openName)}">${MAGNIFIER_ICON}</button>` : "";
     cell.innerHTML = `
@@ -2822,7 +2840,7 @@ function renderSeam(cut) {
     return `<figure><div class="seam-thumb">${thumb}</div><figcaption>${escapeHtml(frame ? frame.display_key : key)}</figcaption></figure>`;
   };
   el.innerHTML = `
-    <div class="seam-pair">${figure(cut.previous)}<span class="seam-mark">✂</span>${figure(cut.key)}</div>
+    <div class="seam-pair">${figure(cut.previous)}<span class="seam-mark">${icon("scissors")}</span>${figure(cut.key)}</div>
     <div class="seam-text">
       <div class="seam-label">${CUT_STRENGTH_LABEL[cut.strength] || cut.strength}</div>
       <div class="lib-sub">${escapeHtml(cutReasonText(cut))}</div>
@@ -2979,18 +2997,20 @@ function renderRollCards() {
 // once something is picked. A picked film shows its brand's cassette.
 const TILE_GLYPHS = {
   camera: `<svg class="tile-glyph" viewBox="0 0 44 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
-    <rect x="2" y="9" width="40" height="21" rx="3"/>
-    <path d="M10 9V6.5a1.5 1.5 0 0 1 1.5-1.5h7a1.5 1.5 0 0 1 1.5 1.5V9"/>
-    <rect x="30" y="5" width="6" height="4" rx="1"/>
-    <circle cx="22" cy="19.5" r="7"/><circle cx="22" cy="19.5" r="3.5"/>
-    <circle cx="36.5" cy="14" r="1.5"/><path d="M6 14h4"/>
+    <rect x="3" y="9" width="38" height="19" rx="2.5"/>
+    <path d="M7 9V6.5h6V9M30 9V6.5h5V9"/>
+    <rect x="6.5" y="12" width="6" height="4" rx="0.8"/>
+    <rect x="30" y="12" width="7.5" height="4.5" rx="0.8"/>
+    <rect x="24" y="12.5" width="2.5" height="3" rx="0.5"/>
+    <circle cx="19" cy="20" r="6.5"/><circle cx="19" cy="20" r="3.8"/>
   </svg>`,
   lens: `<svg class="tile-glyph" viewBox="0 0 44 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
-    <rect x="6" y="7" width="28" height="18" rx="2"/>
-    <path d="M34 10h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4"/>
-    <path d="M6 11H3.5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1H6"/>
-    <path d="M13 7v18M17 7v18M25 7v18M28 7v18"/>
-    <path d="M39 13.5c1.5 0 2.5 1.1 2.5 2.5s-1 2.5-2.5 2.5"/>
+    <rect x="6.5" y="10.5" width="5" height="11" rx="1"/>
+    <rect x="11.5" y="8.5" width="12" height="15" rx="1"/>
+    <path d="M14 10.5v11M16.5 10.5v11M19 10.5v11M21.5 10.5v11"/>
+    <rect x="23.5" y="9.5" width="12" height="13" rx="1"/>
+    <path d="M29.5 9.5v13M35.5 12h3.5v8h-3.5"/>
+    <circle cx="26.5" cy="6.3" r="1" fill="currentColor" stroke="none"/>
   </svg>`,
   film: `<svg class="tile-glyph tile-glyph-film" viewBox="0 0 24 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
     <rect x="9.5" y="1" width="5" height="2.4" rx="0.5"/>
@@ -3014,7 +3034,7 @@ function compactTile(kind, entity, roll) {
       <div class="tile-label">${label}</div>
       <div class="tile-content${entity ? "" : " empty"}">${entity ? escapeHtml(copy.title) : `Pick a ${kind}`}</div>
       ${entity ? `<div class="tile-sub">${escapeHtml(copy.sub)}</div>` : ""}
-      ${entity ? `<button type="button" class="tile-clear" aria-label="Clear ${kind}" title="Clear">✕</button>` : ""}
+      ${entity ? `<button type="button" class="tile-clear" aria-label="Clear ${kind}" title="Clear">${icon("close")}</button>` : ""}
       ${colors ? canisterSvg("tile-canister") : TILE_GLYPHS[kind]}
     </div>`;
 }
@@ -3271,11 +3291,27 @@ function setRollGear(roll, gear) {
   scheduleRollName(roll);
 }
 
+// The freshly picked tile plays the rangefinder coincidence (the gold ghost
+// of its name slides into register, the framelines close in) and takes the
+// focus back from the closed picker.
+function bringIntoRegister(roll, kind) {
+  const tile = document.querySelector(`.roll-card[data-id="${cssEscape(roll.id)}"] .tile[data-kind="${kind}"]`);
+  if (!tile) return;
+  tile.classList.add("just-picked");
+  tile.addEventListener("animationend", (e) => {
+    if (e.target.classList.contains("tile-content")) tile.classList.remove("just-picked");
+  });
+  tile.focus({ preventScroll: true });
+}
+
 function rollPickerTarget(roll) {
   return {
     camera: () => roll.tagging.camera,
     current: (kind) => roll.tagging[kind],
-    set: (kind, item) => setRollGear(roll, withGear(rollGear(roll), kind, item)),
+    set: (kind, item) => {
+      setRollGear(roll, withGear(rollGear(roll), kind, item));
+      if (item) bringIntoRegister(roll, kind);
+    },
   };
 }
 
@@ -3697,16 +3733,38 @@ function renderFolderProgress(text, fraction) {
   `;
 }
 
+function doneStamp(count, label) {
+  return `<div class="done-stamp" aria-label="${count} ${escapeHtml(label)}"><span class="done-count" aria-hidden="true">${count}</span><span class="done-label" aria-hidden="true">${escapeHtml(label)}</span></div>`;
+}
+
+// The counter runs up once like a frame counter. It starts from the final
+// value, so a page that never animates still shows the right number.
+function runDoneCounters(root) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  for (const el of root.querySelectorAll(".done-count")) {
+    const to = Number(el.textContent);
+    if (!(to > 1)) continue;
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / 480);
+      el.textContent = String(Math.max(1, Math.round(to * (1 - (1 - t) ** 3))));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+}
+
 function renderFolderResult(result) {
   const section = document.getElementById("folder-result");
   const body = document.getElementById("folder-result-body");
   if (!result) { section.classList.add("hidden"); body.innerHTML = ""; return; }
   section.classList.remove("hidden");
   const { action, dest, done } = result;
+  const clean = !done.cancelled && !(done.errors || []).length;
   if (action === "write") {
     const n = done.applied_files.length;
     body.innerHTML = `
-      <div>Wrote ${n} file${n === 1 ? "" : "s"}.</div>
+      ${clean ? doneStamp(n, `file${n === 1 ? "" : "s"} written`) : `<div>Wrote ${n} file${n === 1 ? "" : "s"}.</div>`}
       ${done.errors.length ? `<pre class="result-errors">${escapeHtml(done.errors.join("\n"))}</pre>` : ""}
       ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
       <div class="apply-actions">
@@ -3732,7 +3790,10 @@ function renderFolderResult(result) {
         </div>`;
     }).join("");
     const errors = (done.errors || []);
+    const made = (done.created || []).length;
+    const verb = action === "split" ? "made" : dest === "move" ? "moved to the library" : "copied to the library";
     body.innerHTML = `
+      ${clean && made ? doneStamp(made, `roll${made === 1 ? "" : "s"} ${verb}`) : ""}
       <div class="result-list">${rows || `<div class="lib-sub">Nothing was created.</div>`}</div>
       ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
       ${action === "split" && done.removed_source ? `<div class="lib-sub" style="margin-top:10px">The emptied folder was removed; its old manifest is kept in the undo journal.</div>` : ""}
@@ -3742,6 +3803,7 @@ function renderFolderResult(result) {
     `;
     document.getElementById("result-back-library")?.addEventListener("click", () => void openLibrary());
   }
+  runDoneCounters(body);
   for (const btn of body.querySelectorAll("[data-open]")) btn.addEventListener("click", () => void openFolder(btn.dataset.open));
   for (const btn of body.querySelectorAll("[data-reveal]")) btn.addEventListener("click", () => void revealFolder(btn.dataset.reveal));
 }
@@ -3811,6 +3873,14 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("picker-close").addEventListener("click", closePicker);
   document.getElementById("picker-backdrop").addEventListener("click", closePicker);
   document.getElementById("picker-search").addEventListener("input", renderPickerGrid);
+  const developed = new Set();
+  document.getElementById("contact-sheet").addEventListener("load", (e) => {
+    const img = e.target;
+    if (img.tagName !== "IMG" || developed.has(img.src)) return;
+    developed.add(img.src);
+    img.classList.add("developing");
+    img.addEventListener("animationend", () => img.classList.remove("developing"), { once: true });
+  }, true);
   // Enter in the search picks the first match.
   document.getElementById("picker-search").addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;

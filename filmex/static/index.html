@@ -8,9 +8,20 @@
   <link rel="stylesheet" href="/static/style-rangefinder.css" />
 </head>
 <body>
-  <!-- Shared gradient defs for the film canister glyphs (see canisterSvg()). -->
+  <!-- Shared defs: gradients for the film canister glyphs (see canisterSvg())
+       and the icon set, used as <svg class="icon"><use href="#i-…"/></svg>
+       (icon() in app.js). Icons sit on a 20px grid with a 1.5px stroke and
+       round joins; fill and stroke come from .icon. -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
     <defs>
+      <symbol id="i-gear" viewBox="0 0 20 20"><path d="M16.24 8.56 L18.34 8.98 L18.34 11.02 L16.24 11.44 L15.43 13.39 L16.62 15.17 L15.17 16.62 L13.39 15.43 L11.44 16.24 L11.02 18.34 L8.98 18.34 L8.56 16.24 L6.61 15.43 L4.83 16.62 L3.38 15.17 L4.57 13.39 L3.76 11.44 L1.66 11.02 L1.66 8.98 L3.76 8.56 L4.57 6.61 L3.38 4.83 L4.83 3.38 L6.61 4.57 L8.56 3.76 L8.98 1.66 L11.02 1.66 L11.44 3.76 L13.39 4.57 L15.17 3.38 L16.62 4.83 L15.43 6.61Z"/><circle cx="10" cy="10" r="2.7"/></symbol>
+      <symbol id="i-more" viewBox="0 0 20 20"><circle cx="4.5" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.4" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-close" viewBox="0 0 20 20"><path d="M5 5l10 10M15 5L5 15"/></symbol>
+      <symbol id="i-back" viewBox="0 0 20 20"><path d="M16 10H4M9 5l-5 5 5 5"/></symbol>
+      <symbol id="i-forward" viewBox="0 0 20 20"><path d="M4 10h12M11 5l5 5-5 5"/></symbol>
+      <symbol id="i-scissors" viewBox="0 0 20 20"><circle cx="5.5" cy="5.5" r="2.5"/><circle cx="5.5" cy="14.5" r="2.5"/><path d="M7.6 6.9L17 13.5M7.6 13.1L17 6.5"/></symbol>
+      <symbol id="i-dot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4"/></symbol>
+      <symbol id="i-film" viewBox="0 0 48 36"><rect x="4" y="8" width="40" height="22" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor" stroke="none"><rect x="7" y="3" width="4" height="3"/><rect x="16" y="3" width="4" height="3"/><rect x="25" y="3" width="4" height="3"/><rect x="34" y="3" width="4" height="3"/><rect x="7" y="32" width="4" height="3"/><rect x="16" y="32" width="4" height="3"/><rect x="25" y="32" width="4" height="3"/><rect x="34" y="32" width="4" height="3"/></g></symbol>
       <linearGradient id="can-metal" x1="0" x2="1" y1="0" y2="0">
         <stop offset="0" stop-color="#4a4a4a" />
         <stop offset="0.3" stop-color="#a3a3a3" />
@@ -31,8 +42,8 @@
        anywhere, not just on the folder input. -->
   <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
     <div class="drop-overlay-inner">
-      <div class="drop-overlay-icon">📁</div>
-      <div class="drop-overlay-text">Drop a roll folder anywhere</div>
+      <svg class="drop-overlay-glyph" viewBox="0 0 48 36" aria-hidden="true" focusable="false"><use href="#i-film"/></svg>
+      <div class="drop-overlay-text">Drop a folder of scans</div>
       <div class="drop-overlay-hint">from Finder, Explorer, or your file manager</div>
     </div>
   </div>
@@ -52,7 +63,7 @@
         <button id="theme-dark" type="button" class="theme-chip" aria-pressed="true">Graphite</button>
         <button id="theme-paper" type="button" class="theme-chip" aria-pressed="false">Paper</button>
       </div>
-      <button id="settings-open" class="icon-btn" aria-label="Settings" title="Settings">⚙</button>
+      <button id="settings-open" class="icon-btn" aria-label="Settings" title="Settings"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-gear"/></svg></button>
     </div>
   </header>
 
@@ -60,11 +71,7 @@
   <main id="home-view" class="hidden">
     <section class="home">
       <div class="home-drop" id="home-drop">
-        <svg class="home-drop-glyph" viewBox="0 0 48 36" aria-hidden="true" focusable="false">
-          <rect x="4" y="8" width="40" height="22" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
-          <g fill="currentColor"><rect x="7" y="3" width="4" height="3"/><rect x="16" y="3" width="4" height="3"/><rect x="25" y="3" width="4" height="3"/><rect x="34" y="3" width="4" height="3"/>
-          <rect x="7" y="32" width="4" height="3"/><rect x="16" y="32" width="4" height="3"/><rect x="25" y="32" width="4" height="3"/><rect x="34" y="32" width="4" height="3"/></g>
-        </svg>
+        <svg class="home-drop-glyph" viewBox="0 0 48 36" aria-hidden="true" focusable="false"><use href="#i-film"/></svg>
         <div class="home-drop-title">Drop a folder of scans</div>
         <button id="home-open" class="primary" type="button">Open folder…</button>
         <input id="home-path" class="home-path" type="text" placeholder="or paste a path and press Enter" autocomplete="off" spellcheck="false" />
@@ -87,7 +94,7 @@
       <div class="library-toolbar">
         <input id="library-filter" class="library-filter" type="search" placeholder="Filter rolls…" autocomplete="off" />
         <div class="menu-anchor">
-          <button id="library-menu-btn" class="icon-btn" type="button" aria-label="Library actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+          <button id="library-menu-btn" class="icon-btn" type="button" aria-label="Library actions" aria-haspopup="menu" aria-expanded="false"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-more"/></svg></button>
           <div id="library-menu" class="menu hidden" role="menu">
             <button type="button" class="menu-item" role="menuitem" data-menu="rescan">Rescan</button>
             <button type="button" class="menu-item" role="menuitem" data-menu="normalize">Normalize names…</button>
@@ -105,7 +112,7 @@
       <div class="naming-head">
         <h3>Normalize folder names</h3>
         <div class="naming-template">Template <code id="naming-template"></code> <span id="naming-counts" class="lib-sub"></span></div>
-        <button id="naming-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+        <button id="naming-close" class="icon-btn" type="button" aria-label="Close"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
       </div>
       <div class="naming-warning">
         Folders are renamed in place and the <code>Roll|…</code> keyword is rewritten on every tagged file.
@@ -198,7 +205,7 @@
   <!-- Settings: preferences first, then the gear catalogue. -->
   <main id="settings-view" class="hidden">
     <div class="settings-head">
-      <button id="settings-back" class="secondary">← Back</button>
+      <button id="settings-back" class="secondary"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-back"/></svg>Back</button>
       <h2>Settings</h2>
       <label class="archived-toggle">
         <input type="checkbox" id="settings-show-archived" />
@@ -318,7 +325,7 @@
   <aside id="settings-form-panel" class="picker-panel hidden">
     <div class="picker-head">
       <h3 id="settings-form-title">Edit</h3>
-      <button id="settings-form-close" class="icon-btn" aria-label="Close">✕</button>
+      <button id="settings-form-close" class="icon-btn" aria-label="Close"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
     </div>
     <form id="settings-form" class="settings-form"></form>
     <div class="picker-foot">
@@ -332,7 +339,7 @@
   <aside id="picker-panel" class="picker-panel hidden">
     <div class="picker-head">
       <h3 id="picker-title">Pick</h3>
-      <button id="picker-close" class="icon-btn" aria-label="Close">✕</button>
+      <button id="picker-close" class="icon-btn" aria-label="Close"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
     </div>
     <input id="picker-search" type="search" placeholder="Search…" />
     <div id="picker-grid" class="picker-grid"></div>

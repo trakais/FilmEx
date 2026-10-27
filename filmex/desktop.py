@@ -32,7 +32,10 @@ _log = logging.getLogger("filmex.desktop")
 DEFAULT_SIZE = (1240, 860)
 MIN_SIZE = (1000, 700)
 SERVER_START_TIMEOUT_S = 20.0
-BACKGROUND = "#0b0b0b"
+BACKGROUND = "#0d0c0b"
+# The macOS title bar takes the colour at the top of the page header in each
+# theme (.top in style-rangefinder.css), so the two read as one band.
+TITLE_BAR = {"dark": "#0d0c0b", "paper": "#faf3e8"}
 
 
 def free_port() -> int:
@@ -78,6 +81,39 @@ def dropped_folder(event: dict[str, Any]) -> str | None:
     return None
 
 
+def match_title_bar(native: Any, theme: str) -> bool:
+    """Paint the native title bar in the page's theme.
+
+    macOS only, where ``native`` is the NSWindow: dark or light appearance
+    (title text and buttons follow), a transparent title bar, and the header
+    colour behind it. pywebview pins the title bar view to the system window
+    colour, so that view is repainted too. Returns whether it applied.
+    """
+    if sys.platform != "darwin" or native is None:
+        return False
+    import AppKit
+    from PyObjCTools import AppHelper
+
+    paper = theme == "paper"
+    hex_value = TITLE_BAR["paper" if paper else "dark"].lstrip("#")
+    red, green, blue = (int(hex_value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    color = AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(red, green, blue, 1.0)
+    appearance = AppKit.NSAppearance.appearanceNamed_(
+        AppKit.NSAppearanceNameAqua if paper else AppKit.NSAppearanceNameDarkAqua
+    )
+
+    def apply() -> None:
+        native.setAppearance_(appearance)
+        native.setTitlebarAppearsTransparent_(True)
+        if hasattr(native, "setTitlebarSeparatorStyle_"):
+            native.setTitlebarSeparatorStyle_(AppKit.NSTitlebarSeparatorStyleNone)
+        native.setBackgroundColor_(color)
+        native.contentView().superview().subviews().lastObject().setBackgroundColor_(color)
+
+    AppHelper.callAfter(apply)
+    return True
+
+
 def open_with_default_app(path: str) -> None:
     if sys.platform == "darwin":
         subprocess.Popen(["open", path])
@@ -119,6 +155,12 @@ class DesktopApi:
         first = result[0] if isinstance(result, (list, tuple)) else result
         return str(first) or None
 
+    def match_theme(self, theme: str) -> bool:
+        """Follow the page's theme switch with the native title bar."""
+        if self.window is None:
+            return False
+        return match_title_bar(self.window.native, theme)
+
     def open_path(self, path: str) -> bool:
         open_with_default_app(path)
         return True
@@ -135,6 +177,7 @@ class Shell:
         self._server: Any = None
         self._server_thread: threading.Thread | None = None
         self._geometry_timer: threading.Timer | None = None
+        self._theme = "dark"
 
     # ---------- lifecycle ----------
 
@@ -175,6 +218,7 @@ class Shell:
             return 1
         _log.info("server listening on %s", base_url)
 
+        self._theme = settings.get("theme") or "dark"
         geometry = settings.get("window_geometry") or {}
         api = DesktopApi()
         self.window = webview.create_window(
@@ -190,6 +234,7 @@ class Shell:
             text_select=True,
         )
         api.window = self.window
+        self.window.events.shown += self._on_shown
         self.window.events.loaded += self._on_loaded
         self.window.events.closing += self._on_closing
         # `destroy()` and force quits skip `closing`, so also persist geometry
@@ -218,6 +263,9 @@ class Shell:
             self._server_thread.join(timeout=10)
 
     # ---------- window events ----------
+
+    def _on_shown(self) -> None:
+        match_title_bar(self.window.native, self._theme)
 
     def _on_loaded(self) -> None:
         window = self.window
@@ -299,6 +347,14 @@ class Shell:
                 location.path if location else None,
                 location.source if location else "not found",
             )
+            # Flip the theme from the page and back, and report what the
+            # title bar ended up with each time.
+            for theme in ("paper", "dark"):
+                self.window.evaluate_js(f"applyTheme('{theme}', {{ persist: false }})")
+                time.sleep(0.6)
+                native = self.window.native
+                appearance = native.appearance() if native is not None else None
+                _log.info("smoke: theme=%s title bar=%s", theme, appearance.name() if appearance else None)
             # Exercise the geometry path, which `destroy()` would otherwise skip.
             self.window.resize(DEFAULT_SIZE[0] - 40, DEFAULT_SIZE[1] - 40)
         except Exception as exc:  # noqa: BLE001
