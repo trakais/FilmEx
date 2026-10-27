@@ -2,7 +2,8 @@
 
 Preview images are lightweight JPEGs stored under the app data directory, not
 next to the original scans. Existing lab-supplied `.thm` files are reused when
-possible.
+possible. Raw files give their embedded JPEG preview; a scanner DNG without
+one gives the scan it stores (see _dng_image).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, TiffImagePlugin
 
 from filmex.config import ensure_data_dir
 from filmex.services import exiftool_locator as locator
@@ -24,6 +25,22 @@ PREVIEW_SIZE = (320, 240)
 # small enough to make on demand.
 LARGE_SIZE = (2048, 2048)
 RAW_PREVIEW_TAGS = ("PreviewImage", "JpgFromRaw", "ThumbnailImage")
+DNG_EXTS = frozenset({".dng"})
+
+# TIFF/DNG tags read by _dng_image.
+_NEW_SUBFILE_TYPE, _WIDTH, _HEIGHT, _BITS, _COMPRESSION = 254, 256, 257, 258, 259
+_PHOTOMETRIC, _STRIP_OFFSETS, _ORIENTATION, _SAMPLES = 262, 273, 274, 277
+_STRIP_BYTES, _PLANAR, _SUB_IFDS, _LINEARIZATION = 279, 284, 330, 50712
+_RGB, _LINEAR_RAW = 2, 34892
+_UPRIGHT = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
 
 
 class PreviewUnavailable(RuntimeError):
@@ -144,9 +161,90 @@ def _load_preview_image(path: Path, *, thm: Path | None) -> Image.Image:
     if suffix in fr.JPEG_EXTS | fr.TIFF_EXTS:
         return Image.open(path)
     if suffix in fr.RAW_EXTS:
-        blob = _extract_embedded_preview_bytes(path)
+        try:
+            blob = _extract_embedded_preview_bytes(path)
+        except PreviewUnavailable:
+            image = _dng_image(path) if suffix in DNG_EXTS else None
+            if image is None:
+                raise
+            return image
         return Image.open(BytesIO(blob))
     raise PreviewUnavailable(f"Unsupported preview source: {suffix}")
+
+
+def _dng_image(path: Path) -> Image.Image | None:
+    """The picture a scanner DNG stores, upright, or None.
+
+    Scanner software such as VueScan embeds no JPEG preview. It stores the
+    scan as uncompressed RGB, tagged Linear Raw with a linearization table
+    because the values are already display-encoded, and a small RGB
+    thumbnail in IFD0. The full image is used when it can be shown as
+    stored, else the thumbnail; the IFD0 orientation turns either upright.
+    A camera DNG's sensor mosaic, or truly linear data, needs raw processing
+    and gives None.
+    """
+    try:
+        with path.open("rb") as fp:
+            header = fp.read(8)
+            ifd0 = _read_ifd(fp, header, None)
+            subs = ifd0.get(_SUB_IFDS) or ()
+            subs = subs if isinstance(subs, tuple) else (subs,)
+            ifds = [ifd0, *(_read_ifd(fp, header, offset) for offset in subs)]
+
+            def by_area(ifd: TiffImagePlugin.ImageFileDirectory_v2) -> int:
+                return int(ifd.get(_WIDTH, 0)) * int(ifd.get(_HEIGHT, 0))
+
+            full = sorted((i for i in ifds if i.get(_NEW_SUBFILE_TYPE, 0) == 0), key=by_area, reverse=True)
+            reduced = sorted((i for i in ifds if i.get(_NEW_SUBFILE_TYPE, 0) == 1), key=by_area, reverse=True)
+            for ifd in full + reduced:
+                image = _stored_rgb(fp, ifd, little_endian=header[:2] == b"II")
+                if image is not None:
+                    transpose = _UPRIGHT.get(ifd0.get(_ORIENTATION, 1))
+                    return image.transpose(transpose) if transpose is not None else image
+    except (OSError, ValueError, KeyError, SyntaxError) as e:
+        raise PreviewUnavailable(f"unreadable DNG: {e}") from e
+    return None
+
+
+def _read_ifd(fp, header: bytes, offset: int | None) -> TiffImagePlugin.ImageFileDirectory_v2:
+    ifd = TiffImagePlugin.ImageFileDirectory_v2(ifh=header)
+    fp.seek(ifd.next if offset is None else offset)
+    ifd.load(fp)
+    return ifd
+
+
+def _stored_rgb(fp, ifd: TiffImagePlugin.ImageFileDirectory_v2, *, little_endian: bool) -> Image.Image | None:
+    """An uncompressed, chunky 8- or 16-bit RGB image that shows as stored."""
+    photometric = ifd.get(_PHOTOMETRIC)
+    shows_as_stored = photometric == _RGB or (photometric == _LINEAR_RAW and _LINEARIZATION in ifd)
+    bits = ifd.get(_BITS)
+    bits = bits if isinstance(bits, tuple) else (bits,)
+    if not (
+        shows_as_stored
+        and ifd.get(_COMPRESSION, 1) == 1
+        and ifd.get(_SAMPLES) == 3
+        and ifd.get(_PLANAR, 1) == 1
+        and len(set(bits)) == 1
+        and bits[0] in (8, 16)
+        and _STRIP_OFFSETS in ifd
+        and _STRIP_BYTES in ifd
+    ):
+        return None
+    width, height = int(ifd[_WIDTH]), int(ifd[_HEIGHT])
+    offsets, counts = ifd[_STRIP_OFFSETS], ifd[_STRIP_BYTES]
+    offsets = offsets if isinstance(offsets, tuple) else (offsets,)
+    counts = counts if isinstance(counts, tuple) else (counts,)
+    data = bytearray()
+    for offset, count in zip(offsets, counts, strict=True):
+        fp.seek(offset)
+        data += fp.read(count)
+    needed = width * height * 3 * bits[0] // 8
+    if len(data) < needed:
+        return None
+    if bits[0] == 8:
+        return Image.frombytes("RGB", (width, height), bytes(data[:needed]))
+    raw_mode = "RGB;16L" if little_endian else "RGB;16B"
+    return Image.frombytes("RGB", (width, height), bytes(data[:needed]), "raw", raw_mode)
 
 
 def _extract_embedded_preview_bytes(path: Path) -> bytes:

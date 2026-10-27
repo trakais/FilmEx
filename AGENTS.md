@@ -247,6 +247,12 @@ film stock rows.
   image is `GET /api/files/preview` (long edge 2048 px, made on first
   request and cached beside the thumbnails); the thumbnail shows until it
   arrives and the neighbours are loaded ahead.
+- **Previews** (`services/previews.py`): a raw file gives its embedded JPEG
+  (ExifTool). A scanner DNG without one (VueScan) gives the scan it stores,
+  read with Pillow when it is uncompressed RGB that shows as stored (RGB,
+  or Linear Raw with a linearization table), else its IFD0 thumbnail,
+  turned upright by the IFD0 orientation. Sensor mosaics and truly linear
+  data are not guessed at.
 - **Dialogs**: no `alert`/`confirm`/`prompt`. Use `notify()` / `ask()` /
   `askText()` in `app.js`; confirmations of file operations pass
   `danger: true` so they carry the red action.
@@ -695,6 +701,8 @@ Must stay covered:
 - Archive flag filtering
 - Manifest create / update / history
 - Folder scan source-kind detection and scan-tier derivation
+- Scanner DNG previews: full scan upright, thumbnail fallback, nothing
+  invented for a mosaic or linear data
 - Frames: pairs, both sidecar forms, `.thm`, unmatched JPEG flag, developed
   positives joining their raw frame (and not without a raw), and every
   folder view (scan, thumbnails, Library, sheet) skipping the same junk

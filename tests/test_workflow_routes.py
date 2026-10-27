@@ -619,6 +619,9 @@ def test_large_preview_endpoint_404_for_unreadable_file(client, tmp_path):
 
 def test_create_previews_endpoint_reports_created_and_failed(client, roll_factory, data_dir):
     folder = roll_factory("2026-04-17_R108F", jpegs=1, dngs=1)
+    # The factory's DNG is plain RGB, which previews like a scanner DNG; a
+    # file that is not a readable DNG at all is what fails.
+    (folder / "frame_000.dng").write_bytes(b"not a dng")
     res = client.post(
         "/api/previews/create",
         json={"folder": str(folder), "invert": True},
