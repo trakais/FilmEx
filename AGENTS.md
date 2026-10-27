@@ -339,10 +339,22 @@ tagging step wrote travel with their raw file on a move and are discarded
 with a copy. Metadata written by the batch stays on the files; re-tagging
 the folder replaces it.
 
+**Results are typed, their JSON is fixed.** Split and import return
+`SplitResult` / `ImportResult` (with `SplitRoll`, `ImportedRoll`, `Move`,
+`ImportedFile`), undo returns `SplitUndoResult` / `ImportUndoResult`.
+`to_dict()` is both what the job reports and what `operation_log` stores;
+`from_dict()` reads a journal entry back for undo. The JSON keys (`from`,
+`to`, `created`, `moves`, …) are a stored format: old journal entries must
+keep loading, so rename fields in Python, never in `to_dict`. Undo
+functions load their entry with `operations.load_for_undo(session, op_id,
+kind)`. Plans expose `problems` (plan errors plus roll errors, each prefixed
+with its roll) in Python and in their JSON.
+
 Routes: `GET /api/folder/frames`, `POST /api/naming/render`, `POST
 /api/folder/split` (plan), `POST /api/folder/split/apply` (job), `POST
 /api/import/plan`, `POST /api/import/apply` (job). Plan failures answer
-`400 {"detail": {"errors": [...]}}`.
+`400 {"detail": {"errors": [...]}}`; a plan that comes back with
+`"ok": false` lists why in `problems`.
 
 ## Metadata write policy
 

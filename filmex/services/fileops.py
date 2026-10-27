@@ -281,6 +281,7 @@ class SplitPlan:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["ok"] = self.ok
+        data["problems"] = self.problems
         data["file_count"] = sum(len(i.files) for i in self.items)
         data["bytes"] = sum(i.bytes for i in self.items)
         return data

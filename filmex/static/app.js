@@ -820,20 +820,41 @@ function renderTile(el, entity, placeholder, toCopy) {
   el.appendChild(clear);
 }
 
-function clearTile(kind) {
+// Gear rules shared by the Tag view and the Inbox roll cards. `gear` is
+// { camera, lens, film }; both return a new object.
+//
+// Picking a camera: a fixed-lens camera brings its own lens, and a lens on
+// another mount is dropped (the lens picker's "Show all" can still force one).
+function withGear(gear, kind, item) {
+  const next = { ...gear, [kind]: item };
   if (kind === "camera") {
-    state.camera = null;
-    state.fileLensOverrides = {};
-    // Also clear lens if it was the camera's fixed lens — otherwise the user
-    // is left with a lens that no longer matches anything sensible.
-    if (state.lens && state.cameras.some(c => c.fixed_lens_id === state.lens.id)) {
-      state.lens = null;
-    }
-  } else if (kind === "lens") {
-    state.lens = null;
-  } else if (kind === "film") {
-    state.film = null;
+    const builtIn = item.fixed_lens_id && state.lenses.find(l => l.id === item.fixed_lens_id);
+    if (builtIn) next.lens = builtIn;
+    if (next.lens && !lensMountMatchesCamera(next.lens, item)) next.lens = null;
   }
+  return next;
+}
+
+// Clearing a slot: clearing a fixed-lens camera takes its built-in lens too.
+function withoutGear(gear, kind) {
+  const next = { ...gear, [kind]: null };
+  if (kind === "camera" && gear.lens && state.cameras.some(c => c.fixed_lens_id === gear.lens.id)) next.lens = null;
+  return next;
+}
+
+function tagGear() {
+  return { camera: state.camera, lens: state.lens, film: state.film };
+}
+
+function setTagGear(gear) {
+  state.camera = gear.camera;
+  state.lens = gear.lens;
+  state.film = gear.film;
+}
+
+function clearTile(kind) {
+  if (kind === "camera") state.fileLensOverrides = {};
+  setTagGear(withoutGear(tagGear(), kind));
   markPreviewStale();
   saveStickyState();
   renderTiles();
@@ -849,26 +870,8 @@ let activePickerKind = null;
 const tagPickerTarget = {
   camera: () => state.camera,
   set(kind, item) {
-    if (kind === "camera") {
-      state.camera = item;
-      state.fileLensOverrides = {};
-      // Auto-populate the fixed lens first — a Fixed-Lens camera always mounts
-      // its own lens, and the compat check below then confirms it.
-      if (item.fixed_lens_id) {
-        const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
-        if (lens) state.lens = lens;
-      }
-      // Drop the currently selected lens if its mount doesn't match the new
-      // camera. Saves the user from noticing the mismatch themselves; they
-      // can still bypass via "Show all (ignore mount)" in the lens picker.
-      if (state.lens && !lensMountMatchesCamera(state.lens, item)) {
-        state.lens = null;
-      }
-    } else if (kind === "lens") {
-      state.lens = item;
-    } else if (kind === "film") {
-      state.film = item;
-    }
+    if (kind === "camera") state.fileLensOverrides = {};
+    setTagGear(withGear(tagGear(), kind, item));
     markPreviewStale();
     saveStickyState();
     renderTiles();
@@ -3208,32 +3211,52 @@ function renderRollCard(roll, index) {
   const el = document.createElement("div");
   el.className = `roll-card roll-hue-${index % ROLL_HUE_COUNT}`;
   el.dataset.id = roll.id;
-  const t = roll.tagging;
-  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
-  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
-  const canMerge = index > 0;
+  el.innerHTML = rollCardHead(roll, index) + rollCardName(roll) + rollCardGear(roll) + rollCardFields(roll.tagging);
+  wireRollActions(el, roll);
+  wireRollName(el, roll);
+  wireRollGear(el, roll);
+  wireRollFields(el, roll);
+  return el;
+}
+
+function rollCardHead(roll, index) {
   const selected = state.inbox.selection.size;
-  el.innerHTML = `
+  return `
     <div class="roll-card-head">
       <span class="roll-card-index">Roll ${index + 1}</span>
       <span class="roll-card-range">${escapeHtml(rollRangeText(roll))}</span>
       <span class="roll-card-actions">
         <button type="button" class="action-link" data-act="add" ${selected ? "" : "disabled"}>Add ${selected ? `${selected} selected` : "selection"}</button>
-        ${canMerge ? `<button type="button" class="action-link" data-act="merge">Merge into roll ${index}</button>` : ""}
+        ${index > 0 ? `<button type="button" class="action-link" data-act="merge">Merge into roll ${index}</button>` : ""}
         <button type="button" class="action-link" data-act="remove">Leave out</button>
       </span>
-    </div>
+    </div>`;
+}
+
+function rollCardName(roll) {
+  return `
     <div class="roll-card-name">
       <span class="tile-label">Folder name</span>
       <input type="text" class="roll-name-input" value="${escapeHtml(roll.name)}" placeholder="from the template…" spellcheck="false" />
       <button type="button" class="action-link roll-name-auto${roll.nameAuto ? " hidden" : ""}">use template</button>
       <span class="roll-name-error${roll.nameError ? "" : " hidden"}">${escapeHtml(roll.nameError || "")}</span>
-    </div>
+    </div>`;
+}
+
+function rollCardGear(roll) {
+  const t = roll.tagging;
+  return `
     <div class="tile-row compact">
       ${compactTile("camera", t.camera, roll)}
       ${compactTile("lens", t.lens, roll)}
       ${compactTile("film", t.film, roll)}
-    </div>
+    </div>`;
+}
+
+function rollCardFields(t) {
+  const devProviders = state.providers.filter(p => p.kinds.includes("development"));
+  const scanProviders = state.providers.filter(p => p.kinds.includes("scan"));
+  return `
     <div class="field-grid compact">
       <label><span>Roll date</span><input type="date" data-field="roll_date" value="${escapeHtml(t.roll_date || "")}" /></label>
       <label><span>Place / title</span><input type="text" data-field="place" value="${escapeHtml(t.place || "")}" placeholder="Jāņos, Mexico…" /></label>
@@ -3242,13 +3265,18 @@ function renderRollCard(roll, index) {
       <label><span>Scan provider</span><select data-field="scan_provider_id">${optionsHtml(scanProviders, t.scan_provider_id)}</select></label>
       <label><span>Scan method</span><select data-field="scan_method_id">${optionsHtml(state.scanMethods, t.scan_method_id)}</select></label>
       <label class="full"><span>Roll notes</span><input type="text" data-field="roll_notes" value="${escapeHtml(t.roll_notes || "")}" /></label>
-    </div>
-  `;
+    </div>`;
+}
+
+function wireRollActions(el, roll) {
   el.querySelector("[data-act=add]").addEventListener("click", () => addSelectionToRoll(roll.id));
   el.querySelector("[data-act=merge]")?.addEventListener("click", () => mergeRollIntoPrevious(roll.id));
   el.querySelector("[data-act=remove]").addEventListener("click", () => removeRoll(roll.id));
-  const nameInput = el.querySelector(".roll-name-input");
-  nameInput.addEventListener("input", (e) => {
+}
+
+// Typing a name takes it out of the template's hands until "use template".
+function wireRollName(el, roll) {
+  el.querySelector(".roll-name-input").addEventListener("input", (e) => {
     roll.name = e.target.value;
     roll.nameAuto = false;
     roll.nameError = null;
@@ -3260,46 +3288,42 @@ function renderRollCard(roll, index) {
     roll.nameAuto = true;
     void refreshRollName(roll);
   });
+}
+
+function wireRollGear(el, roll) {
   for (const tile of el.querySelectorAll(".tile")) {
     tile.addEventListener("click", () => openPicker(tile.dataset.kind, rollPickerTarget(roll)));
     tile.querySelector(".tile-clear")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      const kind = tile.dataset.kind;
-      if (kind === "camera") {
-        if (roll.tagging.lens && state.cameras.some(c => c.fixed_lens_id === roll.tagging.lens.id)) roll.tagging.lens = null;
-        roll.tagging.camera = null;
-      } else if (kind === "lens") roll.tagging.lens = null;
-      else roll.tagging.film = null;
-      renderRollCards();
-      scheduleRollName(roll);
+      setRollGear(roll, withoutGear(rollGear(roll), tile.dataset.kind));
     });
   }
+}
+
+function wireRollFields(el, roll) {
   for (const field of el.querySelectorAll("[data-field]")) {
     field.addEventListener("change", (e) => {
       roll.tagging[e.target.dataset.field] = e.target.value;
       if (["roll_date", "place"].includes(e.target.dataset.field)) scheduleRollName(roll);
     });
   }
-  return el;
+}
+
+function rollGear(roll) {
+  const t = roll.tagging;
+  return { camera: t.camera, lens: t.lens, film: t.film };
+}
+
+function setRollGear(roll, gear) {
+  Object.assign(roll.tagging, gear);
+  renderRollCards();
+  scheduleRollName(roll);
 }
 
 function rollPickerTarget(roll) {
   return {
     camera: () => roll.tagging.camera,
-    set(kind, item) {
-      const t = roll.tagging;
-      if (kind === "camera") {
-        t.camera = item;
-        if (item.fixed_lens_id) {
-          const lens = state.lenses.find(l => l.id === item.fixed_lens_id);
-          if (lens) t.lens = lens;
-        }
-        if (t.lens && !lensMountMatchesCamera(t.lens, item)) t.lens = null;
-      } else if (kind === "lens") t.lens = item;
-      else if (kind === "film") t.film = item;
-      renderRollCards();
-      scheduleRollName(roll);
-    },
+    set: (kind, item) => setRollGear(roll, withGear(rollGear(roll), kind, item)),
   };
 }
 
@@ -3463,63 +3487,18 @@ function describePlan(plan, dest) {
 }
 
 async function runInboxBatch() {
-  const dest = inboxDestination();
   if (inboxBlockers().length || state.inbox.running) return;
+  const dest = inboxDestination();
   const body = inboxRequestBody();
-  const planUrl = dest.kind === "split" ? "/api/folder/split" : "/api/import/plan";
-  const applyUrl = dest.kind === "split" ? "/api/folder/split/apply" : "/api/import/apply";
-  let plan;
-  try {
-    plan = await api(planUrl, { method: "POST", body: JSON.stringify(body) });
-  } catch (e) {
-    await notify(planErrorsText(e), "The batch cannot run as planned");
-    return;
-  }
-  if (!plan.ok) {
-    const errors = [...plan.errors, ...plan.items.flatMap(i => i.errors.map(e => `${i.name}: ${e}`))];
-    await notify(errors.join("\n"), "The batch cannot run as planned");
-    return;
-  }
-  const okLabel = dest.kind === "split" ? "Split" : dest.mode === "move" ? "Move" : "Import";
-  if (!(await ask(describePlan(plan, dest), { title: `${okLabel} ${plan.items.length} roll${plan.items.length === 1 ? "" : "s"}?`, okLabel }))) return;
-
+  if (!(await confirmInboxPlan(dest, body))) return;
   state.inbox.running = true;
   state.inbox.result = null;
   renderInboxResult(null);
   updateInboxRunButton();
   renderInboxProgress("Starting…", 0);
   try {
-    let total = 0;
-    const done = await runJob(applyUrl, {
-      body,
-      onStart: (ev) => {
-        total = ev.total || 0;
-        setPageTitleProgress(okLabel, 0, total);
-      },
-      onEvent: (ev) => {
-        if (ev.step === "move") {
-          renderInboxProgress(`Moving ${ev.done}/${ev.total} · ${ev.roll}`, total ? ev.done / total : null);
-          setPageTitleProgress("Moving", ev.done, ev.total);
-        } else if (ev.step === "copy") {
-          const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
-          renderInboxProgress(`${dest.mode === "move" ? "Moving" : "Copying"} ${ev.roll} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`, frac);
-          setPageTitleProgress("Copying", ev.files_done, ev.files_total);
-        } else if (ev.step === "verify" && ev.ok) {
-          const frac = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
-          renderInboxProgress(`Verified ${ev.files_done}/${ev.files_total} · ${ev.roll}`, frac);
-        } else if (ev.step === "tag") {
-          renderInboxProgress(`Tagging ${ev.roll} · ${ev.file || ""}`, null);
-        } else if (ev.step === "remove") {
-          renderInboxProgress(`Removing sources · ${ev.roll} · ${ev.file}`, null);
-        }
-      },
-    });
-    state.inbox.lastOperation = done.operation_id;
-    state.inbox.result = { done, dest };
-    renderInboxProgress(null);
-    renderInboxResult(state.inbox.result);
-    if (state.settings?.library_root) void loadLibrary({ rescan: true });
-    await reloadInboxAfterBatch();
+    const done = await runJob(inboxEndpoints(dest).apply, { body, ...inboxProgressHandlers(dest) });
+    await finishInboxBatch(done, dest);
   } catch (e) {
     renderInboxProgress(null);
     await notify(planErrorsText(e), dest.kind === "split" ? "Split failed" : "Import failed");
@@ -3528,6 +3507,84 @@ async function runInboxBatch() {
     resetPageTitle();
     updateInboxRunButton();
   }
+}
+
+function inboxEndpoints(dest) {
+  return dest.kind === "split"
+    ? { plan: "/api/folder/split", apply: "/api/folder/split/apply" }
+    : { plan: "/api/import/plan", apply: "/api/import/apply" };
+}
+
+function inboxActionLabel(dest) {
+  return dest.kind === "split" ? "Split" : dest.mode === "move" ? "Move" : "Import";
+}
+
+// Ask the server for the batch's plan, show it, and resolve true once the
+// user confirms. A plan that cannot run is explained instead.
+async function confirmInboxPlan(dest, body) {
+  let plan;
+  try {
+    plan = await api(inboxEndpoints(dest).plan, { method: "POST", body: JSON.stringify(body) });
+  } catch (e) {
+    await notify(planErrorsText(e), "The batch cannot run as planned");
+    return false;
+  }
+  if (!plan.ok) {
+    await notify(plan.problems.join("\n"), "The batch cannot run as planned");
+    return false;
+  }
+  const label = inboxActionLabel(dest);
+  const n = plan.items.length;
+  return ask(describePlan(plan, dest), { title: `${label} ${n} roll${n === 1 ? "" : "s"}?`, okLabel: label });
+}
+
+function inboxProgressHandlers(dest) {
+  let total = 0;
+  return {
+    onStart: (ev) => {
+      total = ev.total || 0;
+      setPageTitleProgress(inboxActionLabel(dest), 0, total);
+    },
+    onEvent: (ev) => {
+      const line = inboxProgressLine(ev, dest, total);
+      if (!line) return;
+      renderInboxProgress(line.text, line.fraction);
+      if (line.title) setPageTitleProgress(...line.title);
+    },
+  };
+}
+
+// What one job event means on screen: { text, fraction, title? }, or null
+// for events the progress bar does not show.
+function inboxProgressLine(ev, dest, total) {
+  const byBytes = ev.bytes_total ? ev.bytes_done / ev.bytes_total : null;
+  switch (ev.step) {
+    case "move":
+      return { text: `Moving ${ev.done}/${ev.total} · ${ev.roll}`, fraction: total ? ev.done / total : null, title: ["Moving", ev.done, ev.total] };
+    case "copy":
+      return {
+        text: `${dest.mode === "move" ? "Moving" : "Copying"} ${ev.roll} · file ${ev.files_done + 1}/${ev.files_total} · ${humanBytes(ev.bytes_done)} of ${humanBytes(ev.bytes_total)}`,
+        fraction: byBytes,
+        title: ["Copying", ev.files_done, ev.files_total],
+      };
+    case "verify":
+      return ev.ok ? { text: `Verified ${ev.files_done}/${ev.files_total} · ${ev.roll}`, fraction: byBytes } : null;
+    case "tag":
+      return { text: `Tagging ${ev.roll} · ${ev.file || ""}`, fraction: null };
+    case "remove":
+      return { text: `Removing sources · ${ev.roll} · ${ev.file}`, fraction: null };
+    default:
+      return null;
+  }
+}
+
+async function finishInboxBatch(done, dest) {
+  state.inbox.lastOperation = done.operation_id;
+  state.inbox.result = { done, dest };
+  renderInboxProgress(null);
+  renderInboxResult(state.inbox.result);
+  if (state.settings?.library_root) void loadLibrary({ rescan: true });
+  await reloadInboxAfterBatch();
 }
 
 async function reloadInboxAfterBatch() {

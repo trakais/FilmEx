@@ -80,6 +80,8 @@ def test_split_plan_apply_and_undo_over_http(client, tree, fake_exiftool):
 
     bad = client.post("/api/folder/split/apply", json={**body, "rolls": body["rolls"][:1] + [{"name": "2026-04-01-Fed2-Gold", "frames": ["lab_001"]}]})
     assert bad.status_code == 400 and "same folder name" in bad.text
+    clash = client.post("/api/folder/split", json={**body, "rolls": body["rolls"][:1] + [{"name": "2026-04-01-Fed2-Gold", "frames": ["lab_001"]}]}).json()
+    assert not clash["ok"] and any("same folder name" in p for p in clash["problems"])
 
     events = _ndjson(client.post("/api/folder/split/apply", json=body))
     assert events[0]["type"] == "start" and events[0]["rolls"] == 2 and events[0]["total"] == 6
