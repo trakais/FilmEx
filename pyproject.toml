@@ -1,6 +1,6 @@
 [project]
 name = "filmex"
-version = "0.3.0"
+version = "0.3.1"
 description = "Film + Exif: local-first film scan metadata tagging for Lightroom import"
 requires-python = ">=3.11"
 dependencies = [
