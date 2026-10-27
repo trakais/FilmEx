@@ -483,7 +483,13 @@ splitting big scan sessions):
 - [x] Destination control at the end: Keep here / Copy to library / Move
       to library, preselected by where the folder is, with one red action
       whose label says what will happen. "Split in place" is Keep here
-      with two or more rolls.
+      with two or more rolls. The choices follow placement: a proper
+      `<year>/<roll>` folder shows no control, a roll nested deeper offers
+      Keep here / Move into place, copying inside the library is never
+      offered.
+- [x] Gear tiles carry a line drawing of a camera, a lens and a film
+      cassette on the right: faint until something is picked, in the
+      accent colour once it is (a picked film shows its brand cassette).
 - [x] Add gear from inside the picker.
 - [x] Settings: Preferences first, then Gear; import mode moved to the
       Folder screen; library actions behind a menu.

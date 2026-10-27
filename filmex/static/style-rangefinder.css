@@ -2038,8 +2038,25 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
 .tile.compact .tile-content { font-size: 16px; }
 .tile.compact .tile-content.empty { font-size: 11px; }
 .tile.compact .tile-sub { font-size: 10px; }
-.tile.compact.film-tile .tile-canister { width: 22px; height: 33px; right: 12px; bottom: 10px; }
-.tile.compact.film-tile.selected .tile-content, .tile.compact.film-tile.selected .tile-sub { padding-right: 32px; }
+.tile.compact.film-tile .tile-canister { width: 22px; height: 33px; right: 14px; top: 50%; bottom: auto; transform: translateY(-50%); }
+.tile.compact .tile-content, .tile.compact .tile-sub { padding-right: 64px; }
+/* Gear glyphs: line drawings on the right of each tile, faint until picked. */
+.tile-glyph {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: 33px;
+  color: var(--muted-2);
+  opacity: 0.55;
+  pointer-events: none;
+  transition: color 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+.tile-glyph-film { width: 22px; height: 33px; }
+.tile:hover .tile-glyph { opacity: 0.8; }
+.tile.selected .tile-glyph { color: var(--yellow); opacity: 0.95; }
+body[data-theme="paper"] .tile-glyph { color: var(--muted); }
 .field-grid.compact { gap: 10px 14px; }
 .field-grid.compact input, .field-grid.compact select { padding: 6px 9px; font-size: 12px; }
 .roll-left-note { padding: 4px 2px; }

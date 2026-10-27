@@ -561,7 +561,11 @@ def undo_import(
 class _ImportUndo:
     """Puts an import back, last roll first. A copy is removed only once its
     original is confirmed in the source; a moved file is copied back and
-    verified first. Folders the import created go when they are empty."""
+    verified first. Folders the import created go when they are empty.
+
+    The journaled digest is the file as it came off the card. Tagging at the
+    destination rewrote embedded files since, so a moved file is not compared
+    against it: the copy back is verified against the file as it is now."""
 
     def __init__(self, recorded: ImportResult, source: Path, mode: str, emit: Progress, cancelled: Cancelled) -> None:
         self.recorded = recorded
@@ -605,9 +609,7 @@ class _ImportUndo:
         if self.mode != "move":
             raise OSError("source is gone; destination kept")
         original.parent.mkdir(parents=True, exist_ok=True)
-        if copy_verify(Path(copied.target), original).digest != copied.digest:
-            os.remove(original)
-            raise OSError("destination no longer matches the imported file; kept")
+        copy_verify(Path(copied.target), original)
         self.result.restored.append(str(original))
 
     def _remove_roll(self, roll: ImportedRoll) -> None:

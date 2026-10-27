@@ -2808,6 +2808,32 @@ function renderRollCards() {
   }
 }
 
+// Line drawings for the gear tiles: faint when empty, in the accent colour
+// once something is picked. A picked film shows its brand's cassette.
+const TILE_GLYPHS = {
+  camera: `<svg class="tile-glyph" viewBox="0 0 44 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
+    <rect x="2" y="9" width="40" height="21" rx="3"/>
+    <path d="M10 9V6.5a1.5 1.5 0 0 1 1.5-1.5h7a1.5 1.5 0 0 1 1.5 1.5V9"/>
+    <rect x="30" y="5" width="6" height="4" rx="1"/>
+    <circle cx="22" cy="19.5" r="7"/><circle cx="22" cy="19.5" r="3.5"/>
+    <circle cx="36.5" cy="14" r="1.5"/><path d="M6 14h4"/>
+  </svg>`,
+  lens: `<svg class="tile-glyph" viewBox="0 0 44 32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
+    <rect x="6" y="7" width="28" height="18" rx="2"/>
+    <path d="M34 10h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-4"/>
+    <path d="M6 11H3.5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1H6"/>
+    <path d="M13 7v18M17 7v18M25 7v18M28 7v18"/>
+    <path d="M39 13.5c1.5 0 2.5 1.1 2.5 2.5s-1 2.5-2.5 2.5"/>
+  </svg>`,
+  film: `<svg class="tile-glyph tile-glyph-film" viewBox="0 0 24 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true" focusable="false">
+    <rect x="9.5" y="1" width="5" height="2.4" rx="0.5"/>
+    <rect x="3" y="3.4" width="18" height="3.8" rx="1"/>
+    <rect x="4" y="7.2" width="16" height="27.8" rx="1.6"/>
+    <path d="M4 11h16M4 26h16"/>
+    <rect x="19" y="13" width="2.4" height="9" rx="0.5"/>
+  </svg>`,
+};
+
 function compactTile(kind, entity, roll) {
   const label = { camera: "Camera", lens: "Lens", film: "Film" }[kind];
   const copy = !entity ? null
@@ -2822,7 +2848,7 @@ function compactTile(kind, entity, roll) {
       <div class="tile-content${entity ? "" : " empty"}">${entity ? escapeHtml(copy.title) : `Pick a ${kind}`}</div>
       ${entity ? `<div class="tile-sub">${escapeHtml(copy.sub)}</div>` : ""}
       ${entity ? `<button type="button" class="tile-clear" aria-label="Clear ${kind}" title="Clear">✕</button>` : ""}
-      ${colors ? canisterSvg("tile-canister") : ""}
+      ${colors ? canisterSvg("tile-canister") : TILE_GLYPHS[kind]}
     </div>`;
 }
 
@@ -3122,49 +3148,61 @@ async function refreshRollName(roll) {
 
 // ----- destination and the one action -----
 
-// Where the rolls go. Without a library only "keep" is possible; a folder
-// inside the library keeps by default, one outside copies or moves as the
-// import default says.
+// Where the open folder sits, which decides where its rolls can go:
+// "outside" the library (or no library), a proper "roll" at <year>/<roll>,
+// or "nested" anywhere else inside the library (a lab order's subfolder, a
+// flat year folder).
+function folderPlacement() {
+  const root = (state.settings?.library_root || "").replace(/\/+$/, "");
+  const path = state.folder.path;
+  if (!root || !path.startsWith(root + "/")) return "outside";
+  return path.slice(root.length + 1).split("/").length === 2 ? "roll" : "nested";
+}
+
+// A proper roll has nowhere else to go. A nested roll can move into its
+// place at <year>/<name>. Copying inside the library only makes duplicates.
+function destinationChoices() {
+  return { outside: ["keep", "copy", "move"], nested: ["keep", "move"], roll: ["keep"] }[folderPlacement()];
+}
+
 function destination() {
-  return hasLibrary() ? (state.folder.destination || "keep") : "keep";
+  const choices = destinationChoices();
+  const chosen = state.folder.destination || "keep";
+  return choices.includes(chosen) ? chosen : "keep";
 }
 
 function renderDestination() {
   const current = destination();
-  const library = hasLibrary();
+  const choices = destinationChoices();
+  const placement = folderPlacement();
+  document.getElementById("destination").classList.toggle("hidden", choices.length < 2);
   for (const btn of document.querySelectorAll("#destination .segment")) {
-    const on = btn.dataset.dest === current;
-    btn.classList.toggle("active", on);
-    btn.setAttribute("aria-checked", String(on));
-    btn.disabled = !library && btn.dataset.dest !== "keep";
+    const dest = btn.dataset.dest;
+    btn.classList.toggle("hidden", !choices.includes(dest));
+    btn.classList.toggle("active", dest === current);
+    btn.setAttribute("aria-checked", String(dest === current));
+    if (dest === "move") btn.textContent = placement === "nested" ? "Move into place" : "Move to library";
   }
   const hint = document.getElementById("destination-hint");
   const n = state.folder.rolls.length;
   const root = state.settings?.library_root || "";
-  if (!library) {
+  if (!hasLibrary()) {
     hint.innerHTML = `Tagged where it is. <button type="button" class="action-link" id="destination-choose-library">Choose a library folder</button> to copy or move rolls into one.`;
     document.getElementById("destination-choose-library").addEventListener("click", () => void chooseLibraryFolder());
   } else if (current === "keep") {
     hint.textContent = n > 1
-      ? `Each roll becomes its own folder ${splitsIntoSiblings() ? "next to this one" : "inside this one"}, tagged.`
+      ? `Each roll becomes its own folder ${placement === "roll" ? "next to this one" : "inside this one"}, tagged.`
       : "Tagged where it is.";
+  } else if (placement === "nested") {
+    hint.textContent = "Moved into place at <year>/<name>, every file verified, then tagged there.";
   } else {
     hint.textContent = `${current === "move" ? "Moved" : "Copied"} to ${baseName(root)}/<year>/<name>, every file verified, then tagged there.`;
   }
 }
 
-// Mirrors the server's split layout: a roll folder under <root>/<year>/ is
-// cut into siblings, anything else into subfolders.
-function splitsIntoSiblings() {
-  const root = (state.settings?.library_root || "").replace(/\/+$/, "");
-  const path = state.folder.path;
-  if (!root || !path.startsWith(root + "/")) return false;
-  return path.slice(root.length + 1).split("/").length === 2;
-}
-
 function setDestination(value) {
   state.folder.destination = value;
-  if (value !== "keep") {
+  if (value !== "keep" && folderPlacement() === "outside") {
     if (state.settings) state.settings.import_mode = value;
     queueSettingsPatch({ import_mode: value });
   }
@@ -3184,6 +3222,7 @@ function runLabel() {
     }
     return `Split into ${n} rolls`;
   }
+  if (folderPlacement() === "nested") return `Move ${n} roll${n === 1 ? "" : "s"} into place`;
   return `${dest === "move" ? "Move" : "Copy"} ${n} roll${n === 1 ? "" : "s"} to library`;
 }
 
@@ -3531,7 +3570,9 @@ async function undoLastBatch() {
     state.folder.result = null;
     renderFolderProgress(null);
     renderFolderResult(null);
-    const n = (done.restored || []).length + (done.removed || []).length;
+    // A moved file is both restored at the source and removed from the
+    // library; a copy is only removed. Count each file once.
+    const n = (done.restored || []).length || (done.removed || []).length;
     const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
     await notify(`${n} file${n === 1 ? "" : "s"} put back, ${(done.removed_folders || []).length} folder${(done.removed_folders || []).length === 1 ? "" : "s"} removed.${problems}`, "Batch undone");
     if (hasLibrary()) void loadLibrary({ rescan: true });

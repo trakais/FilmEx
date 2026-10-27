@@ -145,6 +145,13 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
         return real_copy(src, dst, progress=progress, chunk=chunk)
 
     monkeypatch.setattr(importer, "copy_verify", flaky_copy)
+
+    def embed_tags(path, intent):  # ExifTool rewrites a JPEG in place: its bytes change
+        if path.suffix.lower() == ".jpg":
+            with path.open("ab") as f:
+                f.write(b"tagged")
+
+    fake_exiftool.on_write = embed_tags
     with Session(get_engine()) as session:
         result = importer.apply_import(session, source, _rolls(source), root=str(root), mode="move")
 
@@ -167,6 +174,7 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
     assert not undo.errors, undo
     assert (source / "DSC0001.ARW").is_file() and (source / "DSC0001.xmp").is_file()
     assert (source / "DSC0003.xmp").read_text() == "<x/>"
+    assert (source / "DSC0001.JPG").read_bytes().endswith(b"tagged")  # back as tagged, not as scanned
     assert len(undo.restored) == 7
     assert not gold.exists() and not hp5.exists()
     assert (source / "lab_001.jpg").is_file()

@@ -338,14 +338,27 @@ roll count, in `plannedAction()` in `app.js`:
 | --- | --- | --- | --- |
 | Keep here | 1 | write in place (the roll's files, all or a subset) | `POST /api/metadata/apply/stream` |
 | Keep here | 2+ | split | `POST /api/folder/split/apply` |
-| Copy / Move to library | any | import | `POST /api/import/apply` |
+| Copy / Move to library, Move into place | any | import | `POST /api/import/apply` |
 
-The destination defaults to keep for a folder inside the library, for a
-"Tag remaining" subset, or without a library; otherwise to the
-`import_mode` setting, which the control updates. A single kept roll shows
-no folder name: the folder is the roll. The "Changes" expander on a card
-is the dry run for that roll's files; for a roll that will get a new
-folder name it passes `as_roll` so the `Roll|…` keyword previews right.
+Which destinations are offered follows where the folder sits
+(`folderPlacement()`): outside the library (or without one) it is Keep
+here / Copy to library / Move to library; a proper roll at
+`<root>/<year>/<roll>` has nowhere else to go, so the control is hidden and
+only the hint stays; a folder nested deeper (a lab order's subfolder) or a
+flat year folder offers Keep here / Move into place, which is an import in
+`move` mode to `<root>/<year>/<name>`. Copying inside the library is never
+offered: it only makes duplicates. The destination defaults to keep inside
+the library, for a "Tag remaining" subset, or without a library; outside
+it follows the `import_mode` setting, which the control updates. A single
+kept roll shows no folder name: the folder is the roll. The "Changes"
+expander on a card is the dry run for that roll's files; for a roll that
+will get a new folder name it passes `as_roll` so the `Roll|…` keyword
+previews right.
+
+Undoing a move-mode import copies each file back from the library and
+verifies that copy; it does not compare against the digest journaled at
+import time, because tagging at the destination rewrote embedded JPEG and
+TIFF files since.
 A new roll starts from the last used gear and processing fields
 (`last_selection` in settings), and a folder with a manifest fills its
 first roll from it.
@@ -389,7 +402,8 @@ Free space is checked in the plan.
 **Undo** (`operation_log`, kinds `rename`, `split`, `import`): `POST
 /api/operations/{id}/undo` dispatches by kind. Split undo moves every
 frame back, restores the stashed manifest and removes the created folders.
-Import undo copies moved files back (verified against the recorded hash)
+Import undo copies moved files back (the copy back is verified; the hash
+recorded at import time is not compared, tagging rewrote the file since)
 or removes copies once the source is confirmed present. Sidecars that the
 tagging step wrote travel with their raw file on a move and are discarded
 with a copy. Metadata written by the batch stays on the files; re-tagging
