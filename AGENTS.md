@@ -344,6 +344,21 @@ A new roll starts from the last used gear and processing fields
 (`last_selection` in settings), and a folder with a manifest fills its
 first roll from it.
 
+**Suggested cuts** (`services/cuts.py`, `GET /api/folder/cuts`): where a
+session's frames probably change roll. One ExifTool pass over the folder
+gives capture time and pixel size for every frame (Pillow and the file's
+mtime stand in without ExifTool). Three signals: a file-name counter that
+goes down (`000036` → `000001`) and a frame-shape change are *sure*; a
+pause of at least five times the typical spacing and 60 s is a gap, which
+is *likely* when the frames since the last cut fit the frames-per-roll
+rhythm (the `frames_per_roll` setting, 0 = off; the sheet's "N per roll"
+control) or the pause is over 30 minutes, else *maybe* (a break inside a
+roll). Nothing is cut automatically: the sheet marks each suggestion with
+a scissors tag and a seam card shows the two frames side by side with
+"Cut here" and "Ignore"; "Cut all" takes the sure and likely ones. On the
+sheet, arrow keys move the cursor (shift extends), C cuts before it, X
+leaves the selection out, Enter takes a suggested cut, Escape clears.
+
 **Split** (`services/fileops.py`): a roll folder under `<root>/<year>/`
 becomes siblings in that year folder; a flat year folder or a folder
 outside the library gets subfolders. Rules: same volume only

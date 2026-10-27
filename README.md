@@ -33,10 +33,14 @@ the files where they are and leaves a `roll_manifest.json` beside them.
 
 The same screen covers the rest:
 
-- **More than one roll in the folder.** Select the first frame of the next
-  roll and press "Cut here", or build a roll from a selection. Each roll
-  gets its own gear, film, date and folder name from the template. "Keep
-  here" then splits the folder into one folder per roll.
+- **More than one roll in the folder.** FilmEx suggests where rolls change
+  from pauses in the capture times (weighed by how many frames a roll
+  holds), restarting file numbers and changes of frame shape, and shows
+  each seam side by side so you can confirm it. Or select the first frame
+  of the next roll and press "Cut here" (the C key), or build a roll from
+  a selection. Each roll gets its own gear, film, date and folder name
+  from the template. "Keep here" then splits the folder into one folder
+  per roll.
 - **A library.** Choose a library folder once (the top folder with year
   folders inside). The Library becomes the start screen: every roll by
   year with its status, counts, film and camera, with Tag, Tag remaining,

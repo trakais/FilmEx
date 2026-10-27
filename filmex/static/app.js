@@ -43,6 +43,7 @@ const state = {
     rolls: [],
     selection: new Set(),
     anchor: null,
+    cuts: { report: null, loading: false, ignored: new Set() },  // suggested cuts
     destination: null,     // "keep" | "copy" | "move"
     running: false,
     lastOperation: null,
@@ -2124,7 +2125,7 @@ async function openFolder(path, { onlyFiles = null } = {}) {
   Object.assign(folder, {
     path, listing: null, frames: [], indexByKey: null, scanFiles: new Map(), thumbs: new Set(),
     manifest: null, inLibrary: false, rolls: [], selection: new Set(), anchor: null,
-    destination: null, result: null,
+    cuts: { report: null, loading: false, ignored: new Set() }, destination: null, result: null,
   });
   showView("folder");
   renderFolderBanner("");
@@ -2154,6 +2155,7 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     renderFolder();
     for (const roll of folder.rolls) scheduleRollName(roll);
     void buildThumbnails();
+    void loadCuts();
   } catch (e) {
     renderFolderBanner(`Could not read the folder: ${e.message}`, "bad");
     renderFolder();
@@ -2267,6 +2269,7 @@ function renderFolder() {
   renderHeader();
   if (!has) return;
   renderSheet();
+  renderCutsPanel();
   renderRollCards();
   renderDestination();
   updateSheetToolbar();
@@ -2314,12 +2317,14 @@ function renderSheet() {
     rollIndex: (key) => (rollIndexByKey.has(key) ? rollIndexByKey.get(key) : null),
     selection: folder.selection,
     onClick: onSheetCellClick,
+    cutAt: suggestedCutAt,
+    onCut: cutBefore,
   });
 }
 
 // Generic grid. `rollIndex(key)` → number | null (null = left out, no
 // stamp when every frame is in one roll). `selection` is a Set or null.
-function renderContactSheet(container, { folder, frames, hasThumb, invert, rollIndex, selection, onClick, compact = false }) {
+function renderContactSheet(container, { folder, frames, hasThumb, invert, rollIndex, selection, onClick, cutAt = null, onCut = null, compact = false }) {
   container.innerHTML = "";
   container.classList.toggle("compact", compact);
   const multi = new Set(frames.map(f => rollIndex ? rollIndex(f.key) : 0).filter(v => v !== null)).size > 1;
@@ -2338,12 +2343,16 @@ function renderContactSheet(container, { folder, frames, hasThumb, invert, rollI
     const stamp = index !== null && multi ? `<span class="sheet-roll-tag">R${index + 1}</span>` : "";
     const badge = frame.unmatched_jpeg ? `<span class="sheet-badge warn">jpg only</span>`
       : frame.has_raw && frame.images.length > 1 ? `<span class="sheet-badge">pair</span>` : "";
+    const cut = cutAt ? cutAt(frame.key) : null;
+    if (cut) cell.classList.add(`cut-${cut.strength}`);
+    const scissors = cut ? `<button type="button" class="sheet-cut-tag" title="${escapeHtml(cutReasonText(cut))}" aria-label="Cut here">✂</button>` : "";
     cell.innerHTML = `
-      <div class="sheet-thumb">${thumb}${stamp}</div>
+      <div class="sheet-thumb">${thumb}${stamp}${scissors}</div>
       <div class="sheet-cell-name"><span>${escapeHtml(frame.display_key)}</span>${badge}</div>
     `;
     cell.title = frame.files.join("\n");
     if (onClick) cell.addEventListener("click", (ev) => onClick(frame.key, ev));
+    if (cut && onCut) cell.querySelector(".sheet-cut-tag").addEventListener("click", (ev) => { ev.stopPropagation(); onCut(frame.key); });
     frag.appendChild(cell);
   }
   container.appendChild(frag);
@@ -2373,7 +2382,8 @@ function updateSheetToolbar() {
   const label = document.getElementById("sheet-selection");
   label.textContent = n
     ? `${n} frame${n === 1 ? "" : "s"} selected`
-    : "Click a frame, shift-click for a range, ⌘-click to add.";
+    : "Click a frame, shift-click for a range, ⌘-click to add. Arrow keys move, C cuts, X leaves out.";
+  document.getElementById("cuts-rhythm").value = String(state.settings?.frames_per_roll ?? 36);
   document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
   document.getElementById("sheet-new-roll").disabled = n === 0;
   document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(folder.selection).some(k => rollOf(k));
@@ -2408,9 +2418,14 @@ function canCutBefore(key) {
 // ----- roll operations -----
 
 function cutBeforeSelected() {
-  const key = firstSelectedKey();
+  cutBefore(firstSelectedKey());
+}
+
+// Start a new roll at `key`: the frames from it to the end of its roll
+// become the next roll, with the same gear.
+function cutBefore(key) {
   const roll = rollOf(key);
-  if (!roll || !canCutBefore(key)) return;
+  if (!roll || !canCutBefore(key)) return false;
   const at = roll.frames.indexOf(key);
   const tail = roll.frames.slice(at);
   roll.frames = roll.frames.slice(0, at);
@@ -2419,6 +2434,7 @@ function cutBeforeSelected() {
   state.folder.rolls.splice(pos + 1, 0, next);
   state.folder.selection.clear();
   afterRollsChanged([roll, next]);
+  return true;
 }
 
 function newRollFromSelection() {
@@ -2511,11 +2527,228 @@ function afterRollsChanged(touched) {
   normalizeRolls();
   for (const roll of state.folder.rolls) markChangesStale(roll);
   renderSheet();
+  renderCutsPanel();
   renderRollCards();
   updateSheetToolbar();
   renderDestination();
   updateRunButton();
   for (const roll of touched) if (state.folder.rolls.includes(roll)) scheduleRollName(roll);
+}
+
+// ----- suggested cuts -----
+//
+// The server scores where a new roll probably starts (capture-time gaps
+// weighed by the frames-per-roll rhythm, file-name counter resets, frame
+// shape changes). Each suggestion is a marker on the sheet and a seam card
+// below it; the user cuts there or ignores it. A suggestion disappears once
+// its frame already starts a roll.
+
+async function loadCuts() {
+  const folder = state.folder;
+  const path = folder.path;
+  if (!path || !folder.listing || folder.listing.frames.length < 2) return;
+  folder.cuts.loading = true;
+  renderCutsPanel();
+  try {
+    const rhythm = state.settings?.frames_per_roll ?? 36;
+    const report = await api(`/api/folder/cuts?${new URLSearchParams({ path, frames_per_roll: String(rhythm) })}`);
+    if (folder.path !== path) return;
+    folder.cuts.report = report;
+  } catch (e) {
+    if (folder.path !== path) return;
+    folder.cuts.report = null;
+    renderFolderBanner(`Could not look for cuts: ${e.message}`, "warn");
+  } finally {
+    if (folder.path === path) {
+      folder.cuts.loading = false;
+      renderSheet();
+      renderCutsPanel();
+    }
+  }
+}
+
+// Suggestions still worth showing: not ignored, and not already a cut.
+function activeCuts() {
+  const { report, ignored } = state.folder.cuts;
+  if (!report) return [];
+  return report.cuts.filter(c => !ignored.has(c.key) && !startsRoll(c.key));
+}
+
+function startsRoll(key) {
+  const roll = rollOf(key);
+  if (!roll) return true;
+  return roll.frames[0] === key;
+}
+
+function suggestedCutAt(key) {
+  return activeCuts().find(c => c.key === key) || null;
+}
+
+function cutReasonText(cut) {
+  const parts = cut.reasons.map((r) => {
+    if (r.kind === "gap") return `${humanDuration(r.seconds)} pause`;
+    if (r.kind === "counter_reset") return `numbering restarts at ${r.to}`;
+    if (r.kind === "aspect") return `frame shape changes, ${r.from} to ${r.to}`;
+    return r.kind;
+  });
+  return `${parts.join(", ")} · ${cut.frames_before} frame${cut.frames_before === 1 ? "" : "s"} before`;
+}
+
+const CUT_STRENGTH_LABEL = { sure: "New roll", likely: "Probably a new roll", maybe: "A pause, maybe a break" };
+
+function renderCutsPanel() {
+  const panel = document.getElementById("cuts-panel");
+  const summary = document.getElementById("cuts-summary");
+  const list = document.getElementById("cuts-list");
+  const applyAll = document.getElementById("cuts-apply-all");
+  const folder = state.folder;
+  const cuts = activeCuts();
+  const show = folder.cuts.loading || cuts.length > 0;
+  panel.classList.toggle("hidden", !show);
+  if (!show) { list.innerHTML = ""; return; }
+  if (folder.cuts.loading) {
+    summary.textContent = "Looking for cuts…";
+    applyAll.classList.add("hidden");
+    list.innerHTML = "";
+    return;
+  }
+  const report = folder.cuts.report;
+  const source = report.time_source === "exif" ? "capture times" : report.time_source === "file" ? "file times" : "times";
+  const pace = report.typical_gap_seconds ? ` (${humanDuration(report.typical_gap_seconds)} between frames)` : "";
+  const firm = cuts.filter(c => c.strength !== "maybe");
+  summary.textContent = `${cuts.length} suggested cut${cuts.length === 1 ? "" : "s"} from ${source}${pace}, counters and frame shapes.`;
+  applyAll.classList.toggle("hidden", firm.length < 2);
+  applyAll.textContent = `Cut all ${firm.length}`;
+  list.innerHTML = "";
+  for (const cut of cuts) list.appendChild(renderSeam(cut));
+}
+
+function renderSeam(cut) {
+  const folder = state.folder;
+  const el = document.createElement("div");
+  el.className = `seam seam-${cut.strength}`;
+  const figure = (key) => {
+    const frame = frameByKey(key);
+    const thumb = frame?.preview && folder.thumbs.has(frame.preview)
+      ? `<img src="${escapeHtml(buildThumbnailUrl(folder.path, frame.preview, state.previewInvert))}" alt="" loading="lazy" />`
+      : `<span class="sheet-thumb-placeholder">${escapeHtml(frame ? frame.display_key : key)}</span>`;
+    return `<figure><div class="seam-thumb">${thumb}</div><figcaption>${escapeHtml(frame ? frame.display_key : key)}</figcaption></figure>`;
+  };
+  el.innerHTML = `
+    <div class="seam-pair">${figure(cut.previous)}<span class="seam-mark">✂</span>${figure(cut.key)}</div>
+    <div class="seam-text">
+      <div class="seam-label">${CUT_STRENGTH_LABEL[cut.strength] || cut.strength}</div>
+      <div class="lib-sub">${escapeHtml(cutReasonText(cut))}</div>
+    </div>
+    <div class="seam-actions">
+      <button type="button" class="primary" data-act="cut">Cut here</button>
+      <button type="button" class="action-link" data-act="ignore">Ignore</button>
+    </div>`;
+  el.querySelector("[data-act=cut]").addEventListener("click", () => cutBefore(cut.key));
+  el.querySelector("[data-act=ignore]").addEventListener("click", () => {
+    folder.cuts.ignored.add(cut.key);
+    renderSheet();
+    renderCutsPanel();
+  });
+  for (const fig of el.querySelectorAll("figure")) {
+    fig.addEventListener("click", () => {
+      folder.selection = new Set([cut.key]);
+      folder.anchor = cut.key;
+      renderSheet();
+      updateSheetToolbar();
+      scrollCellIntoView(cut.key);
+    });
+  }
+  return el;
+}
+
+function applyAllCuts() {
+  const keys = activeCuts().filter(c => c.strength !== "maybe").map(c => c.key);
+  for (const key of keys) cutBefore(key);
+}
+
+function setRhythm(value) {
+  const rhythm = Number(value);
+  if (state.settings) state.settings.frames_per_roll = rhythm;
+  queueSettingsPatch({ frames_per_roll: rhythm });
+  void loadCuts();
+}
+
+function humanDuration(seconds) {
+  const s = Math.round(seconds);
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rest = m - h * 60;
+  return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+
+// ----- keyboard -----
+//
+// On the sheet: arrow keys move the cursor (shift extends the selection),
+// C cuts before the cursor, X leaves the selection out, Enter takes a
+// suggested cut at the cursor, Escape clears. Off while typing in a field
+// or while a dialog is open.
+
+function onSheetKey(e) {
+  if (state.view !== "folder" || !state.folder.listing || state.folder.running) return;
+  if (!document.getElementById("dialog").classList.contains("hidden")) return;
+  if (!document.getElementById("picker-panel").classList.contains("hidden")) return;
+  if (!document.getElementById("settings-form-panel").classList.contains("hidden")) return;
+  const tag = (document.activeElement?.tagName || "").toLowerCase();
+  if (["input", "select", "textarea"].includes(tag) || document.activeElement?.isContentEditable) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const folder = state.folder;
+  const frames = folderFrames();
+  if (!frames.length) return;
+  const cursor = folder.anchor && sheetIndexOf(folder.anchor) >= 0 ? sheetIndexOf(folder.anchor) : -1;
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -sheetColumns(), ArrowDown: sheetColumns() }[e.key];
+  if (step !== undefined) {
+    e.preventDefault();
+    const next = Math.max(0, Math.min(frames.length - 1, cursor < 0 ? 0 : cursor + step));
+    moveCursor(frames[next].key, e.shiftKey);
+    return;
+  }
+  const key = e.key.toLowerCase();
+  if (key === "c") {
+    e.preventDefault();
+    if (folder.anchor) cutBefore(folder.anchor);
+  } else if (key === "x") {
+    e.preventDefault();
+    if (folder.selection.size) leaveOutSelection();
+  } else if (e.key === "Enter") {
+    if (folder.anchor && suggestedCutAt(folder.anchor)) { e.preventDefault(); cutBefore(folder.anchor); }
+  } else if (e.key === "Escape") {
+    clearSheetSelection();
+  }
+}
+
+function moveCursor(key, extend) {
+  const folder = state.folder;
+  if (extend && folder.anchor && sheetIndexOf(folder.anchor) >= 0) {
+    const [a, b] = [sheetIndexOf(folder.anchor), sheetIndexOf(key)].sort((x, y) => x - y);
+    for (let i = a; i <= b; i++) folder.selection.add(folderFrames()[i].key);
+  } else {
+    folder.selection = new Set([key]);
+    folder.anchor = key;
+  }
+  renderSheet();
+  updateSheetToolbar();
+  scrollCellIntoView(key);
+}
+
+function sheetColumns() {
+  const cells = document.querySelectorAll("#contact-sheet .sheet-cell");
+  if (!cells.length) return 1;
+  const top = cells[0].offsetTop;
+  let n = 0;
+  for (const cell of cells) { if (cell.offsetTop !== top) break; n += 1; }
+  return Math.max(1, n);
+}
+
+function scrollCellIntoView(key) {
+  document.querySelector(`#contact-sheet .sheet-cell[data-key="${cssEscape(key)}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
 // ----- roll cards -----
@@ -3349,6 +3582,9 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("sheet-clear").addEventListener("click", clearSheetSelection);
   document.getElementById("sheet-invert").addEventListener("click", toggleInvert);
   document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
+  document.getElementById("cuts-rhythm").addEventListener("change", (e) => setRhythm(e.target.value));
+  document.getElementById("cuts-apply-all").addEventListener("click", applyAllCuts);
+  document.addEventListener("keydown", onSheetKey);
   for (const btn of document.querySelectorAll("#destination .segment")) {
     btn.addEventListener("click", () => setDestination(btn.dataset.dest));
   }

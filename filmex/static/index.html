@@ -138,6 +138,14 @@
       <div class="sheet-toolbar">
         <span id="sheet-selection" class="lib-sub"></span>
         <button id="sheet-unmatched" class="secondary hidden" type="button" data-mode="exclude"></button>
+        <select id="cuts-rhythm" class="sheet-select" title="Frames per roll, for suggested cuts" aria-label="Frames per roll">
+          <option value="36">36 per roll</option>
+          <option value="24">24 per roll</option>
+          <option value="16">16 per roll</option>
+          <option value="15">15 per roll</option>
+          <option value="12">12 per roll</option>
+          <option value="0">No rhythm</option>
+        </select>
         <button id="sheet-invert" class="action-link" type="button" aria-pressed="false">Invert</button>
         <button id="sheet-cut" class="secondary" type="button" disabled title="Start a new roll at the selected frame">Cut here</button>
         <button id="sheet-new-roll" class="secondary" type="button" disabled>New roll from selection</button>
@@ -145,6 +153,14 @@
         <button id="sheet-clear" class="action-link hidden" type="button">Clear selection</button>
       </div>
       <div id="contact-sheet" class="contact-sheet"></div>
+      <!-- Suggested cuts: each seam side by side, confirmed by the user. -->
+      <div id="cuts-panel" class="cuts-panel hidden">
+        <div class="cuts-head">
+          <span id="cuts-summary" class="lib-sub"></span>
+          <button id="cuts-apply-all" class="secondary" type="button">Cut all</button>
+        </div>
+        <div id="cuts-list" class="cuts-list"></div>
+      </div>
     </section>
 
     <section id="rolls-section" class="hidden">

@@ -56,6 +56,15 @@ def _bool(value: Any) -> bool:
     return value
 
 
+def _int_range(low: int, high: int) -> Callable[[Any], int]:
+    def check(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            raise SettingsError(f"expected a whole number from {low} to {high}")
+        return value
+
+    return check
+
+
 def _enum(allowed: tuple[str, ...]) -> Callable[[Any], str]:
     def check(value: Any) -> str:
         if value not in allowed:
@@ -118,6 +127,8 @@ SPECS: dict[str, Spec] = {
     "naming_template": Spec(naming.DEFAULT_TEMPLATE, _template),
     "naming_place_suffix": Spec(True, _bool),
     "import_mode": Spec("copy", _enum(IMPORT_MODES)),
+    # Frames per roll for cut suggestions on the contact sheet; 0 = no rhythm.
+    "frames_per_roll": Spec(36, _int_range(0, 100)),
 }
 
 

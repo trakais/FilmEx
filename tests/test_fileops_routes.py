@@ -171,3 +171,33 @@ def test_roll_drafts_carry_per_file_overrides_into_the_new_folder(client, tree, 
     manifest = mf.read_manifest(root / "2026" / "2026-04-01-Fed2-Gold")
     assert manifest["file_overrides"]["DSC0001.JPG"]["extra_keywords"] == ["Anna"]
     assert manifest["file_overrides"]["DSC0002.JPG"]["lens_snapshot"]["id"] == lens["id"]
+
+
+def test_cuts_endpoint_reports_suggestions_and_honours_the_rhythm_setting(client, tmp_path: Path, make_jpeg, monkeypatch):
+    import os
+
+    from filmex.services import cuts
+
+    folder = tmp_path / "session"
+    base = 1_700_000_000
+    stamp = base
+    for i in range(1, 49):
+        path = make_jpeg(f"scan_{i:03d}.jpg", long_edge=64, folder=folder)
+        if i == 25:
+            stamp += 15 * 60  # the roll change
+        os.utime(path, (stamp, stamp))
+        stamp += 8
+    monkeypatch.setattr(cuts, "read_exif_facts", lambda paths: {})
+
+    res = client.get("/api/folder/cuts", params={"path": str(folder)})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["frames_per_roll"] == 36 and data["time_source"] == "file"
+    assert [(c["key"], c["strength"], c["frames_before"]) for c in data["cuts"]] == [("scan_025", "likely", 24)]
+    assert len(data["facts"]) == 48 and data["facts"][0]["counter"] == 1
+
+    client.patch("/api/settings", json={"frames_per_roll": 12})
+    assert client.get("/api/folder/cuts", params={"path": str(folder)}).json()["frames_per_roll"] == 12
+    assert client.get("/api/folder/cuts", params={"path": str(folder), "frames_per_roll": 0}).json()["cuts"][0]["strength"] == "likely"
+    assert client.patch("/api/settings", json={"frames_per_roll": 500}).status_code == 400
+    assert client.get("/api/folder/cuts", params={"path": str(folder / "nope")}).status_code == 404

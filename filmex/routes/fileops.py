@@ -17,7 +17,7 @@ from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
-from filmex.services import fileops, importer, jobs
+from filmex.services import cuts, fileops, importer, jobs
 from filmex.services import frames as fr
 from filmex.services import settings as settings_service
 
@@ -82,6 +82,23 @@ def folder_frames(path: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     data = listing.to_dict()
     data["suggested_roll_date"] = fr.earliest_file_date(folder, listing.frames)
+    return data
+
+
+@router.get("/api/folder/cuts")
+def folder_cuts(path: str, frames_per_roll: int | None = None, session: Session = Depends(get_session)) -> dict[str, Any]:
+    """Where the folder's frames probably change roll, from capture times,
+    file-name counters and frame shapes. One ExifTool pass over the folder."""
+    folder = Path(path).expanduser()
+    try:
+        listing = fr.list_frames(folder)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    rhythm = settings_service.get(session, "frames_per_roll") if frames_per_roll is None else frames_per_roll
+    facts = cuts.frame_facts(folder, listing.frames)
+    report = cuts.suggest_cuts(facts, frames_per_roll=max(0, rhythm))
+    data = report.to_dict()
+    data["facts"] = [f.to_dict() for f in facts]
     return data
 
 

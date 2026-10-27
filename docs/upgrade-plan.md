@@ -487,9 +487,14 @@ splitting big scan sessions):
 - [x] Add gear from inside the picker.
 - [x] Settings: Preferences first, then Gear; import mode moved to the
       Folder screen; library actions behind a menu.
-- [ ] Cut suggestions for the pro user: time gaps as suggested cuts with a
+- [x] Cut suggestions for the pro user: time gaps as suggested cuts with a
       frames-per-roll rhythm, the seam frames shown side by side, filename
       counter resets and aspect changes as near-certain cuts, keyboard.
+      `services/cuts.py` + `GET /api/folder/cuts`; one ExifTool pass per
+      folder; sure / likely / maybe; seam cards with Cut here, Ignore and
+      Cut all; arrows, C, X, Enter, Escape on the sheet. Verified on a
+      synthetic 56-frame session (break after 12 → maybe, roll change
+      after 24 → likely, counter reset + square frames → sure).
 
 Server additions: `as_roll` on the dry run (preview the Roll keyword under
 the folder name a roll is about to get), per-file overrides on roll
