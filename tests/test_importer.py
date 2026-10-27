@@ -53,7 +53,7 @@ def test_copy_verify_detects_a_corrupted_destination(tmp_path: Path, monkeypatch
     src = _touch(tmp_path, "a.bin", os.urandom(10_000))
     dst = tmp_path / "b.bin"
     info = importer.copy_verify(src, dst, chunk=4096)
-    assert info["size"] == 10_000 and info["digest"] == importer.hash_file(dst)
+    assert info.size == 10_000 and info.digest == importer.hash_file(dst)
     with pytest.raises(FileExistsError):
         importer.copy_verify(src, dst)
 
@@ -103,20 +103,20 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, fake_e
 
     gold = root / "2026" / "2026-05-14-Fed2-Gold"
     hp5 = root / "2024" / "2024-12-24-Fed2-HP5"
-    assert not result["errors"] and not result["cancelled"]
+    assert not result.errors and not result.cancelled
     assert sorted(p.name for p in gold.iterdir()) == sorted([f"DSC{i:04d}.{e}" for i in range(1, 4) for e in ("JPG", "ARW")] + ["DSC0001.xmp", "roll_manifest.json"])
     assert sorted(p.name for p in hp5.iterdir()) == ["lab_001.jpg", "lab_002.jpg", "roll_manifest.json"]
     # Sources untouched in copy mode, bytes identical.
     assert (source / "DSC0002.ARW").read_bytes() == (gold / "DSC0002.ARW").read_bytes()
-    assert result["removed_sources"] == []
+    assert result.removed_sources == []
     manifest = mf.read_manifest(gold)
     assert manifest["import_source"]["path"] == str(source)
     assert manifest["import_source"]["verified"] and manifest["import_source"]["mode"] == "copy"
     assert {f["name"] for f in manifest["import_source"]["files"]} == {f"DSC{i:04d}.{e}" for i in range(1, 4) for e in ("JPG", "ARW")} | {"DSC0001.xmp"}
     assert all(len(f["blake2b"]) == 64 for f in manifest["import_source"]["files"])
     assert manifest["capture_date_value"] == "2026-05-14"
-    assert [len(c["applied"]) for c in result["created"]] == [6, 2]
-    assert all(c["verified"] for c in result["created"])
+    assert [len(c.applied) for c in result.created] == [6, 2]
+    assert all(c.verified for c in result.created)
     steps = [e.get("step") for e in events]
     assert "copy" in steps and "verify" in steps and "tag" in steps and "roll" in steps
     last_verify = [e for e in events if e.get("step") == "verify"][-1]
@@ -124,10 +124,10 @@ def test_apply_import_copies_verifies_tags_and_undo_removes_copies(inbox, fake_e
 
     (gold / "DSC0002.xmp").write_text("<x/>")  # what tagging seeds for a raw without a sidecar
     with Session(get_engine()) as session:
-        undo = importer.undo_import(session, result["operation_id"])
-        assert operations.get(session, result["operation_id"]).status == "undone"
-    assert not undo["errors"]
-    assert sorted(undo["removed_folders"]) == sorted([str(gold), str(hp5), str(root / "2026"), str(root / "2024")])
+        undo = importer.undo_import(session, result.operation_id)
+        assert operations.get(session, result.operation_id).status == "undone"
+    assert not undo.errors
+    assert sorted(undo.removed_folders) == sorted([str(gold), str(hp5), str(root / "2026"), str(root / "2024")])
     assert not (source / "DSC0002.xmp").exists()  # copy mode: the copy's sidecar is discarded with it
     assert not (root / "2026").exists() and not (root / "2024").exists()
     assert (source / "DSC0001.xmp").is_file()
@@ -141,7 +141,7 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
     def flaky_copy(src, dst, *, progress=None, chunk=importer.CHUNK):
         state["n"] += 1
         if Path(src).name == "lab_002.jpg":
-            raise importer.VerifyError("lab_002.jpg: destination differs from source (hash mismatch)")
+            raise importer.VerifyError("destination differs from source (hash mismatch)")
         return real_copy(src, dst, progress=progress, chunk=chunk)
 
     monkeypatch.setattr(importer, "copy_verify", flaky_copy)
@@ -152,22 +152,22 @@ def test_move_mode_deletes_sources_only_after_the_whole_roll_verified(inbox, mon
     hp5 = root / "2024" / "2024-12-24-Fed2-HP5"
     # Roll one verified fully: its sources are gone and the copies carry the bytes.
     assert not (source / "DSC0001.ARW").exists() and (gold / "DSC0001.ARW").is_file()
-    assert len(result["removed_sources"]) == 7
+    assert len(result.removed_sources) == 7
     # Roll two failed verification on its second file: nothing of it was deleted.
     assert (source / "lab_001.jpg").is_file() and (source / "lab_002.jpg").is_file()
     assert (hp5 / "lab_001.jpg").is_file() and not (hp5 / "lab_002.jpg").exists()
-    assert result["errors"] and "lab_002.jpg" in result["errors"][0]
-    assert not result["created"][1]["verified"]
+    assert result.errors and "lab_002.jpg" in result.errors[0]
+    assert not result.created[1].verified
     assert not mf.manifest_path_for(hp5).exists()
 
     monkeypatch.setattr(importer, "copy_verify", real_copy)
     (gold / "DSC0003.xmp").write_text("<x/>")  # tagging sidecar; in move mode it goes back with the raw
     with Session(get_engine()) as session:
-        undo = importer.undo_import(session, result["operation_id"])
-    assert not undo["errors"], undo
+        undo = importer.undo_import(session, result.operation_id)
+    assert not undo.errors, undo
     assert (source / "DSC0001.ARW").is_file() and (source / "DSC0001.xmp").is_file()
     assert (source / "DSC0003.xmp").read_text() == "<x/>"
-    assert len(undo["restored"]) == 7
+    assert len(undo.restored) == 7
     assert not gold.exists() and not hp5.exists()
     assert (source / "lab_001.jpg").is_file()
 
@@ -180,7 +180,39 @@ def test_undo_keeps_a_copy_whose_source_vanished(inbox, fake_exiftool):
     target = root / "2025" / "only-lab"
     (source / "lab_001.jpg").unlink()
     with Session(get_engine()) as session:
-        undo = importer.undo_import(session, result["operation_id"])
-    assert any("source is gone" in e for e in undo["errors"])
+        undo = importer.undo_import(session, result.operation_id)
+    assert any("source is gone" in e for e in undo.errors)
     assert (target / "lab_001.jpg").is_file() and not (target / "lab_002.jpg").exists()
     assert target.is_dir()
+
+
+def test_import_result_journal_round_trip():
+    """The journal stores to_dict(); undo reads it back with from_dict()."""
+    copied = importer.ImportedFile(name="a.jpg", source="/in/a.jpg", target="/lib/2026/R1/a.jpg", size=3, digest="ab")
+    roll = importer.ImportedRoll(name="R1", path="/lib/2026/R1", year_dir="/lib/2026", year_dir_created=True,
+                                 files=[copied], verified=True, applied=["a.jpg"], errors=["a.jpg: hiccup"])
+    result = importer.ImportResult(mode="move", created=[roll], removed_sources=["/in/a.jpg"])
+    data = result.to_dict()
+    assert data["created"][0]["files"][0] == {"name": "a.jpg", "from": "/in/a.jpg", "to": "/lib/2026/R1/a.jpg", "size": 3, "digest": "ab"}
+    assert data["errors"] == ["R1: a.jpg: hiccup"]
+    assert importer.ImportResult.from_dict(data) == result
+
+
+def test_cancelled_undo_stops_and_leaves_the_roll_folder_intact(inbox, fake_exiftool):
+    root, source = inbox
+    rolls = [RollDraft(name="only-lab", frames=["lab_001", "lab_002"], tagging={"roll_date": "2025-01-01"})]
+    with Session(get_engine()) as session:
+        result = importer.apply_import(session, source, rolls, root=str(root), mode="copy")
+    target = root / "2025" / "only-lab"
+    calls = {"n": 0}
+
+    def cancel_after_first_file():
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    with Session(get_engine()) as session:
+        undo = importer.undo_import(session, result.operation_id, cancelled=cancel_after_first_file)
+    assert undo.errors == ["cancelled before every file was handled"]
+    assert len(undo.removed) == 1  # the last copy went, the first one stayed
+    assert (target / "lab_001.jpg").is_file() and mf.manifest_path_for(target).is_file()
+    assert undo.removed_folders == []

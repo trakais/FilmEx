@@ -30,7 +30,7 @@ from sqlmodel import Session
 from filmex.services import fileops, operations
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
-from filmex.services.fileops import Cancelled, PlanError, Progress, RollDraft
+from filmex.services.fileops import Cancelled, PlanError, Progress, RollDraft, no_progress
 
 CHUNK = 4 * 1024 * 1024
 HEADROOM = 64 * 1024 * 1024
@@ -39,6 +39,14 @@ MODES = ("copy", "move")
 
 class VerifyError(RuntimeError):
     """The destination does not match the source after the copy."""
+
+
+@dataclass(frozen=True)
+class VerifiedCopy:
+    """A copy that was read back and matched its source."""
+
+    size: int
+    digest: str  # BLAKE2b, 32 bytes, hex
 
 
 # ---------- copy and verify ----------
@@ -55,13 +63,13 @@ def hash_file(path: Path, *, chunk: int = CHUNK) -> str:
     return digest.hexdigest()
 
 
-def copy_verify(src: Path, dst: Path, *, progress: Progress | None = None, chunk: int = CHUNK) -> dict[str, Any]:
+def copy_verify(src: Path, dst: Path, *, progress: Progress | None = None, chunk: int = CHUNK) -> VerifiedCopy:
     """Copy ``src`` to a new ``dst`` and prove the copy by reading it back.
 
-    Returns ``{"size", "digest"}``. On mismatch the bad copy is removed and
-    ``VerifyError`` raised, so a corrupt file never stays at the destination.
+    On mismatch the bad copy is removed and ``VerifyError`` raised, so a
+    corrupt file never stays at the destination.
     """
-    emit = progress or (lambda e: None)
+    emit = progress or no_progress
     size = os.stat(src).st_size
     digest = hashlib.blake2b(digest_size=32)
     done = 0
@@ -89,10 +97,10 @@ def copy_verify(src: Path, dst: Path, *, progress: Progress | None = None, chunk
         except OSError:
             pass
         raise VerifyError(
-            f"{src.name}: destination differs from source"
+            "destination differs from source"
             + (f" (size {landed} != {size})" if landed != size else " (hash mismatch)")
         )
-    return {"size": size, "digest": expected}
+    return VerifiedCopy(size=size, digest=expected)
 
 
 # ---------- plan ----------
@@ -181,7 +189,7 @@ def plan_import(source: Path | str, rolls: list[RollDraft], *, root: str | None,
                 item_errors.append("a folder with this name already exists in that year")
             if any(fileops.same_name(str(target), t) for t in taken):
                 item_errors.append("two rolls would land in the same folder")
-            if fileops._same_path(target.parent, source_path) or _is_under(target, source_path):
+            if fileops.same_path(target.parent, source_path) or _is_under(target, source_path):
                 item_errors.append("the destination is inside the source folder; use Split instead")
             taken.append(str(target))
         files = [{"name": name, "bytes": _size(source_path / name)} for f in frames for name in f.files]
@@ -249,6 +257,124 @@ def _human(n: int) -> str:
 # ---------- apply ----------
 
 
+# ---------- results ----------
+
+
+@dataclass
+class ImportedFile:
+    """One file copied into the library. Journaled with ``from``/``to``."""
+
+    name: str
+    source: str
+    target: str
+    size: int
+    digest: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "from": self.source, "to": self.target, "size": self.size, "digest": self.digest}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ImportedFile:
+        return cls(name=data["name"], source=data["from"], target=data["to"], size=data["size"], digest=data["digest"])
+
+
+@dataclass
+class ImportedRoll:
+    """One roll folder an import created, and how far it got."""
+
+    name: str
+    path: str
+    year_dir: str
+    year_dir_created: bool = False
+    files: list[ImportedFile] = field(default_factory=list)
+    verified: bool = False
+    applied: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    tag_skipped: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "year_dir": self.year_dir,
+            "year_dir_created": self.year_dir_created,
+            "files": [f.to_dict() for f in self.files],
+            "verified": self.verified,
+            "applied": list(self.applied),
+            "errors": list(self.errors),
+            "tag_skipped": self.tag_skipped,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ImportedRoll:
+        return cls(
+            name=data["name"],
+            path=data["path"],
+            year_dir=data.get("year_dir") or str(Path(data["path"]).parent),
+            year_dir_created=bool(data.get("year_dir_created")),
+            files=[ImportedFile.from_dict(f) for f in data.get("files") or []],
+            verified=bool(data.get("verified")),
+            applied=list(data.get("applied") or []),
+            errors=list(data.get("errors") or []),
+            tag_skipped=data.get("tag_skipped"),
+        )
+
+
+@dataclass
+class ImportResult:
+    """What an import did. ``to_dict`` is both the journal entry and what the
+    import job reports; ``from_dict`` reads the journal back for undo."""
+
+    mode: str
+    created: list[ImportedRoll] = field(default_factory=list)
+    removed_sources: list[str] = field(default_factory=list)
+    cancelled: bool = False
+    operation_id: str | None = None
+
+    @property
+    def errors(self) -> list[str]:
+        return [f"{roll.name}: {e}" for roll in self.created for e in roll.errors]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = {
+            "created": [roll.to_dict() for roll in self.created],
+            "removed_sources": list(self.removed_sources),
+            "errors": self.errors,
+            "cancelled": self.cancelled,
+            "mode": self.mode,
+        }
+        if self.operation_id:
+            data["operation_id"] = self.operation_id
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ImportResult:
+        return cls(
+            mode=data.get("mode") or "",
+            created=[ImportedRoll.from_dict(r) for r in data.get("created") or []],
+            removed_sources=list(data.get("removed_sources") or []),
+            cancelled=bool(data.get("cancelled")),
+        )
+
+
+@dataclass
+class ImportUndoResult:
+    restored: list[str] = field(default_factory=list)  # moved files copied back to the source
+    removed: list[str] = field(default_factory=list)  # files removed from the library
+    removed_folders: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    operation_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        if not self.operation_id:
+            data.pop("operation_id")
+        return data
+
+
+# ---------- apply ----------
+
+
 def apply_import(
     session: Session,
     source: Path | str,
@@ -258,125 +384,142 @@ def apply_import(
     mode: str,
     progress: Progress | None = None,
     cancelled: Cancelled = lambda: False,
-) -> dict[str, Any]:
-    emit = progress or (lambda e: None)
+) -> ImportResult:
     plan = plan_import(source, rolls, root=root, mode=mode)
     if not plan.ok:
-        raise PlanError(plan.errors + [f"{i.name}: {e}" for i in plan.items for e in i.errors])
-    source_path = Path(plan.source)
-
-    op = operations.start(
-        session,
-        "import",
-        {"source": plan.source, "root": plan.root, "mode": mode,
-         "items": [{"name": i.name, "year": i.year, "target": i.target, "frames": i.frames} for i in plan.items]},
-        root=root,
-    )
-    created: list[dict[str, Any]] = []
-    removed_sources: list[str] = []
-    errors: list[str] = []
-    was_cancelled = False
-    total_bytes = plan.total_bytes
-    total_files = sum(len(i.files) for i in plan.items)
-    bytes_before = 0
-    files_done = 0
-
-    for item in plan.items:
-        if cancelled():
-            was_cancelled = True
-            break
-        target = Path(item.target)
-        year_dir = target.parent
-        record: dict[str, Any] = {
-            "name": item.name, "path": item.target, "year_dir": str(year_dir), "year_dir_created": False,
-            "files": [], "verified": False, "applied": [], "errors": [], "tag_skipped": None,
-        }
-        created.append(record)
-        try:
-            if not year_dir.exists():
-                year_dir.mkdir(parents=False)
-                record["year_dir_created"] = True
-            target.mkdir(parents=False, exist_ok=False)
-        except OSError as exc:
-            record["errors"].append(f"could not create the folder: {exc}")
-            errors.append(f"{item.name}: could not create the folder: {exc}")
-            break
-
-        roll_ok = True
-        for entry in item.files:
-            if cancelled():
-                was_cancelled = True
-                break
-            name = entry["name"]
-            src, dst = source_path / name, target / name
-            file_bytes_before = bytes_before
-
-            def chunk_progress(
-                e: dict[str, Any],
-                _base: int = file_bytes_before,
-                _name: str = name,
-                _segment: str = item.name,
-                _files_done: int = files_done,
-            ) -> None:
-                emit({
-                    **e, "roll": _segment, "file": _name,
-                    "files_done": _files_done, "files_total": total_files,
-                    "bytes_done": _base + e["bytes"], "bytes_total": total_bytes,
-                })
-
-            try:
-                info = copy_verify(src, dst, progress=chunk_progress)
-            except (OSError, VerifyError) as exc:
-                roll_ok = False
-                msg = f"{name}: {exc}" if not isinstance(exc, VerifyError) else str(exc)
-                record["errors"].append(msg)
-                errors.append(f"{item.name}: {msg}")
-                emit({"type": "progress", "step": "verify", "roll": item.name, "file": name, "ok": False, "error": msg})
-                break
-            record["files"].append({"name": name, "from": str(src), "to": str(dst), **info})
-            bytes_before += info["size"]
-            files_done += 1
-            emit({"type": "progress", "step": "verify", "roll": item.name, "file": name, "ok": True,
-                  "files_done": files_done, "files_total": total_files, "bytes_done": bytes_before, "bytes_total": total_bytes})
-        if was_cancelled or not roll_ok:
-            break
-
-        record["verified"] = True
-        tagged = fileops.tag_folder(session, target, item.tagging, progress=emit, cancelled=cancelled)
-        record["applied"] = tagged.applied
-        record["errors"].extend(tagged.errors)
-        record["tag_skipped"] = tagged.skipped
-        errors.extend(f"{item.name}: {e}" for e in tagged.errors)
-        _annotate_manifest(target, source=source_path, mode=mode, files=record["files"])
-
-        if mode == "move":
-            for entry in record["files"]:
-                try:
-                    os.remove(entry["from"])
-                    removed_sources.append(entry["from"])
-                    emit({"type": "progress", "step": "remove", "roll": item.name, "file": entry["name"], "ok": True})
-                except OSError as exc:
-                    msg = f"{entry['name']}: source could not be removed: {exc}"
-                    record["errors"].append(msg)
-                    errors.append(f"{item.name}: {msg}")
-        emit({"type": "progress", "step": "roll", "roll": item.name, "files": len(record["files"]),
-              "applied": len(record["applied"]), "verified": True})
-
-    result = {
-        "created": created,
-        "removed_sources": removed_sources,
-        "errors": errors,
-        "cancelled": was_cancelled,
+        raise PlanError(plan.problems)
+    journal = {
+        "source": plan.source,
+        "root": plan.root,
         "mode": mode,
+        "items": [{"name": i.name, "year": i.year, "target": i.target, "frames": i.frames} for i in plan.items],
     }
-    any_file = any(c["files"] for c in created)
-    status = operations.FAILED if errors and not any_file else operations.DONE
-    operations.finish(session, op.id, status, result)
-    result["operation_id"] = op.id
+    op = operations.start(session, "import", journal, root=root)
+    result = _Import(session, plan, progress or no_progress, cancelled).run()
+    copied_any = any(roll.files for roll in result.created)
+    status = operations.FAILED if result.errors and not copied_any else operations.DONE
+    operations.finish(session, op.id, status, result.to_dict())
+    result.operation_id = op.id
     return result
 
 
-def _annotate_manifest(folder: Path, *, source: Path, mode: str, files: list[dict[str, Any]]) -> None:
+class _Meter:
+    """Running file and byte totals behind an import's progress events."""
+
+    def __init__(self, emit: Progress, *, files_total: int, bytes_total: int) -> None:
+        self.emit = emit
+        self.files_total = files_total
+        self.bytes_total = bytes_total
+        self.files_done = 0
+        self.bytes_done = 0
+
+    def copying(self, roll: str, name: str) -> Progress:
+        """Progress callback for ``copy_verify`` while ``name`` copies."""
+        return lambda event: self.emit({
+            **event, "roll": roll, "file": name,
+            "files_done": self.files_done, "files_total": self.files_total,
+            "bytes_done": self.bytes_done + event["bytes"], "bytes_total": self.bytes_total,
+        })
+
+    def verified(self, roll: str, name: str, size: int) -> None:
+        self.files_done += 1
+        self.bytes_done += size
+        self.emit({"type": "progress", "step": "verify", "roll": roll, "file": name, "ok": True,
+                   "files_done": self.files_done, "files_total": self.files_total,
+                   "bytes_done": self.bytes_done, "bytes_total": self.bytes_total})
+
+
+class _Import:
+    """Runs a checked import plan roll by roll: create the folder, copy and
+    verify every file, tag the roll, then (move mode) delete its sources.
+    A failure stops the batch at that roll; later rolls are not started."""
+
+    def __init__(self, session: Session, plan: ImportPlan, emit: Progress, cancelled: Cancelled) -> None:
+        self.session = session
+        self.plan = plan
+        self.emit = emit
+        self.cancelled = cancelled
+        self.source = Path(plan.source)
+        self.meter = _Meter(emit, files_total=sum(len(i.files) for i in plan.items), bytes_total=plan.total_bytes)
+        self.result = ImportResult(mode=plan.mode)
+
+    def run(self) -> ImportResult:
+        for item in self.plan.items:
+            if self.cancelled():
+                self.result.cancelled = True
+                break
+            roll = self._import_roll(item)
+            self.result.created.append(roll)
+            if not roll.verified:
+                # The roll stopped part way: an error says why, no error means a cancel.
+                self.result.cancelled = not roll.errors
+                break
+        return self.result
+
+    def _import_roll(self, item: ImportItem) -> ImportedRoll:
+        target = Path(item.target)
+        roll = ImportedRoll(name=item.name, path=item.target, year_dir=str(target.parent))
+        try:
+            roll.year_dir_created = _create_roll_folder(target)
+        except OSError as exc:
+            roll.errors.append(f"could not create the folder: {exc}")
+            return roll
+        for entry in item.files:
+            if self.cancelled():
+                return roll
+            try:
+                roll.files.append(self._copy(roll.name, entry["name"], target))
+            except (OSError, VerifyError) as exc:
+                self._copy_failed(roll, entry["name"], exc)
+                return roll
+        roll.verified = True
+        self._tag(roll, item, target)
+        if self.plan.mode == "move":
+            self._remove_sources(roll)
+        self.emit({"type": "progress", "step": "roll", "roll": roll.name, "files": len(roll.files),
+                   "applied": len(roll.applied), "verified": True})
+        return roll
+
+    def _copy(self, roll: str, name: str, target: Path) -> ImportedFile:
+        src, dst = self.source / name, target / name
+        copy = copy_verify(src, dst, progress=self.meter.copying(roll, name))
+        self.meter.verified(roll, name, copy.size)
+        return ImportedFile(name=name, source=str(src), target=str(dst), size=copy.size, digest=copy.digest)
+
+    def _copy_failed(self, roll: ImportedRoll, name: str, exc: Exception) -> None:
+        message = f"{name}: {exc}"
+        roll.errors.append(message)
+        self.emit({"type": "progress", "step": "verify", "roll": roll.name, "file": name, "ok": False, "error": message})
+
+    def _tag(self, roll: ImportedRoll, item: ImportItem, target: Path) -> None:
+        outcome = fileops.tag_folder(self.session, target, item.tagging, progress=self.emit, cancelled=self.cancelled)
+        roll.applied, roll.tag_skipped = outcome.applied, outcome.skipped
+        roll.errors.extend(outcome.errors)
+        _annotate_manifest(target, source=self.source, mode=self.plan.mode, files=roll.files)
+
+    def _remove_sources(self, roll: ImportedRoll) -> None:
+        for copied in roll.files:
+            try:
+                os.remove(copied.source)
+            except OSError as exc:
+                roll.errors.append(f"{copied.name}: source could not be removed: {exc}")
+                continue
+            self.result.removed_sources.append(copied.source)
+            self.emit({"type": "progress", "step": "remove", "roll": roll.name, "file": copied.name, "ok": True})
+
+
+def _create_roll_folder(target: Path) -> bool:
+    """Create ``target``, and its year folder when missing. Returns whether
+    the year folder was created too, so undo knows it may remove it."""
+    year_created = False
+    if not target.parent.exists():
+        target.parent.mkdir(parents=False)
+        year_created = True
+    target.mkdir(parents=False, exist_ok=False)
+    return year_created
+
+
+def _annotate_manifest(folder: Path, *, source: Path, mode: str, files: list[ImportedFile]) -> None:
     manifest = mf.read_manifest(folder)
     if not manifest:
         return
@@ -385,7 +528,7 @@ def _annotate_manifest(folder: Path, *, source: Path, mode: str, files: list[dic
         "imported_at": datetime.now(UTC).isoformat(),
         "verified": True,
         "mode": mode,
-        "files": [{"name": f["name"], "size": f["size"], "blake2b": f["digest"]} for f in files],
+        "files": [{"name": f.name, "size": f.size, "blake2b": f.digest} for f in files],
     }
     manifest["updated_at"] = datetime.now(UTC).isoformat()
     mf.write_manifest(folder, manifest)
@@ -400,87 +543,100 @@ def undo_import(
     *,
     progress: Progress | None = None,
     cancelled: Cancelled = lambda: False,
-) -> dict[str, Any]:
+) -> ImportUndoResult:
     """Reverse an import: moved files go back (verified), copies are removed
     once the source is confirmed present, created folders are removed."""
-    op = operations.get(session, op_id)
-    if op is None:
-        raise KeyError(op_id)
-    if op.kind != "import":
-        raise ValueError(f"cannot undo an operation of kind {op.kind}")
-    if op.status == operations.UNDONE:
-        raise ValueError("operation already undone")
-    data = operations.to_dict(op)
-    result = data["result"]
-    mode = result.get("mode") or data["plan"].get("mode") or "copy"
-    emit = progress or (lambda e: None)
-    restored: list[str] = []
-    removed: list[str] = []
-    removed_folders: list[str] = []
-    errors: list[str] = []
+    entry = operations.load_for_undo(session, op_id, "import")
+    recorded = ImportResult.from_dict(entry["result"])
+    mode = recorded.mode or entry["plan"].get("mode") or "copy"
+    source = Path(entry["plan"]["source"])
+    undo = _ImportUndo(recorded, source, mode, progress or no_progress, cancelled).run()
+    if undo.removed or undo.removed_folders:
+        operations.mark_undone(session, op_id, undo.to_dict())
+    undo.operation_id = op_id
+    return undo
 
-    for record in reversed(result.get("created", [])):
-        folder = Path(record["path"])
-        for entry in reversed(record.get("files", [])):
-            if cancelled():
-                errors.append("cancelled before every file was handled")
-                break
-            dst, src = Path(entry["to"]), Path(entry["from"])
-            name = entry["name"]
-            if not dst.exists():
+
+class _ImportUndo:
+    """Puts an import back, last roll first. A copy is removed only once its
+    original is confirmed in the source; a moved file is copied back and
+    verified first. Folders the import created go when they are empty."""
+
+    def __init__(self, recorded: ImportResult, source: Path, mode: str, emit: Progress, cancelled: Cancelled) -> None:
+        self.recorded = recorded
+        self.source = source
+        self.mode = mode
+        self.emit = emit
+        self.cancelled = cancelled
+        self.result = ImportUndoResult()
+
+    def run(self) -> ImportUndoResult:
+        for roll in reversed(self.recorded.created):
+            for copied in reversed(roll.files):
+                if self.cancelled():
+                    self.result.errors.append("cancelled before every file was handled")
+                    return self.result
+                self._put_back(copied)
+            self._remove_roll(roll)
+        return self.result
+
+    def _put_back(self, copied: ImportedFile) -> None:
+        target = Path(copied.target)
+        if not target.exists():
+            return
+        try:
+            self._ensure_original(copied)
+            os.remove(target)
+        except (OSError, VerifyError) as exc:
+            self.result.errors.append(f"{copied.name}: {exc}")
+            self.emit({"type": "progress", "step": "restore", "file": copied.name, "ok": False, "error": str(exc)})
+            return
+        self.result.removed.append(str(target))
+        self.emit({"type": "progress", "step": "restore", "file": copied.name, "ok": True})
+
+    def _ensure_original(self, copied: ImportedFile) -> None:
+        """The original must be in the source before its copy may go."""
+        original = Path(copied.source)
+        if original.exists():
+            if os.stat(original).st_size != copied.size:
+                raise OSError("source differs in size; destination kept")
+            return
+        if self.mode != "move":
+            raise OSError("source is gone; destination kept")
+        original.parent.mkdir(parents=True, exist_ok=True)
+        if copy_verify(Path(copied.target), original).digest != copied.digest:
+            os.remove(original)
+            raise OSError("destination no longer matches the imported file; kept")
+        self.result.restored.append(str(original))
+
+    def _remove_roll(self, roll: ImportedRoll) -> None:
+        folder = Path(roll.path)
+        if not folder.is_dir():
+            return
+        self._settle_tagging_sidecars(folder, roll)
+        problem = fileops.remove_roll_folder(folder)
+        if problem:
+            self.result.errors.append(problem)
+            return
+        self.result.removed_folders.append(str(folder))
+        if roll.year_dir_created and fileops.remove_folder_if_empty(Path(roll.year_dir)):
+            self.result.removed_folders.append(roll.year_dir)
+
+    def _settle_tagging_sidecars(self, folder: Path, roll: ImportedRoll) -> None:
+        """Sidecars the tagging step wrote: after a move they follow their raw
+        file back to the source; after a copy they go with the copy."""
+        copied = {f.name for f in roll.files}
+        for sidecar in fileops.tagging_sidecars(folder, sorted(copied)):
+            if sidecar.name in copied:
                 continue
             try:
-                if src.exists():
-                    if os.stat(src).st_size != entry["size"]:
-                        raise OSError("source differs in size; destination kept")
-                else:
-                    if mode != "move":
-                        raise OSError("source is gone; destination kept")
-                    src.parent.mkdir(parents=True, exist_ok=True)
-                    info = copy_verify(dst, src)
-                    if info["digest"] != entry["digest"]:
-                        os.remove(src)
-                        raise OSError("destination no longer matches the imported file; kept")
-                    restored.append(str(src))
-                os.remove(dst)
-                removed.append(str(dst))
-                emit({"type": "progress", "step": "restore", "file": name, "ok": True})
+                if self.mode == "move":
+                    back = self.source / sidecar.name
+                    if back.exists():
+                        raise OSError("a sidecar with that name is back in the source already")
+                    copy_verify(sidecar, back)
+                os.remove(sidecar)
             except (OSError, VerifyError) as exc:
-                errors.append(f"{name}: {exc}")
-                emit({"type": "progress", "step": "restore", "file": name, "ok": False, "error": str(exc)})
-        if folder.is_dir():
-            copied_names = {entry["name"] for entry in record.get("files", [])}
-            for sidecar in fileops.tagging_sidecars(folder, sorted(copied_names)):
-                if sidecar.name in copied_names:
-                    continue
-                try:
-                    if mode == "move":
-                        # The raw went back to the source; its metadata goes with it.
-                        back = Path(record["files"][0]["from"]).parent / sidecar.name
-                        if back.exists():
-                            raise OSError("a sidecar with that name is back in the source already")
-                        copy_verify(sidecar, back)
-                    os.remove(sidecar)
-                    removed.append(str(sidecar))
-                except (OSError, VerifyError) as exc:
-                    errors.append(f"{sidecar.name}: {exc}")
-            manifest_path = mf.manifest_path_for(folder)
-            if manifest_path.is_file():
-                try:
-                    manifest_path.unlink()
-                except OSError as exc:
-                    errors.append(f"{folder.name}: could not remove its manifest: {exc}")
-            if fileops.remove_folder_if_empty(folder):
-                removed_folders.append(str(folder))
-                if record.get("year_dir_created"):
-                    year_dir = Path(record["year_dir"])
-                    if fileops.remove_folder_if_empty(year_dir):
-                        removed_folders.append(str(year_dir))
-            else:
-                errors.append(f"{folder.name}: left in place, it still holds files")
-
-    undo_result = {"restored": restored, "removed": removed, "removed_folders": removed_folders, "errors": errors}
-    if removed or removed_folders:
-        operations.mark_undone(session, op_id, undo_result)
-    undo_result["operation_id"] = op_id
-    return undo_result
+                self.result.errors.append(f"{sidecar.name}: {exc}")
+                continue
+            self.result.removed.append(str(sidecar))

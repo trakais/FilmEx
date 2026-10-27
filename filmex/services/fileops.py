@@ -39,7 +39,7 @@ SIBLINGS = "siblings"
 SUBFOLDERS = "subfolders"
 
 
-def _no_progress(event: dict[str, Any]) -> None:
+def no_progress(event: dict[str, Any]) -> None:
     pass
 
 
@@ -214,7 +214,7 @@ def tag_folder(
     Without ExifTool the files are left untagged and the outcome says so; the
     Library then shows the folder as untagged, ready for the Tag view.
     """
-    emit = progress or _no_progress
+    emit = progress or no_progress
     if not exiftool.available():
         return TagOutcome(skipped="ExifTool not available: files were moved but not tagged")
     try:
@@ -317,7 +317,7 @@ def plan_split(source: Path | str, rolls: list[RollDraft], *, root: str | None) 
         target = parent / roll.name
         item_errors: list[str] = []
         if target.exists() or target.is_symlink():
-            if layout == SUBFOLDERS or not _same_path(target, source_path):
+            if layout == SUBFOLDERS or not same_path(target, source_path):
                 item_errors.append("a folder with this name already exists")
             else:
                 item_errors.append("this is the source folder's own name")
@@ -348,7 +348,7 @@ def plan_split(source: Path | str, rolls: list[RollDraft], *, root: str | None) 
     )
 
 
-def _same_path(a: Path, b: Path) -> bool:
+def same_path(a: Path, b: Path) -> bool:
     try:
         return a.samefile(b)
     except OSError:
@@ -484,7 +484,7 @@ def apply_split(
         "items": [{"name": i.name, "target": i.target, "frames": i.frames} for i in plan.items],
     }
     op = operations.start(session, "split", journal, root=root)
-    result = _Split(session, plan, progress or _no_progress, cancelled).run()
+    result = _Split(session, plan, progress or no_progress, cancelled).run()
     status = operations.FAILED if result.errors and not result.moves else operations.DONE
     operations.finish(session, op.id, status, result.to_dict())
     result.operation_id = op.id
@@ -602,7 +602,7 @@ def undo_split(
     entry = operations.load_for_undo(session, op_id, "split")
     recorded = SplitResult.from_dict(entry["result"])
     source = Path(entry["plan"]["source"])
-    undo = _SplitUndo(recorded, source, progress or _no_progress, cancelled).run()
+    undo = _SplitUndo(recorded, source, progress or no_progress, cancelled).run()
     if undo.restored or undo.removed_folders:
         operations.mark_undone(session, op_id, undo.to_dict())
     undo.operation_id = op_id

@@ -84,7 +84,7 @@ def apply_renames(req: ApplyRenamesRequest, session: Session = Depends(get_sessi
 _UNDO_BY_KIND = {
     "rename": renames.undo,
     "split": lambda session, op_id, **options: fileops.undo_split(session, op_id, **options).to_dict(),
-    "import": importer.undo_import,
+    "import": lambda session, op_id, **options: importer.undo_import(session, op_id, **options).to_dict(),
 }
 
 

@@ -158,7 +158,7 @@ def import_apply(req: ImportRequest, session: Session = Depends(get_session)) ->
                 return importer.apply_import(
                     job_session, folder, rolls, root=root, mode=mode,
                     progress=job_ctx.emit, cancelled=job_ctx.cancelled,
-                )
+                ).to_dict()
             except fileops.PlanError as exc:
                 raise RuntimeError("; ".join(exc.errors)) from exc
 
