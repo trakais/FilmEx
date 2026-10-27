@@ -331,6 +331,7 @@ def _process_film_stocks(
                 "process_type",
                 "notes",
                 "favorite",
+                "archived",
                 "aliases",
             )
             for field in update_fields:
@@ -490,7 +491,8 @@ def _resolve_fixed_lens_links(
 
 
 def export_database() -> dict[str, list[dict]]:
-    """Dump all non-archived entities as a batch-shaped dict.
+    """Dump every entity as a batch-shaped dict; archived rows carry
+    ``"archived": true`` so a round trip keeps them retired.
 
     Useful for backups, for regenerating `default_data.sqlite` from the user's
     live DB, or for feeding back into an LLM session as ground truth.
@@ -512,6 +514,7 @@ def export_database() -> dict[str, list[dict]]:
                 "camera_type": c.camera_type,
                 "notes": c.notes,
                 "favorite": c.favorite,
+                "archived": c.archived,
                 "aliases": list(c.aliases or []),
             }
             if c.fixed_lens_id and c.fixed_lens_id in lens_by_id:
@@ -531,6 +534,7 @@ def export_database() -> dict[str, list[dict]]:
                     "mount": lens.mount,
                     "notes": lens.notes,
                     "favorite": lens.favorite,
+                    "archived": lens.archived,
                     "aliases": list(lens.aliases or []),
                 }
             )
@@ -560,6 +564,7 @@ def export_database() -> dict[str, list[dict]]:
                     "process_type": f.process_type,
                     "notes": f.notes,
                     "favorite": f.favorite,
+                    "archived": f.archived,
                     "aliases": list(f.aliases or []),
                 }
             )
@@ -572,17 +577,18 @@ def export_database() -> dict[str, list[dict]]:
                     "name": p.name,
                     "kinds": list(p.kinds or []),
                     "favorite": p.favorite,
+                    "archived": p.archived,
                 }
             )
             for p in session.exec(select(Provider)).all()
         ]
 
         development_methods = [
-            _prune({"name": m.name, "favorite": m.favorite})
+            _prune({"name": m.name, "favorite": m.favorite, "archived": m.archived})
             for m in session.exec(select(DevelopmentMethod)).all()
         ]
         scan_methods = [
-            _prune({"name": m.name, "favorite": m.favorite})
+            _prune({"name": m.name, "favorite": m.favorite, "archived": m.archived})
             for m in session.exec(select(ScanMethod)).all()
         ]
 

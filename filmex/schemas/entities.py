@@ -119,6 +119,7 @@ class CameraCreate(BaseModel):
     camera_type: str | None = None
     notes: str | None = None
     favorite: bool = False
+    archived: bool = False
     aliases: list[str] = Field(default_factory=list)
 
 
@@ -132,6 +133,7 @@ class LensCreate(BaseModel):
     mount: str | None = None
     notes: str | None = None
     favorite: bool = False
+    archived: bool = False
     aliases: list[str] = Field(default_factory=list)
 
 
@@ -145,6 +147,7 @@ class FilmStockCreate(BaseModel):
     process_type: ProcessType
     notes: str | None = None
     favorite: bool = False
+    archived: bool = False
     aliases: list[str] = Field(default_factory=list)
 
 
@@ -152,6 +155,7 @@ class ProviderCreate(BaseModel):
     name: str
     kinds: list[str] = Field(default_factory=list)
     favorite: bool = False
+    archived: bool = False
 
 
 class FilmBrandCreate(BaseModel):
@@ -177,6 +181,7 @@ class FilmBrandUpdate(BaseModel):
 class MethodCreate(BaseModel):
     name: str
     favorite: bool = False
+    archived: bool = False
 
 
 # ---------- Updates (all fields optional) ----------

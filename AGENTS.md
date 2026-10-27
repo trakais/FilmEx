@@ -545,6 +545,9 @@ touching camera/lens/provider rows.
 ```
 
 Field shapes match the Pydantic `*Create` classes in `filmex/schemas/entities.py`.
+Every row may carry `"archived": true` to add it retired (hidden from the
+pickers, still there for old manifests); `export-json` writes the flag on
+retired rows only, so an export fed back in keeps them retired.
 
 ### Fixed-lens cameras
 

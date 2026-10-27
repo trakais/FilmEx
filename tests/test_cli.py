@@ -382,3 +382,38 @@ def test_export_roundtrip(blank_db):
         c.get("make") == "Pentax" and c.get("model") == "K1000"
         for c in exported.get("cameras", [])
     )
+
+
+def test_archived_rows_survive_an_export_round_trip(blank_db):
+    """A batch may add a retired row, and an export says which rows are
+    retired, so export → add-from-json keeps them out of the pickers."""
+    film = {"brand": "Ilford", "name": "Delta 100", "display_name": "Ilford Delta 100",
+            "box_speed_iso": 100, "film_type": "bw_negative", "process_type": "bw"}
+    apply_batch({
+        "cameras": [
+            {"make": "Zenit", "model": "TTL", "display_name": "Zenit TTL", "mount": "M42", "archived": True},
+            {"make": "Zenit", "model": "B", "display_name": "Zenit B", "mount": "M42"},
+        ],
+        "lenses": [{"make": "KMZ", "model": "Helios-44-2", "display_name": "Helios-44-2 58mm f/2",
+                    "lens_model_write_value": "Helios-44-2 58mm f/2", "mount": "M42", "archived": True}],
+        "film_brands": [{"name": "Ilford"}],
+        "film_stocks": [film],
+        "providers": [{"name": "Old lab", "kinds": ["development"], "archived": True}],
+        "development_methods": [{"name": "Push", "archived": True}],
+        "scan_methods": [{"name": "Drum", "archived": True}],
+    })
+    exported = export_database()
+    cameras = {c["model"]: c for c in exported["cameras"]}
+    assert cameras["TTL"]["archived"] is True
+    assert "archived" not in cameras["B"]  # the flag is only written when set
+    assert exported["lenses"][0]["archived"] is True
+    assert exported["providers"][0]["archived"] is True
+    assert exported["development_methods"][0]["archived"] is True
+    assert exported["scan_methods"][0]["archived"] is True
+    assert "archived" not in exported["film_stocks"][0]
+
+    # Retiring a stock that already exists goes through the film upsert.
+    report = apply_batch({"film_brands": [{"name": "Ilford"}], "film_stocks": [{**film, "archived": True}]}, upsert_film_data=True)
+    assert len(report.section("film_stocks").updated) == 1 and not report.has_errors()
+    assert export_database()["film_stocks"][0]["archived"] is True
+
