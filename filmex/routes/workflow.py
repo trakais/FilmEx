@@ -160,7 +160,7 @@ def metadata_dry_run(
 def _submit_apply(plan: tg.TaggingPlan) -> jobs.Job:
     return jobs.get_manager().submit(
         "apply",
-        lambda job_ctx: tg.apply_all(plan, progress=job_ctx.emit, cancelled=job_ctx.cancelled),
+        lambda job_ctx: tg.apply_all(plan, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict(),
         exclusive=True,
         start={"total": len(plan.files)},
     )

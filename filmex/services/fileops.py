@@ -215,9 +215,9 @@ def tag_folder(
         cancelled=cancelled,
     )
     return {
-        "applied": final["applied_files"],
-        "errors": final["errors"],
-        "manifest_path": final["manifest_path"],
+        "applied": final.applied_files,
+        "errors": final.errors,
+        "manifest_path": final.manifest_path,
         "skipped": None,
     }
 

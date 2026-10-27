@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +34,7 @@ from filmex.services import manifest as mf
 
 
 class TaggingError(ValueError):
-    """A request that cannot be turned into a pipeline (bad ids, bad folder)."""
+    """A request that cannot be turned into a tagging plan (bad ids, bad folder)."""
 
     def __init__(self, detail: str, *, status_code: int = 400) -> None:
         super().__init__(detail)
@@ -42,175 +42,194 @@ class TaggingError(ValueError):
         self.status_code = status_code
 
 
-class TaggingPlan:
-    """Resolved inputs needed by both dry-run and apply."""
+@dataclass(frozen=True)
+class CaptureDate:
+    """The roll date as the user gave it (``YYYY-MM-DD``), or none."""
 
-    def __init__(
-        self,
-        *,
-        folder: Path,
-        roll_id: str,
-        source_kind: str,
-        scan_tier: str,
-        files: list[Path],
-        camera_snapshot: mf.GearSnapshot,
-        lens_snapshot: mf.GearSnapshot,
-        film_snapshot: mf.FilmSnapshot,
-        dev_provider_snapshot: mf.NamedSnapshot,
-        dev_method_snapshot: mf.NamedSnapshot,
-        scan_provider_snapshot: mf.NamedSnapshot,
-        scan_method_snapshot: mf.NamedSnapshot,
-        capture_date_value: str | None,
-        capture_date_precision: str,
-        capture_date_source: str | None,
-        file_keywords_by_name: dict[str, list[str]],
-        file_lens_by_name: dict[str, Lens],
-        keyword_context: kw.WriteContext,
-        camera_make: str | None,
-        camera_model: str | None,
-        capture_date_exif: str | None,
-        roll_notes: str | None,
-        place: str | None,
-        replace_managed_metadata: bool,
-    ) -> None:
-        self.folder = folder
-        self.roll_id = roll_id
-        self.source_kind = source_kind
-        self.scan_tier = scan_tier
-        self.files = files
-        self.camera_snapshot = camera_snapshot
-        self.lens_snapshot = lens_snapshot
-        self.film_snapshot = film_snapshot
-        self.dev_provider_snapshot = dev_provider_snapshot
-        self.dev_method_snapshot = dev_method_snapshot
-        self.scan_provider_snapshot = scan_provider_snapshot
-        self.scan_method_snapshot = scan_method_snapshot
-        self.capture_date_value = capture_date_value
-        self.capture_date_precision = capture_date_precision
-        self.capture_date_source = capture_date_source
-        self.file_keywords_by_name = file_keywords_by_name
-        self.file_lens_by_name = file_lens_by_name
-        self.keyword_context = keyword_context
-        self.camera_make = camera_make
-        self.camera_model = camera_model
-        self.capture_date_exif = capture_date_exif
-        self.roll_notes = roll_notes
-        self.place = place
-        self.replace_managed_metadata = replace_managed_metadata
+    value: str | None = None
+
+    @property
+    def precision(self) -> str:
+        return "day" if self.value else "unknown"
+
+    @property
+    def source(self) -> str | None:
+        return "user_override" if self.value else None
+
+    @property
+    def exif(self) -> str | None:
+        """``YYYY:MM:DD 12:00:00``: noon local stands in for day precision."""
+        return self.value.replace("-", ":") + " 12:00:00" if self.value else None
+
+
+@dataclass
+class TaggingPlan:
+    """What a tagging run writes: the folder's files, snapshots of the gear,
+    film, providers and methods, and the per-file overrides. Built once by
+    ``plan_tagging``; ``preview_all`` and ``apply_all`` only read it."""
+
+    folder: Path
+    roll_id: str
+    source_kind: str
+    scan_tier: str
+    files: list[Path]
+    camera_snapshot: mf.GearSnapshot
+    lens_snapshot: mf.GearSnapshot
+    film_snapshot: mf.FilmSnapshot
+    dev_provider_snapshot: mf.NamedSnapshot
+    dev_method_snapshot: mf.NamedSnapshot
+    scan_provider_snapshot: mf.NamedSnapshot
+    scan_method_snapshot: mf.NamedSnapshot
+    keyword_context: kw.WriteContext
+    capture_date: CaptureDate = field(default_factory=CaptureDate)
+    file_keywords_by_name: dict[str, list[str]] = field(default_factory=dict)
+    file_lens_by_name: dict[str, Lens] = field(default_factory=dict)
+    roll_notes: str | None = None
+    place: str | None = None
+    replace_managed_metadata: bool = False
+
+
+@dataclass
+class ApplyResult:
+    """Outcome of ``apply_all``; ``to_dict`` is what the apply job reports."""
+
+    folder: str
+    roll_id: str
+    manifest_path: str
+    applied_files: list[str]
+    errors: list[str]
+    cancelled: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class _Gear:
+    camera: Camera | None
+    lens: Lens | None
+    film: FilmStock | None
+
+
+@dataclass
+class _Processing:
+    """Who developed and scanned the roll, and how."""
+
+    dev_provider: Provider | None
+    dev_method: DevelopmentMethod | None
+    scan_provider: Provider | None
+    scan_method: ScanMethod | None
 
 
 def plan_tagging(req: DryRunRequest, session: Session) -> TaggingPlan:
-    try:
-        scan = fs.scan_folder(req.folder)
-    except FileNotFoundError as e:
-        raise TaggingError(str(e), status_code=404) from e
-
-    # All three of camera/lens/film are optional. The user may only know one
-    # piece of context for a given roll — tagging just that is still useful.
-    camera: Camera | None = None
-    if req.camera_id:
-        camera = session.get(Camera, req.camera_id)
-        if camera is None:
-            raise TaggingError("Camera not found", status_code=404)
-
-    lens: Lens | None = None
-    if camera and camera.fixed_lens_id:
-        lens = session.get(Lens, camera.fixed_lens_id)
-    elif req.lens_id:
-        lens = session.get(Lens, req.lens_id)
-        if lens is None:
-            raise TaggingError("Lens not found", status_code=404)
-
-    film: FilmStock | None = None
-    if req.film_stock_id:
-        film = session.get(FilmStock, req.film_stock_id)
-        if film is None:
-            raise TaggingError("Film stock not found", status_code=404)
-
-    dev_provider = _get_optional(session, Provider, req.development_provider_id, "Development provider")
-    dev_method = _get_optional(
-        session, DevelopmentMethod, req.development_method_id, "Development method"
-    )
-    scan_provider = _get_optional(session, Provider, req.scan_provider_id, "Scan provider")
-    scan_method = _get_optional(session, ScanMethod, req.scan_method_id, "Scan method")
-
-    _require_provider_kind(dev_provider, "development", "Development provider")
-    _require_provider_kind(scan_provider, "scan", "Scan provider")
-
-    keyword_context = kw.WriteContext(
-        roll_id=scan.roll_id,
-        film_display_name=film.display_name if film else None,
-        film_type=film.film_type if film else None,
-        camera_display_name=camera.display_name if camera else None,
-        lens_display_name=lens.display_name if lens else None,
-        development_provider_name=dev_provider.name if dev_provider else None,
-        development_method_name=dev_method.name if dev_method else None,
-        scan_provider_name=scan_provider.name if scan_provider else None,
-        scan_method_name=scan_method.name if scan_method else None,
-        extra_keywords=list(req.extra_keywords),
-    )
-    file_keywords_by_name = _normalize_file_keywords(req.file_keywords, [f.name for f in scan.files])
-    file_lens_by_name = _normalize_file_lenses(
-        session,
-        req.file_lens_ids,
-        [f.name for f in scan.files],
-        camera,
-    )
-
-    capture_date_value = _normalize_roll_date(req.roll_date)
-    capture_date_precision = "day" if capture_date_value else "unknown"
-    capture_date_source = "user_override" if capture_date_value else None
-    exif_date = _exif_date(capture_date_value)
-    roll_notes = _clean_text(req.roll_notes)
-    place = _clean_text(req.place)
-
-    files = select_files(scan, req.files)
-
+    """Resolve a request into a plan, or raise ``TaggingError``."""
+    scan = _scan(req.folder)
+    names = [f.name for f in scan.files]
+    gear = _resolve_gear(session, req)
+    processing = _resolve_processing(session, req)
     return TaggingPlan(
         folder=scan.folder,
         roll_id=scan.roll_id,
         source_kind=scan.source_kind,
         scan_tier=scan.scan_tier,
-        files=files,
-        camera_snapshot=mf.GearSnapshot(
-            id=camera.id if camera else None,
-            make=camera.make if camera else None,
-            model=camera.model if camera else None,
-            display_name=camera.display_name if camera else None,
-            mount=camera.mount if camera else None,
-        ),
-        lens_snapshot=mf.GearSnapshot(
-            id=lens.id if lens else None,
-            make=lens.make if lens else None,
-            model=lens.model if lens else None,
-            display_name=lens.display_name if lens else None,
-            mount=lens.mount if lens else None,
-            lens_model_write_value=lens.lens_model_write_value if lens else None,
-        ),
-        film_snapshot=mf.FilmSnapshot(
-            id=film.id if film else None,
-            brand=film.brand if film else None,
-            display_name=film.display_name if film else None,
-            box_speed_iso=film.box_speed_iso if film else None,
-            film_type=film.film_type if film else None,
-            process_type=film.process_type if film else None,
-        ),
-        dev_provider_snapshot=_named_snapshot(dev_provider),
-        dev_method_snapshot=_named_snapshot(dev_method),
-        scan_provider_snapshot=_named_snapshot(scan_provider),
-        scan_method_snapshot=_named_snapshot(scan_method),
-        capture_date_value=capture_date_value,
-        capture_date_precision=capture_date_precision,
-        capture_date_source=capture_date_source,
-        file_keywords_by_name=file_keywords_by_name,
-        file_lens_by_name=file_lens_by_name,
-        keyword_context=keyword_context,
-        camera_make=camera.make if camera else None,
-        camera_model=camera.model if camera else None,
-        capture_date_exif=exif_date,
-        roll_notes=roll_notes,
-        place=place,
+        camera_snapshot=_camera_snapshot(gear.camera),
+        lens_snapshot=_lens_snapshot(gear.lens),
+        film_snapshot=_film_snapshot(gear.film),
+        dev_provider_snapshot=_named_snapshot(processing.dev_provider),
+        dev_method_snapshot=_named_snapshot(processing.dev_method),
+        scan_provider_snapshot=_named_snapshot(processing.scan_provider),
+        scan_method_snapshot=_named_snapshot(processing.scan_method),
+        keyword_context=_keyword_context(scan.roll_id, gear, processing, req.extra_keywords),
+        file_keywords_by_name=_normalize_file_keywords(req.file_keywords, names),
+        file_lens_by_name=_normalize_file_lenses(session, req.file_lens_ids, names, gear.camera),
+        capture_date=CaptureDate(_normalize_roll_date(req.roll_date)),
+        roll_notes=_clean_text(req.roll_notes),
+        place=_clean_text(req.place),
         replace_managed_metadata=req.replace_managed_metadata,
+        files=select_files(scan, req.files),
+    )
+
+
+def _scan(folder: str) -> fs.ScanResult:
+    try:
+        return fs.scan_folder(folder)
+    except FileNotFoundError as e:
+        raise TaggingError(str(e), status_code=404) from e
+
+
+def _resolve_gear(session: Session, req: DryRunRequest) -> _Gear:
+    """Camera, lens and film are each optional: knowing only one of them is
+    still worth tagging. A fixed-lens camera always brings its own lens."""
+    camera = _get_optional(session, Camera, req.camera_id, "Camera")
+    if camera and camera.fixed_lens_id:
+        lens = session.get(Lens, camera.fixed_lens_id)
+    else:
+        lens = _get_optional(session, Lens, req.lens_id, "Lens")
+    film = _get_optional(session, FilmStock, req.film_stock_id, "Film stock")
+    return _Gear(camera=camera, lens=lens, film=film)
+
+
+def _resolve_processing(session: Session, req: DryRunRequest) -> _Processing:
+    processing = _Processing(
+        dev_provider=_get_optional(session, Provider, req.development_provider_id, "Development provider"),
+        dev_method=_get_optional(session, DevelopmentMethod, req.development_method_id, "Development method"),
+        scan_provider=_get_optional(session, Provider, req.scan_provider_id, "Scan provider"),
+        scan_method=_get_optional(session, ScanMethod, req.scan_method_id, "Scan method"),
+    )
+    _require_provider_kind(processing.dev_provider, "development", "Development provider")
+    _require_provider_kind(processing.scan_provider, "scan", "Scan provider")
+    return processing
+
+
+def _keyword_context(roll_id: str, gear: _Gear, processing: _Processing, extra_keywords: list[str]) -> kw.WriteContext:
+    def name_of(row) -> str | None:
+        return row.name if row else None
+
+    return kw.WriteContext(
+        roll_id=roll_id,
+        film_display_name=gear.film.display_name if gear.film else None,
+        film_type=gear.film.film_type if gear.film else None,
+        camera_display_name=gear.camera.display_name if gear.camera else None,
+        lens_display_name=gear.lens.display_name if gear.lens else None,
+        development_provider_name=name_of(processing.dev_provider),
+        development_method_name=name_of(processing.dev_method),
+        scan_provider_name=name_of(processing.scan_provider),
+        scan_method_name=name_of(processing.scan_method),
+        extra_keywords=list(extra_keywords),
+    )
+
+
+def _camera_snapshot(camera: Camera | None) -> mf.GearSnapshot:
+    if camera is None:
+        return mf.GearSnapshot()
+    return mf.GearSnapshot(
+        id=camera.id, make=camera.make, model=camera.model, display_name=camera.display_name, mount=camera.mount
+    )
+
+
+def _lens_snapshot(lens: Lens | None) -> mf.GearSnapshot:
+    if lens is None:
+        return mf.GearSnapshot()
+    return mf.GearSnapshot(
+        id=lens.id,
+        make=lens.make,
+        model=lens.model,
+        display_name=lens.display_name,
+        mount=lens.mount,
+        lens_model_write_value=lens.lens_model_write_value,
+    )
+
+
+def _film_snapshot(film: FilmStock | None) -> mf.FilmSnapshot:
+    if film is None:
+        return mf.FilmSnapshot()
+    return mf.FilmSnapshot(
+        id=film.id,
+        brand=film.brand,
+        display_name=film.display_name,
+        box_speed_iso=film.box_speed_iso,
+        film_type=film.film_type,
+        process_type=film.process_type,
     )
 
 
@@ -243,13 +262,6 @@ def _normalize_roll_date(raw: str | None) -> str | None:
     if not _ISO_DATE_RE.match(s):
         raise TaggingError(f"roll_date must be YYYY-MM-DD (got {s!r})", status_code=400)
     return s
-
-
-def _exif_date(iso_date: str | None) -> str | None:
-    """Convert `YYYY-MM-DD` -> `YYYY:MM:DD 12:00:00` (noon local, day-precision proxy)."""
-    if iso_date is None:
-        return None
-    return iso_date.replace("-", ":") + " 12:00:00"
 
 
 def _get_optional(session: Session, model, entity_id: str | None, label: str):
@@ -340,12 +352,12 @@ def intent_for_file(plan: TaggingPlan, file_name: str) -> et.WriteIntent:
         hierarchical = kw.merge_hierarchical(hierarchical, extra_keywords)
         flat = kw.merge_flat(flat, kw.leaves_of(extra_keywords))
     return et.WriteIntent(
-        camera_make=plan.camera_make,
-        camera_model=plan.camera_model,
+        camera_make=plan.camera_snapshot.make,
+        camera_model=plan.camera_snapshot.model,
         lens_model=(lens.lens_model_write_value if lens else plan.lens_snapshot.lens_model_write_value),
         hierarchical_keywords=hierarchical,
         flat_keywords=flat,
-        capture_date=plan.capture_date_exif,
+        capture_date=plan.capture_date.exif,
         description=plan.roll_notes,
     )
 
@@ -366,7 +378,7 @@ def apply_all(
     *,
     progress: Callable[[dict[str, Any]], None] | None = None,
     cancelled: Callable[[], bool] = lambda: False,
-) -> dict[str, Any]:
+) -> ApplyResult:
     """Write every file, report each one to ``progress``, return the outcome.
 
     ``cancelled`` is checked between files. A cancelled or failed roll still
@@ -376,7 +388,7 @@ def apply_all(
     emit = progress or (lambda e: None)
     applied: list[str] = []
     errors: list[str] = []
-    all_diffs: list[dict] = []
+    diffs: list[dict] = []
     was_cancelled = False
     finished = False
 
@@ -385,44 +397,31 @@ def apply_all(
             if cancelled():
                 was_cancelled = True
                 break
-            _apply_one(plan, file_path, applied, errors, all_diffs)
-            if errors and errors[-1].startswith(f"{file_path.name}:"):
-                emit({"type": "progress", "file": file_path.name, "ok": False, "error": errors[-1]})
-            else:
+            written = exiftool.write(
+                file_path, intent_for_file(plan, file_path.name), replace_managed=plan.replace_managed_metadata
+            )
+            if written.ok:
+                applied.append(file_path.name)
+                diffs.append({"file": file_path.name, "changes": [asdict(c) for c in written.changes]})
                 emit({"type": "progress", "file": file_path.name, "ok": True})
+            else:
+                error = f"{file_path.name}: {written.error}"
+                errors.append(error)
+                emit({"type": "progress", "file": file_path.name, "ok": False, "error": error})
         finished = True
     finally:
         # Files already written must be on record even when the loop died.
         if finished or applied:
-            manifest_path = _write_apply_manifest(plan, applied, all_diffs)
+            manifest_path = _write_apply_manifest(plan, applied, diffs)
 
-    return {
-        "folder": str(plan.folder),
-        "roll_id": plan.roll_id,
-        "manifest_path": str(manifest_path),
-        "applied_files": applied,
-        "errors": errors,
-        "cancelled": was_cancelled,
-    }
-
-
-def _apply_one(
-    plan: TaggingPlan,
-    file_path: Path,
-    applied: list[str],
-    errors: list[str],
-    all_diffs: list[dict],
-) -> None:
-    result = exiftool.write(
-        file_path,
-        intent_for_file(plan, file_path.name),
-        replace_managed=plan.replace_managed_metadata,
+    return ApplyResult(
+        folder=str(plan.folder),
+        roll_id=plan.roll_id,
+        manifest_path=str(manifest_path),
+        applied_files=applied,
+        errors=errors,
+        cancelled=was_cancelled,
     )
-    if not result.ok:
-        errors.append(f"{file_path.name}: {result.error}")
-        return
-    applied.append(file_path.name)
-    all_diffs.append({"file": file_path.name, "changes": [asdict(c) for c in result.changes]})
 
 
 def _write_apply_manifest(plan: TaggingPlan, applied: list[str], all_diffs: list[dict]) -> Path:
@@ -439,9 +438,9 @@ def _write_apply_manifest(plan: TaggingPlan, applied: list[str], all_diffs: list
         development_method=plan.dev_method_snapshot,
         scan_provider=plan.scan_provider_snapshot,
         scan_method=plan.scan_method_snapshot,
-        capture_date_value=plan.capture_date_value,
-        capture_date_precision=plan.capture_date_precision,
-        capture_date_source=plan.capture_date_source,
+        capture_date_value=plan.capture_date.value,
+        capture_date_precision=plan.capture_date.precision,
+        capture_date_source=plan.capture_date.source,
         notes=plan.roll_notes,
         place=plan.place,
     )
@@ -449,17 +448,7 @@ def _write_apply_manifest(plan: TaggingPlan, applied: list[str], all_diffs: list
     mf.set_file_overrides(
         merged,
         extra_keywords_by_file=plan.file_keywords_by_name,
-        lens_by_file={
-            name: mf.GearSnapshot(
-                id=lens.id,
-                make=lens.make,
-                model=lens.model,
-                display_name=lens.display_name,
-                mount=lens.mount,
-                lens_model_write_value=lens.lens_model_write_value,
-            )
-            for name, lens in plan.file_lens_by_name.items()
-        },
+        lens_by_file={name: _lens_snapshot(lens) for name, lens in plan.file_lens_by_name.items()},
     )
     mf.append_apply_history(merged, applied_files=applied, diffs=all_diffs, dry_run=False)
     return mf.write_manifest(plan.folder, merged)
