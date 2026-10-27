@@ -1730,18 +1730,28 @@ body[data-theme="paper"] .dialog {
 }
 .lib-group-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .lib-group-title .lib-group-count { color: var(--muted-2); letter-spacing: 0.08em; }
+/* One grid per list; every row lays its cells on the list's tracks
+   (subgrid), so the gear, date and action columns line up down the list
+   whatever a row's name or button widths are. The actions track is as wide
+   as the widest row's buttons. */
 .lib-list {
+  display: grid;
+  grid-template-columns: 92px minmax(220px, 1.4fr) minmax(160px, 1fr) 96px max-content;
   border: 1px solid var(--border);
   border-radius: 2px;
   background: linear-gradient(180deg, #111 0%, #0d0d0d 100%);
 }
 .lib-row {
   display: grid;
-  grid-template-columns: 92px minmax(220px, 1.4fr) minmax(160px, 1fr) 96px auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 14px;
   padding: 9px 14px;
   border-bottom: 1px solid var(--border);
+}
+@supports not (grid-template-columns: subgrid) {
+  .lib-row { grid-template-columns: 92px minmax(220px, 1.4fr) minmax(160px, 1fr) 96px 190px; }
 }
 .lib-row:last-child { border-bottom: none; }
 .lib-row:hover { background: rgba(255, 255, 255, 0.025); }
@@ -1763,7 +1773,9 @@ body[data-theme="paper"] .dialog {
 }
 .lib-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-date { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.lib-actions { display: flex; gap: 6px; justify-self: end; }
+/* Two button columns: the first button fills what the widest row needs, so
+   Open, Tag and Tag remaining stand in one column, Reveal in the other. */
+.lib-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; justify-self: stretch; }
 .lib-actions button { padding: 5px 10px; font-size: 10px; }
 .library-empty {
   padding: 28px 18px;
@@ -1779,7 +1791,7 @@ body[data-theme="paper"] .dialog {
 body[data-theme="paper"] .lib-list { background: linear-gradient(180deg, rgba(255, 251, 245, 0.5) 0%, rgba(247, 239, 227, 0.2) 100%); }
 body[data-theme="paper"] .library-root-path { background: rgba(255, 251, 245, 0.5); }
 @media (max-width: 900px) {
-  .lib-row { grid-template-columns: 80px 1fr auto; }
+  .lib-list { grid-template-columns: 80px 1fr max-content; }
   .lib-meta, .lib-date { display: none; }
 }
 
