@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
+from filmex import __version__
 from filmex.db import get_engine, init_db
 from filmex.routes import entities, fileops, health, jobs, library, naming, settings, workflow
 from filmex.security import TOKEN_COOKIE, TOKEN_QUERY_PARAM, LoopbackGuard
@@ -46,7 +47,7 @@ def create_app(token: str | None = None) -> FastAPI:
     if token is None:
         token = os.environ.get("FILMEX_TOKEN") or None
 
-    app = FastAPI(title="FilmEx", version="0.1.0", lifespan=_lifespan)
+    app = FastAPI(title="FilmEx", version=__version__, lifespan=_lifespan)
     app.add_middleware(LoopbackGuard, token=token)
     app.include_router(health.router)
     app.include_router(settings.router)
