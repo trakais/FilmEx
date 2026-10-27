@@ -12,8 +12,9 @@ _Main tagging workflow_
 
 Pick one:
 
-- **macOS app.** Download `FilmEx-<version>-arm64.dmg` from the releases
-  page and drag `FilmEx.app` to Applications. The app is not notarized (no
+- **macOS app.** Download `FilmEx-<version>-arm64.dmg` from the
+  [releases page](https://github.com/trakais/FilmEx/releases) and drag
+  `FilmEx.app` to Applications. The app is not notarized (no
   paid Apple developer account), so the first launch is blocked: open it
   once, then go to System Settings ▸ Privacy & Security and click **Open
   Anyway**. Or clear the quarantine flag instead, once per downloaded
@@ -26,7 +27,7 @@ Pick one:
   it installs Python itself. `filmex` then opens the window.
 
   ```bash
-  uv tool install "filmex @ git+<clone URL of this repository>"
+  uv tool install "filmex @ git+https://github.com/trakais/FilmEx.git"
   filmex
   ```
 - **From a checkout.** `uv sync` once, then `uv run filmex`.
