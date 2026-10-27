@@ -246,10 +246,11 @@ film stock rows.
 - **Screens** (`index.html`, one `<main>` each): **Home** until a library
   folder is set (drop zone, Open folder, recent folders, choose a library);
   **Library** once one is (the start screen from then on); the **Folder
-  screen** for any open folder; **Settings**. The header shows a Library
-  tab when a library exists, a tab for the open folder, and "Open folder"
-  always. There is no separate tagging or import view: everything a
-  folder needs happens on its screen.
+  screen** for any open folder; **Settings**. The header shows, next to
+  the brand, a Library tab when a library exists and a tab for the open
+  folder, except a lone tab for the screen already shown; "Open folder"
+  is always there. There is no separate tagging or import view:
+  everything a folder needs happens on its screen.
 - **Tagging pipeline** (`services/tagging.py`): `plan_tagging(request,
   session)` resolves ids into snapshots and intents, `preview_all` is the
   dry run, `apply_all` writes file by file and the manifest at the end. The
