@@ -2581,6 +2581,7 @@ function toggleInvert() {
   saveStickyState();
   refreshThumbSet();
   renderSheet();
+  updateSheetToolbar();
   renderRollCards();
   void buildThumbnails();
 }
@@ -3033,17 +3034,15 @@ function updateSheetToolbar() {
   const folder = state.folder;
   const n = folder.selection.size;
   const label = document.getElementById("sheet-selection");
-  label.textContent = n
-    ? `${n} frame${n === 1 ? "" : "s"} selected`
-    : "Click a frame, shift-click for a range, ⌘-click to add. Arrow keys move, Space views, C cuts, X leaves out.";
+  label.textContent = n ? `${n} frame${n === 1 ? "" : "s"} selected` : "No frames selected";
+  label.classList.toggle("idle", n === 0);
   document.getElementById("cuts-rhythm").value = String(state.settings?.frames_per_roll ?? 36);
   document.getElementById("sheet-cut").disabled = n !== 1 || !canCutBefore(firstSelectedKey());
   document.getElementById("sheet-new-roll").disabled = n === 0;
   document.getElementById("sheet-leave-out").disabled = n === 0 || !Array.from(folder.selection).some(k => rollOf(k));
-  document.getElementById("sheet-clear").classList.toggle("hidden", n === 0);
-  const invert = document.getElementById("sheet-invert");
-  invert.setAttribute("aria-pressed", String(!!state.previewInvert));
-  invert.textContent = state.previewInvert ? "Inverted" : "Invert";
+  // Hidden but holding its place, so nothing moves as a selection starts.
+  document.getElementById("sheet-clear").classList.toggle("invisible", n === 0);
+  document.getElementById("sheet-invert").setAttribute("aria-pressed", String(!!state.previewInvert));
   const unmatched = folderFrames().filter(f => f.unmatched_jpeg);
   const toggle = document.getElementById("sheet-unmatched");
   toggle.classList.toggle("hidden", !unmatched.length);
@@ -3341,15 +3340,16 @@ function humanDuration(seconds) {
 //
 // On the sheet: arrow keys move the cursor (shift extends the selection),
 // C cuts before the cursor, X leaves the selection out, Enter takes a
-// suggested cut at the cursor, Space views it large, Escape clears. Off while typing in a field
-// or while a dialog is open.
+// suggested cut at the cursor, Space views it large, Escape clears, ?
+// shows the help (#sheet-help lists the same). Off while typing in a field
+// or while a dialog or the help is open.
 
 function onSheetKey(e) {
   if (state.view !== "folder" || !state.folder.listing || state.folder.running) return;
   if (!document.getElementById("dialog").classList.contains("hidden")) return;
   if (!document.getElementById("picker-panel").classList.contains("hidden")) return;
   if (!document.getElementById("settings-form-panel").classList.contains("hidden")) return;
-  if (viewerOpen()) return;
+  if (viewerOpen() || sheetHelpOpen()) return;
   const tag = (document.activeElement?.tagName || "").toLowerCase();
   if (["input", "select", "textarea"].includes(tag) || document.activeElement?.isContentEditable) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -3378,7 +3378,32 @@ function onSheetKey(e) {
     if (folder.anchor) openViewer(folder.anchor);
   } else if (e.key === "Escape") {
     clearSheetSelection();
+  } else if (e.key === "?") {
+    e.preventDefault();
+    document.getElementById("sheet-help").showPopover();
   }
+}
+
+function sheetHelpOpen() {
+  return document.getElementById("sheet-help").matches(":popover-open");
+}
+
+// The help opens under its (?) button, right edges aligned, and scrolls
+// with the page. ⌘ is Ctrl away from a Mac.
+function wireSheetHelp() {
+  const help = document.getElementById("sheet-help");
+  const button = document.getElementById("sheet-help-open");
+  if (!/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) {
+    for (const el of help.querySelectorAll(".mod-key")) el.textContent = "Ctrl";
+  }
+  help.addEventListener("toggle", (e) => {
+    button.setAttribute("aria-expanded", String(e.newState === "open"));
+    if (e.newState !== "open") return;
+    const r = button.getBoundingClientRect();
+    const width = help.offsetWidth;
+    help.style.top = `${r.bottom + window.scrollY + 8}px`;
+    help.style.left = `${Math.max(16, r.right + window.scrollX - width)}px`;
+  });
 }
 
 function moveCursor(key, extend) {
@@ -4516,6 +4541,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("sheet-leave-out").addEventListener("click", leaveOutSelection);
   document.getElementById("sheet-clear").addEventListener("click", clearSheetSelection);
   document.getElementById("sheet-invert").addEventListener("click", toggleInvert);
+  wireSheetHelp();
   document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
   document.getElementById("cuts-rhythm").addEventListener("change", (e) => setRhythm(e.target.value));
   document.getElementById("cuts-apply-all").addEventListener("click", applyAllCuts);

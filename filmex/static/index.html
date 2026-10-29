@@ -21,6 +21,8 @@
       <symbol id="i-forward" viewBox="0 0 20 20"><path d="M4 10h12M11 5l5 5-5 5"/></symbol>
       <symbol id="i-scissors" viewBox="0 0 20 20"><circle cx="5.5" cy="5.5" r="2.5"/><circle cx="5.5" cy="14.5" r="2.5"/><path d="M7.6 6.9L17 13.5M7.6 13.1L17 6.5"/></symbol>
       <symbol id="i-dot" viewBox="0 0 20 20"><circle cx="10" cy="10" r="4"/></symbol>
+      <symbol id="i-invert" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.75"/><path d="M10 3.25a6.75 6.75 0 0 1 0 13.5z" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-help" viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.25"/><path d="M7.85 7.9a2.2 2.2 0 1 1 3.05 2.02c-.58.25-.9.68-.9 1.3v.38"/><circle cx="10" cy="14.15" r="0.95" fill="currentColor" stroke="none"/></symbol>
       <symbol id="i-film" viewBox="0 0 48 36"><rect x="4" y="8" width="40" height="22" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><g fill="currentColor" stroke="none"><rect x="7" y="3" width="4" height="3"/><rect x="16" y="3" width="4" height="3"/><rect x="25" y="3" width="4" height="3"/><rect x="34" y="3" width="4" height="3"/><rect x="7" y="32" width="4" height="3"/><rect x="16" y="32" width="4" height="3"/><rect x="25" y="32" width="4" height="3"/><rect x="34" y="32" width="4" height="3"/></g></symbol>
       <linearGradient id="can-metal" x1="0" x2="1" y1="0" y2="0">
         <stop offset="0" stop-color="#4a4a4a" />
@@ -149,24 +151,61 @@
 
     <section id="sheet-section" class="hidden">
       <h2>Frames</h2>
-      <div class="sheet-toolbar">
-        <span id="sheet-selection" class="lib-sub"></span>
-        <button id="sheet-unmatched" class="secondary hidden" type="button" data-mode="exclude"></button>
-        <select id="cuts-rhythm" class="sheet-select" title="Frames per roll, for suggested cuts" aria-label="Frames per roll">
-          <option value="36">36 per roll</option>
-          <option value="24">24 per roll</option>
-          <option value="16">16 per roll</option>
-          <option value="15">15 per roll</option>
-          <option value="12">12 per roll</option>
-          <option value="0">No rhythm</option>
-        </select>
-        <button id="sheet-invert" class="action-link" type="button" aria-pressed="false">Invert</button>
-        <button id="sheet-cut" class="secondary" type="button" disabled title="Start a new roll at the selected frame">Cut here</button>
-        <button id="sheet-new-roll" class="secondary" type="button" disabled>New roll from selection</button>
-        <button id="sheet-leave-out" class="secondary" type="button" disabled title="Keep the selected frames out of every roll">Leave out</button>
-        <button id="sheet-clear" class="action-link hidden" type="button">Clear selection</button>
+      <!-- The toolbar never reflows: what acts on the selection, what is
+           selected, then how the sheet looks. The help lives behind (?). -->
+      <div class="sheet-toolbar" role="toolbar" aria-label="Frames">
+        <div class="sheet-tools">
+          <button id="sheet-cut" class="secondary" type="button" disabled title="Start a new roll at the selected frame (C)">Cut here</button>
+          <button id="sheet-new-roll" class="secondary" type="button" disabled>New roll from selection</button>
+          <button id="sheet-leave-out" class="secondary" type="button" disabled title="Keep the selected frames out of every roll (X)">Leave out</button>
+        </div>
+        <div class="sheet-selection">
+          <span id="sheet-selection" class="sheet-count"></span>
+          <button id="sheet-clear" class="action-link" type="button" title="Clear the selection (Esc)">Clear</button>
+        </div>
+        <div class="sheet-view">
+          <button id="sheet-invert" class="secondary toggle" type="button" aria-pressed="false" title="Show negatives as positives">
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-invert"/></svg><span>Invert</span>
+          </button>
+          <button id="sheet-help-open" class="icon-btn" type="button" popovertarget="sheet-help" aria-label="Selecting frames and shortcuts" title="Selecting frames and shortcuts (?)">
+            <svg class="icon" aria-hidden="true" focusable="false"><use href="#i-help"/></svg>
+          </button>
+        </div>
       </div>
-      <div id="contact-sheet" class="contact-sheet"></div>
+      <div id="sheet-help" class="sheet-help" popover>
+        <p class="sheet-help-title">Selecting</p>
+        <dl class="key-list">
+          <dt>Click</dt><dd>Select a frame</dd>
+          <dt>Shift-click</dt><dd>Select a range</dd>
+          <dt><span class="mod-key">⌘</span>-click</dt><dd>Add or remove a frame</dd>
+        </dl>
+        <p class="sheet-help-title">Keys</p>
+        <dl class="key-list">
+          <dt>Arrows</dt><dd>Move; with Shift, extend the selection</dd>
+          <dt>Space</dt><dd>View the frame large</dd>
+          <dt>C</dt><dd>Start a new roll at the frame</dd>
+          <dt>X</dt><dd>Leave the selection out</dd>
+          <dt>Enter</dt><dd>Take the suggested cut at the frame</dd>
+          <dt>Esc</dt><dd>Clear the selection</dd>
+          <dt>?</dt><dd>Show this help</dd>
+        </dl>
+      </div>
+      <div class="sheet-frame">
+        <div id="contact-sheet" class="contact-sheet"></div>
+        <!-- What the folder holds rather than what is selected: JPEG-only
+             frames to leave behind, and the roll length cuts follow. -->
+        <div class="sheet-foot">
+          <button id="sheet-unmatched" class="action-link hidden" type="button" data-mode="exclude"></button>
+          <select id="cuts-rhythm" class="sheet-select" title="Frames per roll, for suggested cuts" aria-label="Frames per roll, for suggested cuts">
+            <option value="36">36 per roll</option>
+            <option value="24">24 per roll</option>
+            <option value="16">16 per roll</option>
+            <option value="15">15 per roll</option>
+            <option value="12">12 per roll</option>
+            <option value="0">No rhythm</option>
+          </select>
+        </div>
+      </div>
       <!-- Suggested cuts: each seam side by side, confirmed by the user. -->
       <div id="cuts-panel" class="cuts-panel hidden">
         <div class="cuts-head">

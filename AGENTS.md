@@ -439,13 +439,17 @@ mtime stand in without ExifTool). Three signals: a file-name counter that
 goes down (`000036` → `000001`) and a frame-shape change are *sure*; a
 pause of at least five times the typical spacing and 60 s is a gap, which
 is *likely* when the frames since the last cut fit the frames-per-roll
-rhythm (the `frames_per_roll` setting, 0 = off; the sheet's "N per roll"
-control) or the pause is over 30 minutes, else *maybe* (a break inside a
+rhythm (the `frames_per_roll` setting, 0 = off; the "N per roll"
+control on the sheet's bottom edge) or the pause is over 30 minutes, else *maybe* (a break inside a
 roll). Nothing is cut automatically: the sheet marks each suggestion with
 a scissors tag and a seam card shows the two frames side by side with
 "Cut here" and "Ignore"; "Cut all" takes the sure and likely ones. On the
 sheet, arrow keys move the cursor (shift extends), C cuts before it, X
-leaves the selection out, Enter takes a suggested cut, Escape clears.
+leaves the selection out, Enter takes a suggested cut, Escape clears, ?
+opens the help. The toolbar above the sheet never reflows: the verbs on
+the selection, the selection count, then the Invert switch and the (?)
+help (`#sheet-help`, which lists these keys); what the folder holds
+(JPEG-only frames, the roll length) sits on the sheet's bottom edge.
 
 **Split** (`services/fileops.py`): a roll folder under `<root>/<year>/`
 becomes siblings in that year folder; a flat year folder or a folder
