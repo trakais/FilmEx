@@ -1149,9 +1149,9 @@ button:disabled {
   box-shadow: none;
 }
 .drop-overlay-glyph {
-  width: 64px;
-  height: 48px;
-  margin-bottom: 18px;
+  width: 320px;
+  height: 59px;
+  margin-bottom: 22px;
   color: var(--yellow);
 }
 .drop-overlay-text {
@@ -2290,7 +2290,12 @@ body[data-theme="paper"] .roll-card-index { color: var(--text); }
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
   text-align: center;
 }
-.home-drop-glyph { width: 56px; height: 42px; color: var(--yellow-ink); }
+.home-drop-glyph { width: 260px; height: 48px; margin-bottom: 4px; color: var(--yellow-ink); }
+/* The strip runs on past both edges: it fades out rather than ending. */
+.film-strip {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 30%, #000 70%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 30%, #000 70%, transparent 100%);
+}
 .home-drop-title {
   font-size: var(--fs-page);
   font-weight: 600;
