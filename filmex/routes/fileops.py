@@ -17,7 +17,7 @@ from sqlmodel import Session
 
 from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
-from filmex.services import cuts, fileops, gather, importer, jobs, renditions
+from filmex.services import cuts, fileops, gather, importer, jobs, matching, renditions
 from filmex.services import frames as fr
 from filmex.services import settings as settings_service
 
@@ -139,6 +139,55 @@ def gather_apply(req: GatherRequest) -> StreamingResponse:
 
     start = {"total": plan.file_count, "renditions": len(plan.items)}
     return job_routes.stream(jobs.get_manager().submit("gather", body, exclusive=True, start=start))
+
+
+# ---------- match lab scans to raws ----------
+
+
+class MatchRequest(BaseModel):
+    folder: str
+
+
+class LinkPair(BaseModel):
+    raw: str  # raw frame key
+    lab: str  # lab frame key
+
+
+class LinkRequest(BaseModel):
+    folder: str
+    links: list[LinkPair] = Field(default_factory=list)
+
+
+@router.post("/api/folder/matches")
+def folder_matches(req: MatchRequest) -> dict[str, Any]:
+    """Which lab scan each raw frame shows, by picture. A proposal only:
+    builds missing previews, changes nothing in the folder."""
+    try:
+        return matching.plan_matches(req.folder).to_dict()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/folder/link/apply")
+def link_apply(req: LinkRequest) -> StreamingResponse:
+    chosen = [pair.model_dump() for pair in req.links]
+    try:
+        links = matching.plan_links(req.folder, chosen)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except fileops.PlanError as exc:
+        raise _plan_errors(exc) from exc
+    folder = req.folder
+
+    def body(job_ctx: jobs.JobContext) -> dict[str, Any]:
+        with Session(get_engine()) as job_session:
+            try:
+                return matching.apply_links(job_session, folder, chosen, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict()
+            except fileops.PlanError as exc:
+                raise RuntimeError("; ".join(exc.errors)) from exc
+
+    start = {"total": sum(len(link.moves) for link in links), "links": len(links)}
+    return job_routes.stream(jobs.get_manager().submit("link", body, exclusive=True, start=start))
 
 
 # ---------- split ----------

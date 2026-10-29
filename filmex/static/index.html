@@ -143,6 +143,7 @@
       </div>
       <div id="folder-summary" class="summary readout hidden"></div>
       <div id="folder-renditions" class="summary folder-renditions hidden"></div>
+      <div id="folder-match" class="summary folder-renditions hidden"></div>
       <div id="folder-banner" class="summary hidden"></div>
     </section>
 
@@ -173,6 +174,18 @@
           <button id="cuts-apply-all" class="secondary" type="button">Cut all</button>
         </div>
         <div id="cuts-list" class="cuts-list"></div>
+      </div>
+      <!-- Lab scans matched to raws by picture: proposed pairs, linked once confirmed. -->
+      <div id="match-panel" class="cuts-panel match-panel hidden">
+        <div class="cuts-head">
+          <span id="match-summary" class="lib-sub"></span>
+          <span class="match-actions">
+            <button id="match-link" class="primary" type="button" disabled>Link</button>
+            <button id="match-close" class="action-link" type="button">Close</button>
+          </span>
+        </div>
+        <div id="match-list" class="match-list"></div>
+        <div id="match-leftovers" class="lib-sub"></div>
       </div>
     </section>
 

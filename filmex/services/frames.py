@@ -307,6 +307,13 @@ def _attach_positives(by_key: dict[str, Frame]) -> None:
         del by_key[key]
 
 
+def positive_name(raw_key: str, name: str) -> str:
+    """``name`` renamed so it joins the raw frame ``raw_key`` as a positive,
+    keeping its own name readable: ``DSC0001`` and ``R1-0001.JPG`` give
+    ``DSC0001-R1-0001.JPG``."""
+    return f"{raw_key}-{name.lstrip(_POSITIVE_SEPARATORS)}"
+
+
 def _positive_base(key: str, raw_keys: set[str]) -> str | None:
     """The longest raw stem that ``key`` extends with a separator and more."""
     for i in range(len(key) - 2, 0, -1):

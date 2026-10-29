@@ -58,7 +58,8 @@ filmex/
 │   ├── services/             # exiftool (+locator), keywords, folder scan,
 │   │                         # manifest, previews, settings, jobs, tagging,
 │   │                         # library, naming, renames, frames, fileops,
-│   │                         # importer, operations, renditions, gather
+│   │                         # importer, operations, renditions, gather,
+│   │                         # matching
 │   ├── static/               # vanilla-JS single-page UI
 │   ├── cli.py                # `python -m filmex.cli` — batch entity add / export
 │   └── default_data.sqlite   # bundled starter DB; copied to the data dir on first run
@@ -473,10 +474,37 @@ under an old per-subfolder roll id, and removes the emptied subfolders.
 The UI confirms with the Lightroom warning first: a catalog that holds
 these files shows them as missing until the folder is relinked.
 
-**Undo** (`operation_log`, kinds `rename`, `split`, `import`, `gather`):
+**Match lab scans** (`services/matching.py`): a roll scanned by the lab
+(positive JPEGs or TIFFs under the lab's names, `R1-09034-024A.JPG`) and
+again at home (raw negatives, `DSC09040.ARW`) holds the same frames under
+unrelated names, and the home scan skips frames, captures some twice, may
+run backwards through the roll and be mirrored. `plan_matches(folder)`
+pairs raw frames with frames that have no raw by picture: each preview
+(the contact sheet's, built when missing) becomes a 24×24 equalized
+grayscale grid cropped inside the film border, compared by correlation;
+the roll's orientation (8: mirror × quarter turns) and polarity are voted
+by the raws' best matches; an in-order alignment, tried forwards and
+backwards through the lab frames, pairs the bulk and settles two shots of
+one scene; a raw it skipped takes its best lab frame when that is free or
+held by a raw that matches it worse (captured out of order). Pairs are
+`sure`, `likely` or `unsure` (with a note); raws left over say why
+(`no_picture`, `another_capture` of a paired frame, `no_match`). Nothing
+is linked automatically: the Folder screen offers "Match them to the
+raws" when a folder has both kinds of frame, shows the pairs side by side
+(the raw inverted and turned like the lab scan), sure and likely ones
+ticked. `apply_links` renames each chosen lab frame's files to
+`<raw stem>-<own name>` (`frames.positive_name`), so they join the raw
+frame as its positive; renames stay in the folder, never overwrite (a
+collision stops the batch before anything runs), follow into the
+manifest (`apply_history`, `file_overrides`) and are listed under
+`linked_scans`, whose raws later matches skip. The confirmation says that
+a Lightroom catalog already holding the lab scans shows them as missing.
+
+**Undo** (`operation_log`, kinds `rename`, `split`, `import`, `gather`, `link`):
 `POST /api/operations/{id}/undo` dispatches by kind. Gather undo moves
 every file back, restores the renditions' manifests and their old Roll
-keywords, and drops the merged manifest. Split undo moves every
+keywords, and drops the merged manifest. Link undo renames every linked
+file back and takes the links out of the manifest. Split undo moves every
 frame back, restores the stashed manifest and removes the created folders.
 Import undo copies moved files back (the copy back is verified; the hash
 recorded at import time is not compared, tagging rewrote the file since)
@@ -488,7 +516,8 @@ the folder replaces it.
 **Results are typed, their JSON is fixed.** Split and import return
 `SplitResult` / `ImportResult` (with `SplitRoll`, `ImportedRoll`, `Move`,
 `ImportedFile`), gather returns `GatherResult` (with `GatheredRendition`),
-undo returns `SplitUndoResult` / `ImportUndoResult` / `GatherUndoResult`.
+link returns `LinkResult` (with `Link`), undo returns `SplitUndoResult` /
+`ImportUndoResult` / `GatherUndoResult` / `LinkUndoResult`.
 `to_dict()` is both what the job reports and what `operation_log` stores;
 `from_dict()` reads a journal entry back for undo. The JSON keys (`from`,
 `to`, `created`, `moves`, …) are a stored format: old journal entries must
@@ -500,7 +529,8 @@ with its roll) in Python and in their JSON.
 Routes: `GET /api/folder/frames`, `POST /api/naming/render`, `POST
 /api/folder/split` (plan), `POST /api/folder/split/apply` (job), `POST
 /api/import/plan`, `POST /api/import/apply` (job), `POST
-/api/folder/gather` (plan), `POST /api/folder/gather/apply` (job). Plan failures answer
+/api/folder/gather` (plan), `POST /api/folder/gather/apply` (job), `POST
+/api/folder/matches` (proposal), `POST /api/folder/link/apply` (job). Plan failures answer
 `400 {"detail": {"errors": [...]}}`; a plan that comes back with
 `"ok": false` lists why in `problems`.
 
@@ -599,7 +629,8 @@ Optional, off by default:
   change under `renames`, and rewrites the `Roll|…` keyword on every
   tagged file. A hand rename leaves all of that stale. A re-apply keeps
   the folder's own history (`renames`, `import_source`,
-  `gathered_renditions`; `FOLDER_HISTORY_KEYS` in `manifest.py`).
+  `gathered_renditions`, `linked_scans`; `FOLDER_HISTORY_KEYS` in
+  `manifest.py`).
 
 ---
 
@@ -729,6 +760,11 @@ Must stay covered:
 - Gather: plan lists every file and stops on a collision, apply moves,
   merges manifests, swaps old Roll keywords and removes subfolders, undo
   puts all of it back, HTTP plan/apply/undo
+- Match and link: a reversed mirrored subset, look-alikes settled by order,
+  a frame captured out of order, a retake, a blank frame, a roll turned
+  upside down; link renames lab files (with `.thm`) into positives, follows
+  into the manifest, refuses collisions and strangers before renaming, and
+  undo puts names and manifest back
 - Job protocol: start, body events, one terminal event, reserved types
 - Split: layout (siblings vs subfolders), collisions, moves with
   companions, cross-volume stop with a partial undo, emptied-source

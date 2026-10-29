@@ -393,6 +393,9 @@ main {
   margin: 0 auto;
   padding: 34px 24px 96px;
   display: grid;
+  /* One column no wider than main: a wide child (the strip of suggested
+     cuts) scrolls inside itself instead of pushing the page off centre. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 34px;
 }
 
@@ -2306,6 +2309,7 @@ body[data-theme="paper"] .menu { background: linear-gradient(180deg, #f5ecdf 0%,
 .folder-title { display: flex; align-items: baseline; gap: 14px; }
 .folder-reveal { margin-left: auto; align-self: center; }
 .folder-renditions { display: flex; align-items: center; gap: 12px; font-size: var(--fs-meta); color: var(--muted); }
+.folder-renditions button.secondary { padding: 5px 10px; font-size: var(--fs-label); }
 .folder-name {
   margin: 0;
   font-family: var(--font-mono);
@@ -2485,7 +2489,26 @@ body[data-theme="paper"] .home-drop { background: rgba(255, 251, 245, 0.5); }
 .seam-label { font-size: var(--fs-label); font-weight: 600; letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--text); }
 .seam-actions { display: flex; align-items: center; gap: 12px; }
 .seam-actions button.primary { padding: 5px 10px; font-size: var(--fs-label); }
-body[data-theme="paper"] .cuts-panel, body[data-theme="paper"] .seam { background: rgba(255, 251, 245, 0.5); }
+.match-actions { display: flex; align-items: center; gap: 12px; }
+.match-actions button.primary { padding: 5px 10px; font-size: var(--fs-label); }
+.match-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.match-pair {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "check pair" "check text";
+  gap: 8px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.match-pair > input { grid-area: check; width: 14px; height: 14px; margin: 2px 0 0; accent-color: var(--yellow); }
+.match-pair .seam-pair { grid-area: pair; }
+.match-pair .match-text { grid-area: text; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.match-pair.match-unsure { border-style: dashed; }
+.match-pair:has(> input:not(:checked)) { opacity: 0.6; }
+body[data-theme="paper"] .cuts-panel, body[data-theme="paper"] .seam, body[data-theme="paper"] .match-pair { background: rgba(255, 251, 245, 0.5); }
 body[data-theme="paper"] .sheet-select { background: rgba(255, 251, 245, 0.6); }
 body[data-theme="paper"] .sheet-cut-tag { background: rgba(255, 251, 245, 0.9); }
 

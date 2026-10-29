@@ -16,7 +16,7 @@ from typing import Any, Optional
 MANIFEST_FILENAME = "roll_manifest.json"
 MANIFEST_VERSION = 1
 # What happened to the folder itself: a re-apply keeps these as they are.
-FOLDER_HISTORY_KEYS = ("renames", "import_source", "gathered_renditions")
+FOLDER_HISTORY_KEYS = ("renames", "import_source", "gathered_renditions", "linked_scans")
 
 
 @dataclass
@@ -163,7 +163,8 @@ def merge_existing_manifest(
     fresh: dict,
 ) -> dict:
     """Re-apply: keep created_at, apply_history and the folder's own history
-    (renames, import, gathered renditions); refresh snapshots + updated_at."""
+    (renames, import, gathered renditions, linked lab scans); refresh
+    snapshots + updated_at."""
     merged = dict(fresh)
     merged["created_at"] = existing.get("created_at", merged["created_at"])
     merged["apply_history"] = list(existing.get("apply_history", []))

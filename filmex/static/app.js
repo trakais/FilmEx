@@ -44,6 +44,7 @@ const state = {
     selection: new Set(),
     anchor: null,
     cuts: { report: null, loading: false, ignored: new Set() },  // suggested cuts
+    match: { plan: null, loading: false, open: false, chosen: new Set() },  // lab scans to raws; chosen = raw keys
     destination: null,     // "keep" | "copy" | "move"
     running: false,
     lastOperation: null,   // { id, kind, from?, to? }: what the Undo button reverses
@@ -2408,6 +2409,7 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     path, listing: null, frames: [], indexByKey: null, scanFiles: new Map(), thumbs: new Set(),
     manifest: null, inLibrary: false, rolls: [], selection: new Set(), anchor: null,
     cuts: { report: null, loading: false, ignored: new Set() }, destination: null, result: null,
+    match: { plan: null, loading: false, open: false, chosen: new Set() },
   });
   showView("folder");
   renderFolderBanner("");
@@ -2573,10 +2575,12 @@ function renderFolder() {
   document.getElementById("folder-actions").classList.toggle("hidden", !has);
   renderFolderSummary();
   renderFolderRenditions();
+  renderFolderMatch();
   renderHeader();
   if (!has) return;
   renderSheet();
   renderCutsPanel();
+  renderMatchPanel();
   renderRollCards();
   renderDestination();
   updateSheetToolbar();
@@ -2662,6 +2666,214 @@ async function gatherRoll(path) {
     state.folder.running = false;
     resetPageTitle();
     updateRunButton();
+  }
+}
+
+// ----- lab scans matched to raws -----
+//
+// A roll scanned by the lab and again at home holds the same frames under
+// unrelated names. The server pairs them by picture (services/matching.py);
+// the panel shows each pair side by side, sure and likely ones ticked, and
+// linking renames each ticked lab scan to <raw>-<its name> so it joins its
+// raw frame as a positive.
+
+const MATCH_LEVEL_LABEL = { sure: "Sure", likely: "Likely", unsure: "Check" };
+const MATCH_LEVEL_PILL = { sure: "ok", likely: "ok", unsure: "warn" };
+
+function labFrames() { return folderFrames().filter(f => !f.has_raw); }
+
+// A folder with raws and frames without one may hold the lab's scans of
+// the same roll: offer to match them, unless the panel is already open.
+function renderFolderMatch() {
+  const el = document.getElementById("folder-match");
+  const folder = state.folder;
+  const labs = labFrames().length;
+  const raws = folderFrames().length - labs;
+  if (!folder.listing || !labs || !raws || folder.match.open) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const linked = (folder.manifest?.linked_scans || []).length;
+  const text = linked
+    ? `${linked} lab scan${linked === 1 ? "" : "s"} linked to ${linked === 1 ? "its raw" : "their raws"}; ${labs} frame${labs === 1 ? "" : "s"} still without a raw.`
+    : `${labs} frame${labs === 1 ? "" : "s"} without a raw beside ${raws} raw${raws === 1 ? "" : "s"}. Lab scans of this roll?`;
+  el.classList.remove("hidden");
+  el.innerHTML = `<span>${escapeHtml(text)}</span> <button type="button" class="secondary" id="folder-match-open">Match to raws</button>`;
+  document.getElementById("folder-match-open").addEventListener("click", () => void openMatchPanel());
+}
+
+async function openMatchPanel() {
+  const folder = state.folder;
+  const path = folder.path;
+  Object.assign(folder.match, { open: true, loading: true, plan: null, chosen: new Set() });
+  renderFolderMatch();
+  renderMatchPanel();
+  // The panel sits below the contact sheet, out of sight on a long roll.
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  document.getElementById("match-panel").scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+  try {
+    const plan = await api("/api/folder/matches", { method: "POST", body: JSON.stringify({ folder: path }) });
+    if (folder.path !== path) return;
+    folder.match.plan = plan;
+    folder.match.chosen = new Set(plan.pairs?.filter(p => p.level !== "unsure").map(p => p.raw) || []);
+    if (plan.problems?.length) renderFolderBanner(plan.problems.join("\n"), "warn");
+  } catch (e) {
+    if (folder.path !== path) return;
+    folder.match.open = false;
+    renderFolderBanner(`Could not match the scans: ${e.message}`, "bad");
+  } finally {
+    if (folder.path === path) {
+      folder.match.loading = false;
+      renderFolderMatch();
+      renderMatchPanel();
+    }
+  }
+}
+
+function closeMatchPanel() {
+  Object.assign(state.folder.match, { open: false, loading: false, plan: null, chosen: new Set() });
+  renderMatchPanel();
+  renderFolderMatch();
+}
+
+function rawImageOf(key) {
+  return frameByKey(key)?.images.find(n => /\.(arw|dng)$/i.test(n)) || null;
+}
+
+function labImageOf(key) {
+  return frameByKey(key)?.preview || null;
+}
+
+// How the home scan lies against the lab's, in words; the CSS transform
+// turns its thumbnail the same way so a pair reads alike.
+function matchOrientationText(plan) {
+  const turn = { 0: "", 90: "turned a quarter", 180: "upside down", 270: "turned a quarter" }[Number(plan.orientation.replace("m", ""))];
+  const mirrored = plan.orientation.startsWith("m") ? "mirrored" : "";
+  return [mirrored, turn].filter(Boolean).join(" and ");
+}
+
+function matchTransform(plan) {
+  const turns = Number(plan.orientation.replace("m", "")) / 90;
+  const parts = [];
+  if (turns) parts.push(`rotate(${-90 * turns}deg)`);
+  if (plan.orientation.startsWith("m")) parts.push("scaleX(-1)");
+  return parts.join(" ");
+}
+
+function renderMatchPanel() {
+  const panel = document.getElementById("match-panel");
+  const summary = document.getElementById("match-summary");
+  const list = document.getElementById("match-list");
+  const leftovers = document.getElementById("match-leftovers");
+  const linkBtn = document.getElementById("match-link");
+  const { open, loading, plan, chosen } = state.folder.match;
+  panel.classList.toggle("hidden", !open);
+  if (!open) { list.innerHTML = ""; leftovers.textContent = ""; return; }
+  if (loading || !plan) {
+    summary.textContent = "Comparing the lab scans with the raws…";
+    list.innerHTML = "";
+    leftovers.textContent = "";
+    linkBtn.disabled = true;
+    return;
+  }
+  const pairs = plan.pairs || [];
+  const count = (level) => pairs.filter(p => p.level === level).length;
+  const how = [plan.direction === "reversed" ? "runs from the end of the roll" : "runs in roll order", matchOrientationText(plan), plan.negative ? "" : "as positives"].filter(Boolean).join(", ");
+  const rest = (plan.unmatched_labs || []).length;
+  summary.textContent = pairs.length
+    ? `${pairs.length} pair${pairs.length === 1 ? "" : "s"} by picture: ${count("sure")} sure, ${count("likely")} likely, ${count("unsure")} to check. The raw scan ${how}. ${rest} lab scan${rest === 1 ? "" : "s"} without a raw stay as they are.`
+    : "No raw looks like any of the lab scans.";
+  list.innerHTML = "";
+  for (const pair of pairs) list.appendChild(renderMatchPair(plan, pair));
+  leftovers.textContent = matchLeftoversText(plan);
+  linkBtn.disabled = !chosen.size || state.folder.running;
+  linkBtn.textContent = chosen.size ? `Link ${chosen.size}` : "Link";
+}
+
+function renderMatchPair(plan, pair) {
+  const folder = state.folder;
+  const el = document.createElement("label");
+  el.className = `match-pair match-${pair.level}`;
+  // The comparison built both previews, uninverted; a negative is turned
+  // into a positive here.
+  const thumb = (name, style = "") => name
+    ? `<img src="${escapeHtml(buildThumbnailUrl(folder.path, name, false))}" alt="" loading="lazy"${style ? ` style="${style}"` : ""} />`
+    : `<span class="sheet-thumb-placeholder"></span>`;
+  const rawStyle = [matchTransform(plan) && `transform: ${matchTransform(plan)}`, plan.negative && "filter: invert(1)"].filter(Boolean).join("; ");
+  el.innerHTML = `
+    <input type="checkbox" ${folder.match.chosen.has(pair.raw) ? "checked" : ""} aria-label="Link ${escapeHtml(pair.lab)} to ${escapeHtml(pair.raw)}" />
+    <div class="seam-pair">
+      <figure><div class="seam-thumb">${thumb(labImageOf(pair.lab))}</div><figcaption title="${escapeHtml(pair.lab)}">${escapeHtml(pair.lab)}</figcaption></figure>
+      <span class="seam-mark">${icon("forward")}</span>
+      <figure><div class="seam-thumb">${thumb(rawImageOf(pair.raw), rawStyle)}</div><figcaption title="${escapeHtml(pair.raw)}">${escapeHtml(pair.raw)}</figcaption></figure>
+    </div>
+    <div class="match-text">
+      <span class="pill ${MATCH_LEVEL_PILL[pair.level] || ""}">${MATCH_LEVEL_LABEL[pair.level] || pair.level}</span>
+      <span class="lib-sub">${pair.score.toFixed(2)}${pair.note ? ` · ${escapeHtml(pair.note)}` : ""}</span>
+    </div>`;
+  el.querySelector("input").addEventListener("change", (e) => {
+    if (e.target.checked) folder.match.chosen.add(pair.raw);
+    else folder.match.chosen.delete(pair.raw);
+    renderMatchPanel();
+  });
+  return el;
+}
+
+function matchLeftoversText(plan) {
+  const groups = { no_picture: [], another_capture: [], no_match: [] };
+  for (const left of plan.leftovers || []) groups[left.reason]?.push(left);
+  const parts = [];
+  if (groups.no_picture.length) parts.push(`${groups.no_picture.map(l => l.raw).join(", ")} too faint or blank to compare`);
+  const captures = new Map();
+  for (const left of groups.another_capture) captures.set(left.lab, [...(captures.get(left.lab) || []), left.raw]);
+  for (const [lab, raws] of captures) parts.push(`${raws.join(", ")} more capture${raws.length === 1 ? "" : "s"} of ${lab}`);
+  if (groups.no_match.length) parts.push(`${groups.no_match.map(l => l.raw).join(", ")} like no lab scan`);
+  return parts.length ? `Raws left as they are: ${parts.join(" · ")}.` : "";
+}
+
+async function linkMatches() {
+  const folder = state.folder;
+  const plan = folder.match.plan;
+  if (!plan || folder.running) return;
+  const chosen = (plan.pairs || []).filter(p => folder.match.chosen.has(p.raw));
+  if (!chosen.length) return;
+  const example = chosen[0].files?.[0];
+  const ok = await ask(
+    `Rename ${chosen.length} lab scan${chosen.length === 1 ? "" : "s"} so each joins its raw frame as a positive?` +
+    (example ? `\n${example.from} → ${example.to}` : "") +
+    "\n\nLightroom knows files by their names: a catalog that already has these lab scans will show them as missing. Link before importing the roll into Lightroom, or re-import them after.\n\nThe batch can be undone.",
+    { title: "Link lab scans to raws", okLabel: "Link", danger: true }
+  );
+  if (!ok) return;
+  const path = folder.path;
+  folder.running = true;
+  updateRunButton();
+  renderMatchPanel();
+  renderFolderProgress("Linking…", 0);
+  try {
+    let total = 0;
+    const done = await runJob("/api/folder/link/apply", {
+      body: { folder: path, links: chosen.map(p => ({ raw: p.raw, lab: p.lab })) },
+      onStart: (ev) => { total = ev.total || 0; setPageTitleProgress("Linking", 0, total); },
+      onEvent: (ev) => {
+        if (ev.step !== "link" || !ev.ok) return;
+        renderFolderProgress(`Linking ${ev.file}`, total ? ev.done / total : null);
+        setPageTitleProgress("Linking", ev.done, total);
+      },
+    });
+    renderFolderProgress(null);
+    closeMatchPanel();  // its lab thumbnails point at the old names now
+    const n = done.links.length;
+    const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
+    await notify(`${n} lab scan${n === 1 ? "" : "s"} linked to ${n === 1 ? "its raw" : "their raws"}.${problems}`, "Lab scans linked");
+    if (hasLibrary()) void loadLibrary({ rescan: true });
+    await openFolder(path);
+    state.folder.lastOperation = done.operation_id ? { id: done.operation_id, kind: "link" } : null;
+  } catch (e) {
+    renderFolderProgress(null);
+    await notify(planErrorsText(e), "Linking failed");
+  } finally {
+    state.folder.running = false;
+    resetPageTitle();
+    updateRunButton();
+    renderMatchPanel();
   }
 }
 
@@ -3701,7 +3913,11 @@ function updateRunButton() {
   btn.title = blockers.join("; ");
   const undo = document.getElementById("folder-undo");
   undo.classList.toggle("hidden", !state.folder.lastOperation);
-  undo.textContent = state.folder.lastOperation?.kind === "rename" ? "Undo rename" : "Undo last batch";
+  undo.textContent = undoLabel(state.folder.lastOperation);
+}
+
+function undoLabel(op) {
+  return { rename: "Undo rename", link: "Undo link" }[op?.kind] || "Undo last batch";
 }
 
 function rollTagging(roll) {
@@ -4074,12 +4290,12 @@ async function undoLastBatch() {
   const op = state.folder.lastOperation;
   if (!op || state.folder.running) return;
   const rename = op.kind === "rename";
-  const ok = await ask(
-    rename
-      ? `Give the folder its old name, ${baseName(op.from)}, back and put that name in the Roll keyword of its tagged files?\nThe rest of the metadata stays on the files.`
-      : "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.",
-    { okLabel: rename ? "Undo rename" : "Undo batch" }
-  );
+  const question = rename
+    ? `Give the folder its old name, ${baseName(op.from)}, back and put that name in the Roll keyword of its tagged files?\nThe rest of the metadata stays on the files.`
+    : op.kind === "link"
+      ? "Give the linked lab scans their own names back? Each becomes a frame of its own again."
+      : "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.";
+  const ok = await ask(question, { okLabel: undoLabel(op) });
   if (!ok) return;
   state.folder.running = true;
   updateRunButton();
@@ -4103,6 +4319,9 @@ async function undoLastBatch() {
         state.folder.path = op.from;
       }
       await notify(`${back ? `The folder is called ${baseName(op.from)} again.` : "The folder kept its new name."}${problems}`, "Rename undone");
+    } else if (op.kind === "link") {
+      const n = (done.restored || []).length;
+      await notify(`${n} file${n === 1 ? "" : "s"} renamed back.${problems}`, "Link undone");
     } else {
       // A moved file is both restored at the source and removed from the
       // library; a copy is only removed. Count each file once.
@@ -4194,6 +4413,8 @@ window.addEventListener("DOMContentLoaded", () => {
   document.getElementById("sheet-unmatched").addEventListener("click", (e) => toggleUnmatchedFrames(e.currentTarget.dataset.mode));
   document.getElementById("cuts-rhythm").addEventListener("change", (e) => setRhythm(e.target.value));
   document.getElementById("cuts-apply-all").addEventListener("click", applyAllCuts);
+  document.getElementById("match-link").addEventListener("click", () => void linkMatches());
+  document.getElementById("match-close").addEventListener("click", closeMatchPanel);
   document.addEventListener("keydown", onSheetKey);
   wireViewer();
   for (const btn of document.querySelectorAll("#destination .segment")) {
