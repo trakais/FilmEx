@@ -361,7 +361,10 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   replaces the cache in one transaction as a job.
 - Dry-run and apply accept `files: [...]` to restrict to a subset; names
   are validated against the scan. "Tag remaining" opens the folder with
-  only the untagged files in its roll; the rest show as left out.
+  only the frames holding untagged files in its roll (the rest show as left
+  out) and writes only the untagged images of those frames
+  (`rollWriteImages()`), so a raw and its linked lab scan are not rewritten
+  for the developed positive beside them.
 - Settings has two groups: Preferences (library folder, name template,
   ExifTool) first, then the gear catalogue. Gear can also be added from
   inside a picker ("+ New camera…"), which opens the same form and picks
@@ -407,8 +410,8 @@ the library, for a "Tag remaining" subset, or without a library; outside
 it follows the `import_mode` setting, which the control updates. A single
 kept roll shows no folder name: the folder is the roll. Except a proper
 roll in the library (`<root>/<year>/<roll>`, not a rendition): its card
-offers the template's name as "Rename to", ticked by default and
-editable; when the name differs from the folder's, the one action becomes
+offers the template's name as "Rename to", editable, ticked only when the
+roll was never tagged (a tagged roll's name may be the right one); when the name differs from the folder's, the one action becomes
 "Write N files and rename" (`pendingRename()` in `app.js`), the
 confirmation carries the Lightroom relink note, the screen follows the
 folder to its new path and the Undo button undoes the rename. The

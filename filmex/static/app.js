@@ -48,6 +48,7 @@ const state = {
     destination: null,     // "keep" | "copy" | "move"
     running: false,
     lastOperation: null,   // { id, kind, from?, to? }: what the Undo button reverses
+    remainingOnly: false,  // opened by "Tag remaining": write only untagged images
     result: null,
   },
   // Caches of entity lists
@@ -2345,6 +2346,20 @@ function rollImages(roll) {
   return roll.frames.flatMap(k => frameByKey(k)?.images || []);
 }
 
+// What a write in place covers. Opened by "Tag remaining", only the images
+// still untagged: a frame is shown whole, but its raw and linked lab scan
+// may be tagged already while a developed positive beside them is not.
+function rollWriteImages(roll) {
+  const images = rollImages(roll);
+  if (!state.folder.remainingOnly || !singleRollInPlace()) return images;
+  const tagged = appliedFiles(state.folder.manifest);
+  return images.filter(n => !tagged.has(n.normalize("NFC")));
+}
+
+function appliedFiles(manifest) {
+  return new Set((manifest?.apply_history || []).filter(h => !h.dry_run).flatMap(h => h.applied_files || []).map(n => n.normalize("NFC")));
+}
+
 let rollSeq = 0;
 
 // A new roll starts from the last used gear and processing fields, so the
@@ -2410,6 +2425,7 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     manifest: null, inLibrary: false, rolls: [], selection: new Set(), anchor: null,
     cuts: { report: null, loading: false, ignored: new Set() }, destination: null, result: null,
     match: { plan: null, loading: false, open: false, chosen: new Set() },
+    remainingOnly: !!(onlyFiles && onlyFiles.length),
   });
   showView("folder");
   renderFolderBanner("");
@@ -2437,6 +2453,9 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     folder.destination = keep ? "keep" : (state.settings.import_mode === "move" ? "move" : "copy");
     refreshThumbSet();
     folder.rolls = firstRolls(listing, tagged, onlyFiles, seed);
+    // Renaming to the template is offered on every library roll, but ticked
+    // only on one never tagged: a tagged roll's name may be the right one.
+    for (const roll of folder.rolls) roll.rename = !tagged;
     pushRecentFolder(path);
     saveStickyState();
     renderFolder();
@@ -3726,7 +3745,7 @@ async function loadRollChanges(roll) {
   try {
     const body = {
       folder: folder.path,
-      files: rollImages(roll),
+      files: rollWriteImages(roll),
       as_roll: (single ? pendingRename() : roll.name.trim()) || undefined,
       ...rollTagging(roll),
     };
@@ -3898,7 +3917,7 @@ function runLabel() {
   const dest = destination();
   if (dest === "keep") {
     if (n <= 1) {
-      const files = n ? rollImages(state.folder.rolls[0]).length : 0;
+      const files = n ? rollWriteImages(state.folder.rolls[0]).length : 0;
       return `Write ${files} file${files === 1 ? "" : "s"}${pendingRename() ? " and rename" : ""}`;
     }
     return `Split into ${n} rolls`;
@@ -3911,7 +3930,10 @@ function runBlockers() {
   const rolls = state.folder.rolls;
   const problems = [];
   if (!rolls.length) problems.push("no rolls");
-  if (singleRollInPlace()) return problems;
+  if (singleRollInPlace()) {
+    if (rolls.length && !rollWriteImages(rolls[0]).length) problems.push("every file here is tagged already");
+    return problems;
+  }
   const names = new Set();
   for (const roll of rolls) {
     const name = (roll.name || "").trim();
@@ -4032,7 +4054,7 @@ async function runFolderAction() {
 async function writeInPlace() {
   const folder = state.folder;
   const roll = folder.rolls[0];
-  const images = rollImages(roll);
+  const images = rollWriteImages(roll);
   const all = images.length === folderFrames().reduce((n, f) => n + f.images.length, 0);
   const newName = pendingRename();
   const body = { folder: folder.path, files: all ? undefined : images, rename_to: newName || undefined, ...rollTagging(roll) };
