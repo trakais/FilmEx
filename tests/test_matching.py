@@ -228,3 +228,33 @@ def test_nothing_to_match_says_so(client, tmp_path, make_jpeg):
     plan = client.post("/api/folder/matches", json={"folder": str(tmp_path / "labonly")}).json()
     assert plan["problems"] and "pairs" not in plan
     assert client.post("/api/folder/matches", json={"folder": str(tmp_path / "missing")}).status_code == 404
+
+
+def test_an_untagged_folder_remembers_its_links_through_tagging(client, scanned_twice, fake_exiftool):
+    folder = scanned_twice
+    links = [{"raw": "DSC0100", "lab": "R1-0006"}, {"raw": "DSC0103", "lab": "R1-0001"}]
+    done = _stream(client, "/api/folder/link/apply", {"folder": str(folder), "links": links})[-1]
+    assert done["manifest_updated"] is True
+    manifest = mf.read_manifest(folder)
+    assert manifest["roll_id"] == folder.name and manifest["apply_history"] == []
+    assert [e["raw"] for e in manifest["linked_scans"]] == ["DSC0100", "DSC0103"]
+
+    # Still untagged as far as naming goes, and the next match leaves the linked raws out.
+    client.patch("/api/settings", json={"library_root": str(folder.parent.parent)})
+    proposal = next(p for p in client.post("/api/naming/propose", json={}).json()["proposals"] if p["current"] == folder.name)
+    assert (proposal["status"], proposal["reason"]) == ("skipped", "not tagged yet")
+    assert client.post("/api/folder/matches", json={"folder": str(folder)}).json()["raw_count"] == 2
+
+    # Tagging the roll keeps the record of its links.
+    assert client.post("/api/metadata/apply", json={"folder": str(folder)}).status_code == 200
+    manifest = mf.read_manifest(folder)
+    assert manifest["apply_history"] and len(manifest["linked_scans"]) == 2
+
+
+def test_undo_takes_a_links_only_manifest_away(client, scanned_twice):
+    folder = scanned_twice
+    done = _stream(client, "/api/folder/link/apply", {"folder": str(folder), "links": [{"raw": "DSC0100", "lab": "R1-0006"}]})[-1]
+    assert mf.manifest_path_for(folder).is_file()
+    _stream(client, f"/api/operations/{done['operation_id']}/undo")
+    assert (folder / "R1-0006.JPG").is_file()
+    assert not mf.manifest_path_for(folder).exists()

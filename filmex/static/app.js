@@ -2428,14 +2428,15 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     folder.scanFiles = new Map((scan.files || []).map(f => [f.name, f]));
     folder.manifest = manifest;
     folder.inLibrary = folderIsInLibrary(path);
-    const seed = !manifest && listing.rendition ? await siblingSeed(listing.sibling_renditions || []) : null;
+    const tagged = taggedManifest(manifest);
+    const seed = !tagged && listing.rendition ? await siblingSeed(listing.sibling_renditions || []) : null;
     if (folder.path !== path) return;
     // Inside the library, tagging part of a roll, or without a library: keep.
     // A new folder outside the library goes in the way the last one did.
     const keep = folder.inLibrary || !hasLibrary() || (onlyFiles && onlyFiles.length);
     folder.destination = keep ? "keep" : (state.settings.import_mode === "move" ? "move" : "copy");
     refreshThumbSet();
-    folder.rolls = firstRolls(listing, manifest, onlyFiles, seed);
+    folder.rolls = firstRolls(listing, tagged, onlyFiles, seed);
     pushRecentFolder(path);
     saveStickyState();
     renderFolder();
@@ -2446,6 +2447,12 @@ async function openFolder(path, { onlyFiles = null } = {}) {
     renderFolderBanner(`Could not read the folder: ${e.message}`, "bad");
     renderFolder();
   }
+}
+
+// A manifest that has seen a tagging, else null: one that only records
+// linked lab scans holds no gear or film to start the roll from.
+function taggedManifest(manifest) {
+  return manifest?.apply_history?.length ? manifest : null;
 }
 
 function folderIsInLibrary(path) {
@@ -2481,7 +2488,7 @@ async function siblingSeed(paths) {
   for (const sibling of paths) {
     try {
       const res = await api(`/api/manifest?${new URLSearchParams({ folder: sibling })}`);
-      if (res.manifest) return { manifest: res.manifest, from: baseName(sibling) };
+      if (taggedManifest(res.manifest)) return { manifest: res.manifest, from: baseName(sibling) };
     } catch {
       // no manifest there; try the next rendition
     }
@@ -2683,20 +2690,30 @@ const MATCH_LEVEL_PILL = { sure: "ok", likely: "ok", unsure: "warn" };
 function labFrames() { return folderFrames().filter(f => !f.has_raw); }
 
 // A folder with raws and frames without one may hold the lab's scans of
-// the same roll: offer to match them, unless the panel is already open.
+// the same roll: offer to match them. Once linked, say so, and offer only
+// the raws still unlinked (the server leaves linked ones out of a match).
 function renderFolderMatch() {
   const el = document.getElementById("folder-match");
   const folder = state.folder;
   const labs = labFrames().length;
-  const raws = folderFrames().length - labs;
-  if (!folder.listing || !labs || !raws || folder.match.open) { el.classList.add("hidden"); el.innerHTML = ""; return; }
-  const linked = (folder.manifest?.linked_scans || []).length;
-  const text = linked
-    ? `${linked} lab scan${linked === 1 ? "" : "s"} linked to ${linked === 1 ? "its raw" : "their raws"}; ${labs} frame${labs === 1 ? "" : "s"} still without a raw.`
-    : `${labs} frame${labs === 1 ? "" : "s"} without a raw beside ${raws} raw${raws === 1 ? "" : "s"}. Lab scans of this roll?`;
+  const raws = folderFrames().filter(f => f.has_raw);
+  const linked = new Set((folder.manifest?.linked_scans || []).map(e => e.raw));
+  const open = raws.filter(f => !linked.has(f.key)).length;
+  const show = folder.listing && !folder.match.open && (linked.size || (labs && raws.length));
+  if (!show) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  let text;
+  let action = "";
+  if (!linked.size) {
+    text = `${labs} frame${labs === 1 ? "" : "s"} without a raw beside ${raws.length} raw${raws.length === 1 ? "" : "s"}. Lab scans of this roll?`;
+    action = `<button type="button" class="secondary" id="folder-match-open">Match to raws</button>`;
+  } else {
+    text = `${linked.size} lab scan${linked.size === 1 ? "" : "s"} linked to ${linked.size === 1 ? "its raw" : "their raws"}.`;
+    if (labs) text += ` ${labs} without a raw stay${labs === 1 ? "s" : ""} as ${labs === 1 ? "it is" : "they are"}.`;
+    if (labs && open) action = `<button type="button" class="action-link" id="folder-match-open">Match the other ${open} raw${open === 1 ? "" : "s"}</button>`;
+  }
   el.classList.remove("hidden");
-  el.innerHTML = `<span>${escapeHtml(text)}</span> <button type="button" class="secondary" id="folder-match-open">Match to raws</button>`;
-  document.getElementById("folder-match-open").addEventListener("click", () => void openMatchPanel());
+  el.innerHTML = `<span>${escapeHtml(text)}</span> ${action}`;
+  document.getElementById("folder-match-open")?.addEventListener("click", () => void openMatchPanel());
 }
 
 async function openMatchPanel() {

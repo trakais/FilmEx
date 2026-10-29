@@ -45,7 +45,7 @@ from sqlmodel import Session
 
 from filmex.services import frames as fr
 from filmex.services import manifest as mf
-from filmex.services import operations
+from filmex.services import operations, renditions
 from filmex.services import previews as pv
 from filmex.services.fileops import Cancelled, Move, PlanError, Progress, no_progress
 
@@ -587,10 +587,11 @@ def _read_manifest_or_none(folder: Path) -> dict[str, Any] | None:
 
 def _record_links(folder: Path, links: list[Link]) -> bool:
     """The manifest follows the renames (tagged files, per-file overrides)
-    and lists the links under ``linked_scans``. No manifest, nothing to do."""
-    manifest = _read_manifest_or_none(folder)
-    if not manifest or not links:
+    and lists the links under ``linked_scans``. A folder never tagged gets a
+    manifest holding only that: tagging later keeps it (FOLDER_HISTORY_KEYS)."""
+    if not links:
         return False
+    manifest = _read_manifest_or_none(folder) or _links_only_manifest(folder)
     stamp = _now()
     entries = []
     for link in links:
@@ -614,8 +615,27 @@ def _unrecord_links(folder: Path, restored: list[Move]) -> None:
         manifest["linked_scans"] = kept
     else:
         manifest.pop("linked_scans", None)
+    if set(manifest) <= _LINKS_ONLY_KEYS and not manifest.get("apply_history"):
+        # The manifest only ever held these links: the folder goes back to having none.
+        mf.manifest_path_for(folder).unlink(missing_ok=True)
+        return
     manifest["updated_at"] = _now()
     mf.write_manifest(folder, manifest)
+
+
+_LINKS_ONLY_KEYS = frozenset({"manifest_version", "roll_id", "folder_relative_path", "created_at", "updated_at", "apply_history", "linked_scans"})
+
+
+def _links_only_manifest(folder: Path) -> dict[str, Any]:
+    stamp = _now()
+    return {
+        "manifest_version": mf.MANIFEST_VERSION,
+        "roll_id": renditions.roll_id_for(folder),
+        "folder_relative_path": folder.name,
+        "created_at": stamp,
+        "updated_at": stamp,
+        "apply_history": [],
+    }
 
 
 def _rename_files_in_manifest(manifest: dict[str, Any], names: dict[str, str]) -> None:

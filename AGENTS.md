@@ -489,15 +489,21 @@ one scene; a raw it skipped takes its best lab frame when that is free or
 held by a raw that matches it worse (captured out of order). Pairs are
 `sure`, `likely` or `unsure` (with a note); raws left over say why
 (`no_picture`, `another_capture` of a paired frame, `no_match`). Nothing
-is linked automatically: the Folder screen offers "Match them to the
-raws" when a folder has both kinds of frame, shows the pairs side by side
-(the raw inverted and turned like the lab scan), sure and likely ones
-ticked. `apply_links` renames each chosen lab frame's files to
+is linked automatically: the Folder screen offers "Match to raws" when a
+folder has both kinds of frame (and scrolls to the panel below the
+sheet), shows the pairs side by side (the raw inverted and turned like the
+lab scan), sure and likely ones ticked. Once a roll has links the banner
+says how many and offers only "Match the other N raws" while unlinked raws
+and lab scans are both left. `apply_links` renames each chosen lab frame's files to
 `<raw stem>-<own name>` (`frames.positive_name`), so they join the raw
 frame as its positive; renames stay in the folder, never overwrite (a
 collision stops the batch before anything runs), follow into the
 manifest (`apply_history`, `file_overrides`) and are listed under
-`linked_scans`, whose raws later matches skip. The confirmation says that
+`linked_scans`, whose raws later matches skip. A folder never tagged gets
+a manifest holding only that record (empty `apply_history`): it counts as
+untagged everywhere (Library status, Normalize names, the roll card seeds
+from the last used gear, `taggedManifest()` in `app.js`), tagging later
+keeps `linked_scans`, and undoing the last link removes it again. The confirmation says that
 a Lightroom catalog already holding the lab scans shows them as missing.
 
 **Undo** (`operation_log`, kinds `rename`, `split`, `import`, `gather`, `link`):

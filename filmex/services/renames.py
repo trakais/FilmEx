@@ -148,8 +148,9 @@ def propose(
             proposals.append(_skip(row, "no images"))
             continue
         manifest = mf.read_manifest(row.path)
-        if not manifest:
-            proposals.append(_skip(row, "not tagged yet (no manifest)"))
+        if not manifest or not manifest.get("apply_history"):
+            # No manifest, or one that only records linked lab scans.
+            proposals.append(_skip(row, "not tagged yet"))
             continue
         candidates.append((row, name_context(session, manifest), manifest))
 
