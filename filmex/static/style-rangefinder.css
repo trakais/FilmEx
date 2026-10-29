@@ -2332,6 +2332,7 @@ body[data-theme="paper"] .menu { background: linear-gradient(180deg, #f5ecdf 0%,
 .roll-changes { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); padding-top: 4px; }
 .roll-changes .diff-file { background-image: none; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .roll-changes .diff-file:last-child { border-bottom: none; }
+.roll-changes-nothing { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 0 2px; }
 .roll-changes .diff-file-controls { gap: 8px; }
 .roll-changes .diff-file-keyword-input { width: 220px; }
 .roll-changes-stale { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: var(--fs-meta); }

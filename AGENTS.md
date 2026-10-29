@@ -364,7 +364,12 @@ shallow walk: `<root>/<year>/<roll>`. Rules that must hold:
   only the frames holding untagged files in its roll (the rest show as left
   out) and writes only the untagged images of those frames
   (`rollWriteImages()`), so a raw and its linked lab scan are not rewritten
-  for the developed positive beside them.
+  for the developed positive beside them. A roll opened normally does the
+  same while its values are still those its manifest gave the card
+  (`untouchedSinceTagging()`: roll-wide values only, every one resolved,
+  no rename): a tagged roll says "Nothing to write", a partial one writes
+  its untagged files. Changing a value, or "Write all again", writes every
+  file.
 - Settings has two groups: Preferences (library folder, name template,
   ExifTool) first, then the gear catalogue. Gear can also be added from
   inside a picker ("+ New camera…"), which opens the same form and picks

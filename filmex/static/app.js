@@ -2346,14 +2346,30 @@ function rollImages(roll) {
   return roll.frames.flatMap(k => frameByKey(k)?.images || []);
 }
 
-// What a write in place covers. Opened by "Tag remaining", only the images
-// still untagged: a frame is shown whole, but its raw and linked lab scan
-// may be tagged already while a developed positive beside them is not.
+// What a write in place covers. Opened by "Tag remaining", or with the
+// roll as its manifest left it, only the images still untagged: the others
+// carry these values already. A frame is shown whole, but its raw and
+// linked lab scan may be tagged while a developed positive beside them is
+// not. "Write all again" takes every image.
 function rollWriteImages(roll) {
   const images = rollImages(roll);
-  if (!state.folder.remainingOnly || !singleRollInPlace()) return images;
+  if (!singleRollInPlace() || roll.rewrite) return images;
+  if (!state.folder.remainingOnly && !untouchedSinceTagging(roll)) return images;
   const tagged = appliedFiles(state.folder.manifest);
   return images.filter(n => !tagged.has(n.normalize("NFC")));
+}
+
+// A roll filled from its manifest and not changed since: same values, no
+// rename. Writing it again would change nothing on the tagged files.
+function untouchedSinceTagging(roll) {
+  return !!roll.baseline && !pendingRename() && tagSignature(roll) === roll.baseline;
+}
+
+// The roll-wide values. Per-file lens and keywords are edited only on the
+// files a write covers, so they never bring the tagged ones back in.
+function tagSignature(roll) {
+  const { file_keywords, file_lens_ids, ...rollWide } = rollTagging(roll);
+  return JSON.stringify(rollWide);
 }
 
 function appliedFiles(manifest) {
@@ -2390,6 +2406,8 @@ function newRoll(frames, tagging = null) {
     nameAuto: true,
     nameError: null,
     rename: true,        // a roll kept in place takes the name too (offersRename)
+    baseline: null,      // tagSignature() as the manifest left it (untouchedSinceTagging)
+    rewrite: false,      // "Write all again": every image, tagged or not
     frames: sortedKeys(frames),
     tagging: tagging ? { ...tagging, file_keywords: { ...tagging.file_keywords }, file_lens_ids: { ...tagging.file_lens_ids } } : defaultTagging(),
     moreOpen: false,
@@ -2499,7 +2517,10 @@ function firstRolls(listing, manifest, onlyFiles, seed = null) {
   if (!manifest) return [newRoll(keys)];
   const { tagging, unresolved } = taggingFromManifest(manifest, listing.frames.flatMap(f => f.images));
   if (unresolved.length) renderFolderBanner(`Loaded the roll's manifest. Could not match: ${unresolved.join(", ")}.`, "warn");
-  return [newRoll(keys, tagging)];
+  const roll = newRoll(keys, tagging);
+  // With every value matched, the form is what the tagged files carry.
+  if (!unresolved.length) roll.baseline = tagSignature(roll);
+  return [roll];
 }
 
 // The first tagged sibling rendition's manifest, to seed an untagged one.
@@ -3612,6 +3633,7 @@ function rollCardMore(roll) {
 function rollCardChanges(roll) {
   if (!roll.changesOpen) return `<div class="roll-changes hidden"></div>`;
   if (!roll.changes) return `<div class="roll-changes"><span class="lib-sub">Checking…</span></div>`;
+  if (roll.changes.nothing) return `<div class="roll-changes"><div class="roll-changes-nothing"><span class="lib-sub">Nothing to write: every file is tagged already.</span> <button type="button" class="action-link" data-act="rewrite">Write all again</button></div></div>`;
   const stale = roll.changesStale ? `<div class="roll-changes-stale"><span class="pill warn">Changed since</span> <button type="button" class="action-link" data-act="refresh-changes">Check again</button></div>` : "";
   return `<div class="roll-changes">${stale}${roll.changes.diffs.map(file => diffFileHtml(roll, file)).join("")}</div>`;
 }
@@ -3711,6 +3733,11 @@ function wireRollExpanders(el, roll) {
     if (roll.changesOpen && (!roll.changes || roll.changesStale)) void loadRollChanges(roll);
   });
   el.querySelector("[data-act=refresh-changes]")?.addEventListener("click", () => void loadRollChanges(roll));
+  el.querySelector("[data-act=rewrite]")?.addEventListener("click", () => {
+    roll.rewrite = true;
+    updateRunButton();
+    void loadRollChanges(roll);
+  });
   for (const btn of el.querySelectorAll("[data-open]")) btn.addEventListener("click", () => openViewerAtFile(btn.dataset.open));
   for (const file of el.querySelectorAll(".diff-file")) {
     const name = file.dataset.file;
@@ -3742,6 +3769,12 @@ function markChangesStale(roll, { render = false } = {}) {
 async function loadRollChanges(roll) {
   const folder = state.folder;
   const single = singleRollInPlace();
+  if (!rollWriteImages(roll).length) {
+    roll.changes = { diffs: [], nothing: true };
+    roll.changesStale = false;
+    renderRollCards();
+    return;
+  }
   try {
     const body = {
       folder: folder.path,
@@ -3772,6 +3805,7 @@ function setRollGear(roll, gear) {
   rememberGear(roll.tagging);
   markChangesStale(roll);
   renderRollCards();
+  updateRunButton();
   scheduleRollName(roll);
 }
 
@@ -3883,9 +3917,18 @@ function renderDestination() {
     btn.setAttribute("aria-checked", String(dest === current));
     if (dest === "move") btn.textContent = placement === "nested" ? "Move into place" : "Move to library";
   }
+  renderDestinationHint();
+}
+
+// What the chosen destination does, under the switch. It follows the roll
+// card too: a write in place may leave tagged files out.
+function renderDestinationHint() {
+  const current = destination();
+  const placement = folderPlacement();
   const hint = document.getElementById("destination-hint");
   const n = state.folder.rolls.length;
   const root = state.settings?.library_root || "";
+  if (singleRollInPlace() && paintWriteHint(hint)) return;
   if (!hasLibrary()) {
     hint.innerHTML = `Tagged where it is. <button type="button" class="action-link" id="destination-choose-library">Choose a library folder</button> to copy or move rolls into one.`;
     document.getElementById("destination-choose-library").addEventListener("click", () => void chooseLibraryFolder());
@@ -3918,6 +3961,7 @@ function runLabel() {
   if (dest === "keep") {
     if (n <= 1) {
       const files = n ? rollWriteImages(state.folder.rolls[0]).length : 0;
+      if (n && !files) return "Nothing to write";
       return `Write ${files} file${files === 1 ? "" : "s"}${pendingRename() ? " and rename" : ""}`;
     }
     return `Split into ${n} rolls`;
@@ -3944,12 +3988,35 @@ function runBlockers() {
   return problems;
 }
 
+// For one roll kept in place that leaves tagged files out: say so, with a
+// way to write them all again. False when every file is written.
+function paintWriteHint(hint) {
+  const roll = state.folder.rolls[0];
+  const all = rollImages(roll).length;
+  const n = rollWriteImages(roll).length;
+  if (n === all) return false;
+  const done = all - n;
+  const text = n
+    ? `Only the ${n === 1 ? "untagged file is" : `${n} untagged files are`} written; the other ${done} ${done === 1 ? "is" : "are"} tagged already.`
+    : untouchedSinceTagging(roll)
+      ? "Every file is tagged with these values. Change one to update them all."
+      : "Every file here is tagged already.";
+  hint.innerHTML = `${escapeHtml(text)} <button type="button" class="action-link" id="write-all-again">Write all ${all}${n ? "" : " again"}</button>`;
+  document.getElementById("write-all-again").addEventListener("click", () => {
+    roll.rewrite = true;
+    markChangesStale(roll, { render: true });
+    updateRunButton();
+  });
+  return true;
+}
+
 function updateRunButton() {
   const btn = document.getElementById("folder-run");
   btn.textContent = runLabel();
   const blockers = runBlockers();
   btn.disabled = !!state.folder.running || blockers.length > 0;
   btn.title = blockers.join("; ");
+  renderDestinationHint();
   const undo = document.getElementById("folder-undo");
   undo.classList.toggle("hidden", !state.folder.lastOperation);
   undo.textContent = undoLabel(state.folder.lastOperation);
