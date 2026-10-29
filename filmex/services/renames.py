@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,7 +29,7 @@ from filmex.services import exiftool as et
 from filmex.services import exiftool_runner as exiftool
 from filmex.services import library as lib
 from filmex.services import manifest as mf
-from filmex.services import naming, operations
+from filmex.services import naming, operations, renditions
 
 RENAME = "rename"
 CONFORMS = "conforms"
@@ -244,6 +244,7 @@ def apply_renames(
     items: list[dict[str, str]],
     *,
     root: str | None,
+    retagged: Collection[str] = (),
     progress: Callable[[dict[str, Any]], None] | None = None,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> dict[str, Any]:
@@ -251,7 +252,9 @@ def apply_renames(
 
     ``items`` are ``{"path": ..., "proposed": ...}`` pairs from ``propose``.
     Each item is validated again right before it runs; failures are reported
-    per item and never stop the others.
+    per item and never stop the others. ``retagged`` names files the caller
+    tags right after the rename: that tagging writes their new Roll keyword,
+    so the swap leaves them alone.
     """
     plan = {"items": [{"path": i["path"], "proposed": i["proposed"]} for i in items]}
     op = operations.start(session, "rename", plan, root=root)
@@ -262,10 +265,9 @@ def apply_renames(
             outcome.errors.append("cancelled before all folders were renamed")
             break
         source = Path(item["path"])
-        proposed = unicodedata.normalize("NFC", item["proposed"]).strip()
         emit = progress or (lambda e: None)
         try:
-            new_path = _rename_folder(source, proposed)
+            new_path = _rename_folder(source, item["proposed"])
         except (OSError, ValueError) as exc:
             msg = f"{source.name}: {exc}"
             outcome.errors.append(msg)
@@ -275,8 +277,8 @@ def apply_renames(
         emit({"type": "progress", "step": "rename", "path": str(source), "to": str(new_path), "ok": True})
 
         count, errors = swap_roll_keyword(
-            new_path, old_roll=source.name, new_roll=proposed,
-            progress=emit, cancelled=cancelled,
+            new_path, old_roll=source.name, new_roll=new_path.name,
+            skip=retagged, progress=emit, cancelled=cancelled,
         )
         outcome.keyword_files += count
         outcome.errors.extend(errors)
@@ -287,16 +289,35 @@ def apply_renames(
     return result
 
 
-def _rename_folder(source: Path, proposed: str) -> Path:
-    if not source.is_dir():
+def check_new_name(folder: Path, proposed: str) -> str:
+    """``proposed`` in NFC once ``folder`` can take it in its own parent;
+    ``ValueError`` says why it cannot."""
+    if not folder.is_dir():
         raise ValueError("folder no longer exists")
-    if not proposed or "/" in proposed or "\\" in proposed or proposed in (".", ".."):
+    name = unicodedata.normalize("NFC", proposed).strip()
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
         raise ValueError("invalid target name")
-    target = source.parent / proposed
-    if _exists_other(source, target):
+    if _exists_other(folder, folder.parent / name):
         raise ValueError("target already exists")
+    return name
+
+
+def check_roll_rename(folder: Path, proposed: str) -> str:
+    """``check_new_name`` for a roll folder about to be tagged. A rendition
+    folder takes its roll id from its parent, and a roll that keeps
+    renditions in subfolders gave them its name, so neither is renamed."""
+    if renditions.rendition_name(folder):
+        raise ValueError("a rendition folder keeps its name")
+    if renditions.rendition_dirs(folder):
+        raise ValueError("the roll keeps renditions in subfolders; gather them first")
+    return check_new_name(folder, proposed)
+
+
+def _rename_folder(source: Path, proposed: str) -> Path:
+    name = check_new_name(source, proposed)
+    target = source.parent / name
     os.rename(source, target)  # same parent: atomic, same volume by construction
-    _update_manifest_after_rename(target, old_name=source.name, new_name=proposed)
+    _update_manifest_after_rename(target, old_name=source.name, new_name=name)
     return target
 
 
@@ -316,17 +337,19 @@ def swap_roll_keyword(
     *,
     old_roll: str,
     new_roll: str,
+    skip: Collection[str] = (),
     progress: Callable[[dict[str, Any]], None] | None = None,
     cancelled: Callable[[], bool] = lambda: False,
 ) -> tuple[int, list[str]]:
-    """Replace ``Roll|old`` with ``Roll|new`` on every tagged file in ``folder``.
+    """Replace ``Roll|old`` with ``Roll|new`` on every tagged file in ``folder``
+    except the ``skip`` names.
 
     Uses the normal intent resolution: a new ``Roll|…`` path makes the
     reconciler drop the old Roll family and keep every other keyword, so this
     is idempotent and never touches user keywords.
     """
     manifest = mf.read_manifest(folder)
-    names = sorted(lib.applied_files_from_manifest(manifest))
+    names = sorted(lib.applied_files_from_manifest(manifest) - set(skip))
     emit = progress or (lambda e: None)
     errors: list[str] = []
     done = 0

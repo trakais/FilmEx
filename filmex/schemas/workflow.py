@@ -66,8 +66,9 @@ class DryRunRequest(BaseModel):
     # the Library view's "tag remaining" action.
     files: Optional[list[str]] = None
     # Dry run only: preview the files as if the folder were named this, so a
-    # roll about to be split out or imported shows the Roll keyword it will
-    # actually get. Ignored by apply, which always writes the folder's name.
+    # roll about to be split out, imported or renamed shows the Roll keyword
+    # it will actually get. Ignored by apply, which always writes the
+    # folder's name (after the rename, when it asks for one).
     as_roll: Optional[str] = None
 
 
@@ -90,7 +91,10 @@ class DryRunResponse(BaseModel):
 
 
 class ApplyRequest(DryRunRequest):
-    pass
+    # Rename the folder to this name in its own parent first, then tag it
+    # under the new name, in one job. The rename is journaled like Library ▸
+    # Normalize names and can be undone. Same name or None: no rename.
+    rename_to: Optional[str] = None
 
 
 class ApplyResponse(BaseModel):

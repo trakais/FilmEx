@@ -179,3 +179,95 @@ def test_apply_refuses_conflicts_and_bad_targets(client, rename_tree, fake_exift
     assert client.get("/api/operations").json()[0]["status"] == "failed"
     assert client.post("/api/naming/apply", json={"items": []}).status_code == 400
     assert client.post("/api/operations/nope/undo").status_code == 404
+
+
+def _stream(client, url, payload=None):
+    with client.stream("POST", url, json=payload) as res:
+        assert res.status_code == 200, res.read()
+        return [json.loads(line) for line in res.iter_lines() if line.strip()]
+
+
+def _gear(client):
+    cam = next(c for c in client.get("/api/cameras").json() if c["short_name"] == "Fed2")
+    film = next(f for f in client.get("/api/film-stocks").json() if f["short_name"] == "Gold")
+    return {"camera_id": cam["id"], "film_stock_id": film["id"], "roll_date": "2026-08-01"}
+
+
+def test_write_renames_an_untagged_roll_then_tags_it_and_undo_restores(client, rename_tree, fake_exiftool):
+    written: list = []
+    _tagged_files(fake_exiftool, written)
+    fake_exiftool.tags = lambda path: {}  # never tagged
+    source = rename_tree / "2026" / "untagged-roll"
+    target = rename_tree / "2026" / "2026-08-01-Fed2-Gold"
+
+    events = _stream(client, "/api/metadata/apply/stream", {"folder": str(source), "rename_to": target.name, **_gear(client)})
+    done = events[-1]
+    assert done["type"] == "done", events
+    assert done["renamed"] == {"from": str(source), "to": str(target)}
+    assert done["folder"] == str(target) and done["roll_id"] == target.name
+    assert done["applied_files"] == ["u.jpg"] and done["errors"] == []
+    assert any(e.get("step") == "rename" for e in events)
+    assert target.is_dir() and not source.exists()
+
+    # Tagged once, under the new name; nothing to swap on an untagged roll.
+    assert [name for name, _, _ in written] == ["u.jpg"]
+    assert f"Roll|{target.name}" in written[0][1]
+    assert mf.read_manifest(target)["roll_id"] == target.name
+
+    op = client.get("/api/operations?kind=rename").json()[0]
+    assert op["id"] == done["operation_id"] and op["status"] == "done"
+
+    undone = _stream(client, f"/api/operations/{done['operation_id']}/undo")[-1]
+    assert undone["restored"] == [{"from": str(target), "to": str(source)}]
+    assert source.is_dir() and not target.exists()
+    assert mf.read_manifest(source)["roll_id"] == "untagged-roll"
+    # The tagging stays; its Roll keyword follows the folder back.
+    name, hier, _ = written[-1]
+    assert name == "u.jpg" and "Roll|untagged-roll" in hier and f"Roll|{target.name}" not in hier
+
+
+def test_write_rename_swaps_only_the_files_it_does_not_tag(client, rename_tree, make_jpeg, fake_exiftool):
+    written: list = []
+    _tagged_files(fake_exiftool, written)
+    source = rename_tree / "2026" / "jani-2026"  # c.jpg tagged earlier
+    make_jpeg("d.jpg", long_edge=64, folder=source)
+    target = rename_tree / "2026" / "2026-08-01-Fed2-Gold-Jāņos"
+
+    payload = {"folder": str(source), "files": ["d.jpg"], "rename_to": target.name, "place": "Jāņos", **_gear(client)}
+    done = _stream(client, "/api/metadata/apply/stream", payload)[-1]
+    assert done["type"] == "done", done
+    assert done["applied_files"] == ["d.jpg"]
+
+    # c.jpg gets the keyword swap, d.jpg the tagging: one write each.
+    assert sorted(name for name, _, _ in written) == ["c.jpg", "d.jpg"]
+    for _, hier, _ in written:
+        assert f"Roll|{target.name}" in hier and "Roll|jani-2026" not in hier
+
+    manifest = mf.read_manifest(target)
+    assert manifest["roll_id"] == target.name
+    assert manifest["renames"][-1]["from"] == "jani-2026"  # kept through the re-apply
+    assert set(manifest["apply_history"][-1]["applied_files"]) == {"d.jpg"}
+
+
+def test_write_rename_refusals_leave_the_folder_alone(client, rename_tree, make_jpeg, fake_exiftool):
+    year = rename_tree / "2026"
+    old_style = year / "EUR-02-Gold"
+    gear = _gear(client)
+
+    def apply(folder, name):
+        return client.post("/api/metadata/apply", json={"folder": str(folder), "rename_to": name, **gear})
+
+    res = apply(old_style, "2026-07-02-Fed2-Gold")  # taken
+    assert res.status_code == 400 and "already exists" in res.json()["detail"]
+    assert apply(old_style, "../escape").status_code == 400
+    rendition = year / "split-roll" / "RAW"
+    make_jpeg("r.jpg", long_edge=64, folder=rendition)
+    assert "rendition" in apply(rendition, "2026-08-01-Fed2-Gold").json()["detail"]
+    assert old_style.is_dir() and rendition.is_dir()
+    assert fake_exiftool.writes == []
+    assert client.get("/api/operations?kind=rename").json() == []
+
+    # Its own name, in either normalization, is no rename at all.
+    res = apply(old_style, " EUR-02-Gold ")
+    assert res.status_code == 200 and res.json()["folder"] == str(old_style)
+    assert client.get("/api/operations?kind=rename").json() == []

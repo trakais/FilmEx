@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
-from filmex.db import get_session
+from filmex.db import get_engine, get_session
 from filmex.routes import jobs as job_routes
 from filmex.schemas import (
     ApplyRequest,
@@ -36,9 +36,10 @@ from filmex.schemas import (
 )
 from filmex.services import exiftool_runner as exiftool
 from filmex.services import folder_scan as fs
-from filmex.services import jobs
+from filmex.services import jobs, naming, renames
 from filmex.services import manifest as mf
 from filmex.services import previews as pv
+from filmex.services import settings as settings_service
 from filmex.services import tagging as tg
 
 router = APIRouter()
@@ -157,13 +158,53 @@ def metadata_dry_run(
     return DryRunResponse(folder=str(plan.folder), roll_id=plan.roll_id, diffs=diffs)
 
 
-def _submit_apply(plan: tg.TaggingPlan) -> jobs.Job:
-    return jobs.get_manager().submit(
-        "apply",
-        lambda job_ctx: tg.apply_all(plan, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict(),
-        exclusive=True,
-        start={"total": len(plan.files)},
-    )
+def _submit_apply(req: ApplyRequest, session: Session) -> jobs.Job:
+    plan = _tagging_plan(req, session)
+    new_name = _checked_rename(plan.folder, req.rename_to)
+    if new_name is None:
+        def body(job_ctx: jobs.JobContext) -> dict:
+            return tg.apply_all(plan, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict()
+    else:
+        root = settings_service.get(session, "library_root")
+
+        def body(job_ctx: jobs.JobContext) -> dict:
+            return _rename_then_apply(req, plan, new_name, root, job_ctx)
+    return jobs.get_manager().submit("apply", body, exclusive=True, start={"total": len(plan.files)})
+
+
+def _checked_rename(folder: Path, name: str | None) -> str | None:
+    """The new name to give the folder before tagging, None to keep its
+    name, or a 400 that says why it cannot have this one."""
+    if not name or not name.strip() or naming.same_name(name.strip(), folder.name):
+        return None
+    try:
+        return renames.check_roll_rename(folder, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Cannot rename the folder to {name.strip()}: {exc}") from exc
+
+
+def _rename_then_apply(req: ApplyRequest, plan: tg.TaggingPlan, new_name: str, root: str | None, job_ctx: jobs.JobContext) -> dict:
+    """Rename the folder as a journaled rename, then tag it under the new
+    name. Files tagged earlier and not tagged now get their Roll keyword
+    swapped by the rename; the tagging writes it on the rest."""
+    with Session(get_engine()) as session:
+        renamed = renames.apply_renames(
+            session,
+            [{"path": str(plan.folder), "proposed": new_name}],
+            root=root,
+            retagged={f.name for f in plan.files},
+            progress=job_ctx.emit,
+            cancelled=job_ctx.cancelled,
+        )
+        if not renamed["renamed"]:
+            raise ValueError("; ".join(renamed["errors"]) or "the folder was not renamed")
+        moved = renamed["renamed"][0]
+        fresh = tg.plan_tagging(req.model_copy(update={"folder": moved["to"]}), session)
+    result = tg.apply_all(fresh, progress=job_ctx.emit, cancelled=job_ctx.cancelled).to_dict()
+    result["errors"] = renamed["errors"] + result["errors"]
+    result["renamed"] = moved
+    result["operation_id"] = renamed["operation_id"]
+    return result
 
 
 @router.post("/api/metadata/apply", response_model=ApplyResponse)
@@ -174,8 +215,7 @@ def metadata_apply(
     if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
-    plan = _tagging_plan(req, session)
-    job = jobs.get_manager().wait(_submit_apply(plan).id)
+    job = jobs.get_manager().wait(_submit_apply(req, session).id)
     if job.status == jobs.FAILED:
         raise HTTPException(status_code=500, detail=job.error or "apply failed")
     final = job.result
@@ -201,7 +241,7 @@ def metadata_apply_stream(
     if not exiftool.available():
         raise HTTPException(status_code=503, detail="exiftool not found on PATH")
 
-    return job_routes.stream(_submit_apply(_tagging_plan(req, session)))
+    return job_routes.stream(_submit_apply(req, session))
 
 
 @router.get("/api/manifests/{roll_id}", response_model=ManifestResponse)

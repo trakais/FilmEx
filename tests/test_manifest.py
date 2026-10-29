@@ -100,6 +100,8 @@ def test_merge_preserves_created_at_and_history(tmp_path):
         "created_at": "2026-01-01T00:00:00+00:00",
         "apply_history": [{"timestamp": "old", "applied_files": ["a.jpg"], "diffs": []}],
         "roll_id": "R001",
+        "renames": [{"from": "old", "to": "R001", "timestamp": "old"}],
+        "import_source": {"path": "/card/R001", "mode": "copy"},
     }
     fresh = mf.build_new_manifest(
         folder=tmp_path,
@@ -117,6 +119,10 @@ def test_merge_preserves_created_at_and_history(tmp_path):
     merged = mf.merge_existing_manifest(existing, fresh)
     assert merged["created_at"] == "2026-01-01T00:00:00+00:00"
     assert merged["apply_history"] == existing["apply_history"]
+    # What happened to the folder survives a re-apply.
+    assert merged["renames"] == existing["renames"]
+    assert merged["import_source"] == existing["import_source"]
+    assert "gathered_renditions" not in merged
     # updated_at still reflects the fresh run.
     assert merged["updated_at"] == fresh["updated_at"]
 

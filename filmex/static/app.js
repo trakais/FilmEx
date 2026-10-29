@@ -46,7 +46,7 @@ const state = {
     cuts: { report: null, loading: false, ignored: new Set() },  // suggested cuts
     destination: null,     // "keep" | "copy" | "move"
     running: false,
-    lastOperation: null,
+    lastOperation: null,   // { id, kind, from?, to? }: what the Undo button reverses
     result: null,
   },
   // Caches of entity lists
@@ -180,6 +180,11 @@ function recentFolders() {
 function pushRecentFolder(path) {
   const list = [path, ...recentFolders().filter(p => p !== path)].slice(0, RECENT_FOLDERS_LIMIT);
   queueSettingsPatch({ recent_folders: list, last_folder: path });
+}
+
+// A renamed folder keeps its place in the recent list under its new path.
+function replaceRecentFolder(from, to) {
+  queueSettingsPatch({ recent_folders: [...new Set(recentFolders().map(p => (p === from ? to : p)))] });
 }
 
 function loadTheme() {
@@ -2368,6 +2373,7 @@ function newRoll(frames, tagging = null) {
     name: "",
     nameAuto: true,
     nameError: null,
+    rename: true,        // a roll kept in place takes the name too (offersRename)
     frames: sortedKeys(frames),
     tagging: tagging ? { ...tagging, file_keywords: { ...tagging.file_keywords }, file_lens_ids: { ...tagging.file_lens_ids } } : defaultTagging(),
     moreOpen: false,
@@ -2647,7 +2653,7 @@ async function gatherRoll(path) {
     await notify(`${done.moves.length} file${done.moves.length === 1 ? "" : "s"} moved into ${baseName(done.roll)}, ${done.removed_folders.length} subfolder${done.removed_folders.length === 1 ? "" : "s"} removed, Roll keyword updated on ${done.keyword_files.length}.${problems}`, "Roll gathered");
     if (hasLibrary()) void loadLibrary({ rescan: true });
     await openFolder(plan.roll);
-    state.folder.lastOperation = done.operation_id || null;
+    state.folder.lastOperation = done.operation_id ? { id: done.operation_id, kind: "gather" } : null;
     updateRunButton();
   } catch (e) {
     renderFolderProgress(null);
@@ -3227,9 +3233,10 @@ function renderRollCard(roll, index) {
   const single = singleRollInPlace();
   el.className = `roll-card${single ? " single" : ` roll-hue-${index % ROLL_HUE_COUNT}`}`;
   el.dataset.id = roll.id;
-  el.innerHTML = rollCardHead(roll, index) + (single ? "" : rollCardName(roll)) + rollCardGear(roll) + rollCardFields(roll) + rollCardMore(roll) + rollCardChanges(roll);
+  const named = !single || offersRename();
+  el.innerHTML = rollCardHead(roll, index) + (named ? rollCardName(roll) : "") + rollCardGear(roll) + rollCardFields(roll) + rollCardMore(roll) + rollCardChanges(roll);
   wireRollActions(el, roll);
-  if (!single) wireRollName(el, roll);
+  if (named) wireRollName(el, roll);
   wireRollGear(el, roll);
   wireRollFields(el, roll);
   wireRollExpanders(el, roll);
@@ -3252,14 +3259,60 @@ function rollCardHead(roll, index) {
     </div>`;
 }
 
+// A roll that gets a new folder names it here. A single roll kept in place
+// in the library offers the template's name as a rename, with a box to
+// keep the folder's own name instead.
 function rollCardName(roll) {
+  const renaming = offersRename();
+  const label = renaming
+    ? `<label class="roll-rename-toggle"><input type="checkbox" ${roll.rename ? "checked" : ""} /><span class="tile-label">Rename to</span></label>`
+    : `<span class="tile-label">Folder name</span>`;
+  const note = rollNameNote(roll);
   return `
     <div class="roll-card-name">
-      <span class="tile-label">Folder name</span>
-      <input type="text" class="roll-name-input" value="${escapeHtml(roll.name)}" placeholder="from the template…" spellcheck="false" />
+      ${label}
+      <input type="text" class="roll-name-input" value="${escapeHtml(roll.name)}" placeholder="from the template…" spellcheck="false" ${renaming && !roll.rename ? "disabled" : ""} />
       <button type="button" class="action-link roll-name-auto${roll.nameAuto ? " hidden" : ""}">use template</button>
-      <span class="roll-name-error${roll.nameError ? "" : " hidden"}${roll.nameErrorSoft ? " soft" : ""}">${escapeHtml(roll.nameError || "")}</span>
+      <span class="roll-name-error${note ? "" : " hidden"}${note?.soft ? " soft" : ""}">${escapeHtml(note?.text || "")}</span>
     </div>`;
+}
+
+// What the line under the name says: why the template gives no name yet,
+// or that the folder already carries it.
+function rollNameNote(roll) {
+  if (roll.nameError) return { text: roll.nameError, soft: roll.nameErrorSoft };
+  const name = roll.name.trim();
+  if (offersRename() && name && sameName(name, baseName(state.folder.path))) return { text: "The folder already has this name.", soft: true };
+  return null;
+}
+
+function paintRollNameNote(card, roll) {
+  const el = card.querySelector(".roll-name-error");
+  if (!el) return;
+  const note = rollNameNote(roll);
+  el.textContent = note?.text || "";
+  el.classList.toggle("hidden", !note);
+  el.classList.toggle("soft", !!note?.soft);
+}
+
+// A proper roll at <year>/<roll> kept as one roll can take the template's
+// name while it is tagged. A rendition is named by its parent and keeps
+// its folder name.
+function offersRename() {
+  return singleRollInPlace() && folderPlacement() === "roll" && !state.folder.listing?.rendition;
+}
+
+// The folder's new name when this write renames it, else null.
+function pendingRename() {
+  const roll = state.folder.rolls[0];
+  if (!roll || !offersRename() || !roll.rename || roll.nameError) return null;
+  const name = roll.name.trim();
+  return name && !sameName(name, baseName(state.folder.path)) ? name : null;
+}
+
+// Names compare as the file system sees them: NFC and NFD are one name.
+function sameName(a, b) {
+  return a.normalize("NFC") === b.normalize("NFC");
 }
 
 function rollCardGear(roll) {
@@ -3355,13 +3408,19 @@ function wireRollName(el, roll) {
     roll.nameAuto = false;
     roll.nameError = null;
     el.querySelector(".roll-name-auto").classList.remove("hidden");
-    el.querySelector(".roll-name-error").classList.add("hidden");
+    paintRollNameNote(el, roll);
     markChangesStale(roll);
     updateRunButton();
   });
   el.querySelector(".roll-name-auto").addEventListener("click", () => {
     roll.nameAuto = true;
     void refreshRollName(roll);
+  });
+  el.querySelector(".roll-rename-toggle input")?.addEventListener("change", (e) => {
+    roll.rename = e.target.checked;
+    el.querySelector(".roll-name-input").disabled = !roll.rename;
+    markChangesStale(roll);
+    updateRunButton();
   });
 }
 
@@ -3439,7 +3498,7 @@ async function loadRollChanges(roll) {
     const body = {
       folder: folder.path,
       files: rollImages(roll),
-      as_roll: single ? undefined : (roll.name.trim() || undefined),
+      as_roll: (single ? pendingRename() : roll.name.trim()) || undefined,
       ...rollTagging(roll),
     };
     const res = await api("/api/metadata/dry-run", { method: "POST", body: JSON.stringify(body) });
@@ -3531,12 +3590,10 @@ async function refreshRollName(roll) {
   const input = card?.querySelector(".roll-name-input");
   if (input) {
     input.value = roll.name;
-    const err = card.querySelector(".roll-name-error");
-    err.textContent = roll.nameError || "";
-    err.classList.toggle("hidden", !roll.nameError);
-    err.classList.toggle("soft", !!roll.nameErrorSoft);
+    paintRollNameNote(card, roll);
     card.querySelector(".roll-name-auto").classList.toggle("hidden", roll.nameAuto);
   }
+  markChangesStale(roll, { render: true });
   updateRunButton();
 }
 
@@ -3613,7 +3670,7 @@ function runLabel() {
   if (dest === "keep") {
     if (n <= 1) {
       const files = n ? rollImages(state.folder.rolls[0]).length : 0;
-      return `Write ${files} file${files === 1 ? "" : "s"}`;
+      return `Write ${files} file${files === 1 ? "" : "s"}${pendingRename() ? " and rename" : ""}`;
     }
     return `Split into ${n} rolls`;
   }
@@ -3642,7 +3699,9 @@ function updateRunButton() {
   const blockers = runBlockers();
   btn.disabled = !!state.folder.running || blockers.length > 0;
   btn.title = blockers.join("; ");
-  document.getElementById("folder-undo").classList.toggle("hidden", !state.folder.lastOperation);
+  const undo = document.getElementById("folder-undo");
+  undo.classList.toggle("hidden", !state.folder.lastOperation);
+  undo.textContent = state.folder.lastOperation?.kind === "rename" ? "Undo rename" : "Undo last batch";
 }
 
 function rollTagging(roll) {
@@ -3735,14 +3794,20 @@ async function runFolderAction() {
   else await runBatch(action);
 }
 
-// Keep here, one roll: write metadata to the files where they are.
+// Keep here, one roll: write metadata to the files where they are, after
+// giving the folder the template's name when the roll card asks for it.
 async function writeInPlace() {
   const folder = state.folder;
   const roll = folder.rolls[0];
   const images = rollImages(roll);
   const all = images.length === folderFrames().reduce((n, f) => n + f.images.length, 0);
-  const body = { folder: folder.path, files: all ? undefined : images, ...rollTagging(roll) };
-  const ok = await ask(writeConfirmText(folder.path, images, roll), { title: "Write metadata", okLabel: "Write", danger: true });
+  const newName = pendingRename();
+  const body = { folder: folder.path, files: all ? undefined : images, rename_to: newName || undefined, ...rollTagging(roll) };
+  const ok = await ask(writeConfirmText(folder.path, images, roll, newName), {
+    title: newName ? "Write metadata and rename" : "Write metadata",
+    okLabel: newName ? "Write and rename" : "Write",
+    danger: true,
+  });
   if (!ok) return;
   startRun();
   try {
@@ -3751,8 +3816,22 @@ async function writeInPlace() {
     const done = await runJob("/api/metadata/apply/stream", {
       body,
       onStart: (ev) => { total = ev.total; renderFolderProgress(`Writing 0/${total}`, 0); setPageTitleProgress("Writing", 0, total); },
-      onEvent: () => { written += 1; renderFolderProgress(`Writing ${written}/${total}`, total ? written / total : null); setPageTitleProgress("Writing", written, total); },
+      onEvent: (ev) => {
+        if (ev.step === "rename") { renderFolderProgress(`Renaming to ${newName}`, 0); return; }
+        if (ev.step === "keywords") { renderFolderProgress(`Roll keyword on ${ev.file}`, null); return; }
+        written += 1;
+        renderFolderProgress(`Writing ${written}/${total}`, total ? written / total : null);
+        setPageTitleProgress("Writing", written, total);
+      },
     });
+    if (done.renamed) {
+      // The screen follows the folder to its new name, as the path it was opened by.
+      const from = folder.path;
+      const to = from.slice(0, from.lastIndexOf("/") + 1) + baseName(done.renamed.to);
+      replaceRecentFolder(from, to);
+      folder.path = to;
+      folder.lastOperation = { id: done.operation_id, kind: "rename", from, to };
+    }
     folder.result = { action: "write", done };
     await finishRun();
   } catch (e) {
@@ -3765,15 +3844,20 @@ async function writeInPlace() {
 
 // Names the files when there are few of them and the folder by its label
 // under the library year, never by its bare basename: a roll folder called
-// "RAW" must not read as "a RAW file".
-function writeConfirmText(path, images, roll) {
+// "RAW" must not read as "a RAW file". A rename says what it means for a
+// Lightroom catalog that already has the folder.
+function writeConfirmText(path, images, roll, newName = null) {
   const where = folderLabel(path);
   const n = images.length;
+  const rename = newName ? ` and rename the folder to ${newName}` : "";
   const head = n === 1
-    ? `Write metadata to ${images[0]} in ${where}?`
-    : `Write metadata to ${n} files in ${where}?`;
+    ? `Write metadata to ${images[0]} in ${where}${rename}?`
+    : `Write metadata to ${n} files in ${where}${rename}?`;
   const names = n > 1 && n <= 4 ? images.join(", ") : null;
-  return [head, names, gearSummary(roll)].filter(Boolean).join("\n");
+  const lightroom = newName
+    ? "\nLightroom knows files by their folder's path: a catalog that has this folder will show it as missing until you relink it (Library ▸ Find Missing Folder). The rename can be undone."
+    : null;
+  return [head, names, gearSummary(roll), lightroom].filter(Boolean).join("\n");
 }
 
 async function runBatch(action) {
@@ -3783,7 +3867,7 @@ async function runBatch(action) {
   startRun();
   try {
     const done = await runJob(batchEndpoints(action).apply, { body, ...batchProgressHandlers(dest) });
-    state.folder.lastOperation = done.operation_id;
+    state.folder.lastOperation = { id: done.operation_id, kind: action };
     state.folder.result = { action, dest, done };
     await finishRun();
   } catch (e) {
@@ -3942,6 +4026,7 @@ function renderFolderResult(result) {
     const n = done.applied_files.length;
     body.innerHTML = `
       ${clean ? doneStamp(n, `file${n === 1 ? "" : "s"} written`) : `<div>Wrote ${n} file${n === 1 ? "" : "s"}.</div>`}
+      ${done.renamed ? `<div class="lib-sub" style="margin-top:10px">Folder renamed to <code>${escapeHtml(baseName(done.renamed.to))}</code>.</div>` : ""}
       ${done.errors.length ? `<pre class="result-errors">${escapeHtml(done.errors.join("\n"))}</pre>` : ""}
       ${done.cancelled ? `<div class="pill warn" style="margin-top:10px">Stopped early</div>` : ""}
       <div class="apply-actions">
@@ -3986,29 +4071,44 @@ function renderFolderResult(result) {
 }
 
 async function undoLastBatch() {
-  const opId = state.folder.lastOperation;
-  if (!opId || state.folder.running) return;
+  const op = state.folder.lastOperation;
+  if (!op || state.folder.running) return;
+  const rename = op.kind === "rename";
   const ok = await ask(
-    "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.",
-    { okLabel: "Undo batch" }
+    rename
+      ? `Give the folder its old name, ${baseName(op.from)}, back and put that name in the Roll keyword of its tagged files?\nThe rest of the metadata stays on the files.`
+      : "Put every file back where it came from and remove the folders this batch created?\nMetadata written by the batch stays on the files until the folder is tagged again.",
+    { okLabel: rename ? "Undo rename" : "Undo batch" }
   );
   if (!ok) return;
   state.folder.running = true;
   updateRunButton();
   renderFolderProgress("Undoing…", null);
   try {
-    const done = await runJob(`/api/operations/${encodeURIComponent(opId)}/undo`, {
-      onEvent: (ev) => { if (ev.file) renderFolderProgress(`Restoring ${ev.file}`, null); },
+    const done = await runJob(`/api/operations/${encodeURIComponent(op.id)}/undo`, {
+      onEvent: (ev) => {
+        if (ev.step === "keywords" && ev.file) renderFolderProgress(`Roll keyword on ${ev.file}`, null);
+        else if (ev.file) renderFolderProgress(`Restoring ${ev.file}`, null);
+      },
     });
     state.folder.lastOperation = null;
     state.folder.result = null;
     renderFolderProgress(null);
     renderFolderResult(null);
-    // A moved file is both restored at the source and removed from the
-    // library; a copy is only removed. Count each file once.
-    const n = (done.restored || []).length || (done.removed || []).length;
     const problems = done.errors?.length ? `\n\n${done.errors.join("\n")}` : "";
-    await notify(`${n} file${n === 1 ? "" : "s"} put back, ${(done.removed_folders || []).length} folder${(done.removed_folders || []).length === 1 ? "" : "s"} removed.${problems}`, "Batch undone");
+    if (rename) {
+      const back = (done.restored || []).length > 0;
+      if (back) {
+        replaceRecentFolder(op.to, op.from);
+        state.folder.path = op.from;
+      }
+      await notify(`${back ? `The folder is called ${baseName(op.from)} again.` : "The folder kept its new name."}${problems}`, "Rename undone");
+    } else {
+      // A moved file is both restored at the source and removed from the
+      // library; a copy is only removed. Count each file once.
+      const n = (done.restored || []).length || (done.removed || []).length;
+      await notify(`${n} file${n === 1 ? "" : "s"} put back, ${(done.removed_folders || []).length} folder${(done.removed_folders || []).length === 1 ? "" : "s"} removed.${problems}`, "Batch undone");
+    }
     if (hasLibrary()) void loadLibrary({ rescan: true });
     if (state.folder.path) await openFolder(state.folder.path);
   } catch (e) {

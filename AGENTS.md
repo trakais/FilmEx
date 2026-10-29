@@ -314,6 +314,15 @@ and loose year folders are skipped), applies the chosen renames in place
 (same parent, never over an existing target), fixes the manifest, swaps
 the `Roll|` keyword through the normal reconciliation, journals the batch
 in `operation_log`, and can undo it. Renames and undos are exclusive jobs.
+The same rename runs inside a write: `POST /api/metadata/apply/stream`
+with `rename_to` checks the name up front (`check_roll_rename`: a free
+name in the same parent, never a rendition folder or a roll that keeps
+renditions in subfolders; 400 otherwise), then in one exclusive job
+renames the folder as a journaled `rename`, swaps the Roll keyword only on
+earlier-tagged files it is not about to tag (`retagged`), re-plans at the
+new path and tags under the new name. The job's result carries `renamed`
+and the rename's `operation_id`; undoing it is a normal rename undo, so
+the new tagging stays and its Roll keyword follows the folder back.
 
 ## Library view
 
@@ -381,7 +390,7 @@ roll count, in `plannedAction()` in `app.js`:
 
 | Destination | Rolls | Action | Endpoint |
 | --- | --- | --- | --- |
-| Keep here | 1 | write in place (the roll's files, all or a subset) | `POST /api/metadata/apply/stream` |
+| Keep here | 1 | write in place (the roll's files, all or a subset; a library roll may take its template name first) | `POST /api/metadata/apply/stream` |
 | Keep here | 2+ | split | `POST /api/folder/split/apply` |
 | Copy / Move to library, Move into place | any | import | `POST /api/import/apply` |
 
@@ -395,10 +404,16 @@ flat year folder offers Keep here / Move into place, which is an import in
 offered: it only makes duplicates. The destination defaults to keep inside
 the library, for a "Tag remaining" subset, or without a library; outside
 it follows the `import_mode` setting, which the control updates. A single
-kept roll shows no folder name: the folder is the roll. The "Changes"
-expander on a card is the dry run for that roll's files; for a roll that
-will get a new folder name it passes `as_roll` so the `Roll|…` keyword
-previews right.
+kept roll shows no folder name: the folder is the roll. Except a proper
+roll in the library (`<root>/<year>/<roll>`, not a rendition): its card
+offers the template's name as "Rename to", ticked by default and
+editable; when the name differs from the folder's, the one action becomes
+"Write N files and rename" (`pendingRename()` in `app.js`), the
+confirmation carries the Lightroom relink note, the screen follows the
+folder to its new path and the Undo button undoes the rename. The
+"Changes" expander on a card is the dry run for that roll's files; for a
+roll that will get a new folder name it passes `as_roll` so the `Roll|…`
+keyword previews right.
 
 Undoing a move-mode import copies each file back from the library and
 verifies that copy; it does not compare against the digest journaled at
@@ -578,11 +593,13 @@ Optional, off by default:
   `scripts/build_default_db.py`. Keep it generic (no private labs, no
   user-specific gear).
 - One `roll_manifest.json` per roll folder. The folder basename is the
-  `roll_id`. Rename folders through the app (Library ▸ Normalize names or
-  the naming API), never by hand: a managed rename updates `roll_id` and
-  `folder_relative_path`, records the change under `renames`, and rewrites
-  the `Roll|…` keyword on every tagged file. A hand rename leaves all of
-  that stale.
+  `roll_id`. Rename folders through the app (Library ▸ Normalize names,
+  "Rename to" on the Folder screen, or the naming API), never by hand: a
+  managed rename updates `roll_id` and `folder_relative_path`, records the
+  change under `renames`, and rewrites the `Roll|…` keyword on every
+  tagged file. A hand rename leaves all of that stale. A re-apply keeps
+  the folder's own history (`renames`, `import_source`,
+  `gathered_renditions`; `FOLDER_HISTORY_KEYS` in `manifest.py`).
 
 ---
 
@@ -719,6 +736,10 @@ Must stay covered:
 - Import: copy-and-verify catches a corrupted destination, collision stops
   before any copy, move deletes sources only after the roll verified,
   `import_source` in the manifest, undo in both modes
+- Rename while tagging: an untagged roll renamed then tagged under the new
+  name, undo restoring name and keyword; only files not re-tagged get the
+  keyword swap; taken names, bad names and renditions refused before
+  anything runs
 - CLI batch idempotency
 
 Have at least one integration test that uses real ExifTool if it's on PATH.

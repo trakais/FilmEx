@@ -2133,6 +2133,9 @@ body[data-theme="paper"] .library-filter { background: rgba(255, 251, 245, 0.5);
   font-size: var(--fs-ui);
 }
 .roll-name-input:focus { outline: none; border-color: var(--text); box-shadow: var(--ring); }
+.roll-name-input:disabled { color: var(--muted); opacity: 0.6; }
+.roll-rename-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.roll-rename-toggle input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: var(--yellow); }
 .tile-row.compact { gap: 8px; }
 .tile.compact { height: 84px; padding: 12px 14px 10px; gap: 4px; }
 .tile.compact .tile-content { font-size: var(--fs-title); }
